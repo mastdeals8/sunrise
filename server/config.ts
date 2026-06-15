@@ -16,7 +16,7 @@ export const config = {
   DATABASE_URL: process.env.DATABASE_URL,
   JWT_SECRET: process.env.JWT_SECRET,
   NODE_ENV: process.env.NODE_ENV || "development",
-  PORT: parseInt(process.env.PORT || "5088", 10),
+  PORT: parseInt(process.env.PORT || "5000", 10),
   UPLOAD_PATHS: {
     receipts: "uploads/receipts/",
     documents: "uploads/documents/"

@@ -702,8 +702,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
     CREATE INDEX IF NOT EXISTS idx_execution_documents_type
     ON execution_documents(document_type, status)
   `);
-  await backfillExecutionDocuments();
-  await reconcileSignedExecutionDocumentOwners();
+  // Run heavy backfills after server starts — all idempotent, safe to defer.
+  void (async () => {
+    try { await backfillExecutionDocuments(); } catch (e) { console.error("[startup] backfillExecutionDocuments:", e); }
+    try { await reconcileSignedExecutionDocumentOwners(); } catch (e) { console.error("[startup] reconcileSignedExecutionDocumentOwners:", e); }
+  })();
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS execution_stores (
       id serial PRIMARY KEY,
@@ -734,7 +737,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     CREATE INDEX IF NOT EXISTS idx_execution_stores_status
     ON execution_stores(status)
   `);
-  await backfillExecutionStores();
+  void (async () => {
+    try { await backfillExecutionStores(); } catch (e) { console.error("[startup] backfillExecutionStores:", e); }
+  })();
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS field_access_links (
       id serial PRIMARY KEY,
@@ -771,8 +776,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     ON field_access_links(channel)
   `);
 
-  // Production hardening (audit H1): FK + filter indexes, idempotent at boot.
-  await ensureIndexes(db);
+  // Production hardening (audit H1): run indexes in background — all IF NOT EXISTS.
+  void (async () => {
+    try { await ensureIndexes(db); } catch (e) { console.error("[startup] ensureIndexes:", e); }
+  })();
 
   // Configure uploads folder and multer
   const uploadDir = path.join(process.cwd(), "uploads");
@@ -3594,7 +3601,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/operations/execution-documents", authenticateToken, requireRole(["admin", "manager", "production", "installer"]), async (req: AuthRequest, res: Response) => {
     try {
       if (!req.user) return res.status(401).json({ message: "Unauthorized" });
-      const { estimateId, deliveryChallanId, storeCode, documentType, filePath, originalFileName, mimeType, fileSize, uploadedVia } = req.body;
+      const { estimateId, deliveryChallanId, storeCode, documentType, filePath, originalFileName, mimeType, fileSize, uploadedVia, metadata } = req.body;
       if (!estimateId || !documentType || !filePath) return res.status(400).json({ message: "estimateId, documentType and filePath are required" });
       const doc = await db.insert(executionDocuments).values({
         estimateId: Number(estimateId),
@@ -3610,6 +3617,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         uploadedBy: req.user.id,
         uploadedVia: uploadedVia || "project_workspace",
         uploadedAt: new Date(),
+        metadata: metadata ?? null,
       }).returning();
       audit(req as AuthRequest, {
         action: "create",
@@ -4002,6 +4010,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const activeDcs = (challanRows as any[]).filter(dc => dc.status !== "deleted" && !(dc.metadata as any)?.deleted);
       const activeOwners = buildActiveDocumentOwnerSet(activeDcs);
+      // Execution store rows are valid owners for documents uploaded directly
+      // via the project workspace (no deliveryChallanId). Without this, photos
+      // uploaded to a store that has no WCC yet would be filtered out.
+      (storeRows as any[]).forEach(row => {
+        if (row.storeCode) {
+          activeOwners.activeStoreKeys.add(activeOwnerKeyForDocs(Number(estimateId), row.storeCode));
+        }
+      });
       const activeDocs = (docRows as any[]).filter(doc => doc.status === "active" && documentHasActiveWorkflowOwner(doc, activeOwners));
 
       // Project-level documents: no store association, or type in [po, transport_receipt, extra, field_upload]
