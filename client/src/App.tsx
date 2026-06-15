@@ -2,7 +2,6 @@ import React from "react";
 import { Switch, Route, Redirect, Link, useLocation } from "wouter";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import { GlobalDateProvider } from "./contexts/GlobalDateContext";
-import { GlobalDateFilter } from "./components/GlobalDateFilter";
 import { NotificationBell } from "./components/NotificationBell";
 import {
   LayoutDashboard,
@@ -25,7 +24,6 @@ import {
   Building2,
   Bot,
   Clock,
-  Plus,
 } from "lucide-react";
 
 // Lazy pages
@@ -80,91 +78,87 @@ interface NavSection {
   href?: string; // section direct link (no sub-items)
   items?: NavItem[]; // sub-items
   roles?: string[]; // role guard, undefined = all
+  groupLabel?: string; // uppercase separator label above this section
 }
 
 const matchHash = (loc: string, hash: string, path: string, expectedHash: string) =>
   loc === path && hash.replace(/^#/, "") === expectedHash;
 
 const SECTIONS: NavSection[] = [
-  // MAIN
   {
     key: "dashboard",
     label: "Dashboard",
     icon: LayoutDashboard,
     href: "/",
   },
-  // SALES
   {
     key: "sales",
     label: "Sales",
     icon: FileText,
+    groupLabel: "SALES",
     items: [
-      { href: "/estimates",         label: "Estimate Register",      match: (l) => l === "/estimates" || l === "/operations" },
-      { href: "/projects",          label: "Projects",               match: (l) => l === "/projects" },
-      { href: "/invoices",          label: "Invoices",               match: (l) => l === "/invoices" },
-      { href: "/estimate-templates", label: "Estimate Templates",    match: (l) => l === "/estimate-templates" },
+      { href: "/estimates",          label: "Estimate Register",   match: (l) => l === "/estimates" || l === "/operations" },
+      { href: "/projects",           label: "Projects",            match: (l) => l === "/projects" },
+      { href: "/invoices",           label: "Invoices",            match: (l) => l === "/invoices" },
+      { href: "/estimate-templates", label: "Estimate Templates",  match: (l) => l === "/estimate-templates" },
     ],
     roles: ["admin", "manager", "designer", "accounts", "staff"],
   },
-
-  // OPERATIONS
   {
     key: "operations",
     label: "Operations",
     icon: Briefcase,
+    groupLabel: "OPERATIONS",
     items: [
       { href: "/delivery-challans", label: "WCC Audit Register", match: (l) => l === "/delivery-challans" },
-      { href: "/project-documents", label: "Document Archive", match: (l) => l === "/project-documents" },
+      { href: "/project-documents", label: "Document Archive",   match: (l) => l === "/project-documents" },
     ],
     roles: ["admin", "manager", "production", "designer", "installer", "accounts", "staff"],
   },
-
-  // FINANCE
   {
     key: "finance",
     label: "Finance",
     icon: Wallet,
+    groupLabel: "FINANCE",
     items: [
-      { href: "/client-ledger",    label: "Client Ledger",    match: (l) => l === "/client-ledger" },
-      { href: "/pending-payments", label: "Pending Payments", match: (l) => l === "/pending-payments" },
-      { href: "/petty-cash",       label: "Petty Cash",       match: (l) => l === "/petty-cash" },
-      { href: "/finance",          label: "Payment Ledger",   match: (l) => l === "/finance" },
-      { href: "/automation/tally", label: "Tally Export",     match: (l) => l === "/automation/tally" },
-      { href: "/submitted-invoices", label: "Submitted Invoices", match: (l) => l === "/submitted-invoices" },
+      { href: "/client-ledger",      label: "Client Ledger",       match: (l) => l === "/client-ledger" },
+      { href: "/pending-payments",   label: "Pending Payments",    match: (l) => l === "/pending-payments" },
+      { href: "/petty-cash",         label: "Petty Cash",          match: (l) => l === "/petty-cash" },
+      { href: "/finance",            label: "Payment Ledger",      match: (l) => l === "/finance" },
+      { href: "/automation/tally",   label: "Tally Export",        match: (l) => l === "/automation/tally" },
+      { href: "/submitted-invoices", label: "Submitted Invoices",  match: (l) => l === "/submitted-invoices" },
     ],
     roles: ["admin", "manager", "accounts"],
   },
-
-  // MASTER DATA
   {
     key: "master-data",
     label: "Master Data",
     icon: Database,
+    groupLabel: "MASTER DATA",
     items: [
-      { href: "/clients",              label: "Clients",         match: (l: string) => l === "/clients" },
-      { href: "/products",             label: "Products",        match: (l: string) => l === "/products" },
-      { href: "/brands",               label: "Brands",          match: (l: string) => l === "/brands" },
-      { href: "/stores",               label: "Stores",          match: (l: string) => l === "/stores" },
-      { href: "/material-codes",       label: "Material Codes",  match: (l: string) => l === "/material-codes" },
-      { href: "/customer-rate-cards",  label: "Rate Cards",      match: (l: string) => l === "/customer-rate-cards" },
+      { href: "/clients",             label: "Clients",        match: (l: string) => l === "/clients" },
+      { href: "/products",            label: "Products",       match: (l: string) => l === "/products" },
+      { href: "/brands",              label: "Brands",         match: (l: string) => l === "/brands" },
+      { href: "/stores",              label: "Stores",         match: (l: string) => l === "/stores" },
+      { href: "/material-codes",      label: "Material Codes", match: (l: string) => l === "/material-codes" },
+      { href: "/customer-rate-cards", label: "Rate Cards",     match: (l: string) => l === "/customer-rate-cards" },
     ],
     roles: ["admin", "manager"],
   },
-
-  // SYSTEM
   {
     key: "system",
     label: "System",
     icon: Shield,
+    groupLabel: "SYSTEM",
     items: [
-      { href: "/staff",                label: "Staff",                  match: (l) => l === "/staff" },
-      { href: "/tasks",                label: "Tasks",                  match: (l) => l === "/tasks" },
-      { href: "/automation/telegram",  label: "Telegram Bot",           match: (l) => l === "/automation/telegram" },
-      { href: "/automation/whatsapp",  label: "WhatsApp API",           match: (l) => l === "/automation/whatsapp" },
-      { href: "/automation/inbox",     label: "Bot Upload Inbox",       match: (l) => l === "/automation/inbox" },
-      { href: "/admin",                label: "Users",                  match: (l) => l === "/admin" },
-      { href: "/admin/roles",          label: "Roles",                  match: (l) => l === "/admin/roles" },
-      { href: "/admin/settings",       label: "Settings",               match: (l) => l === "/admin/settings" },
+      { href: "/staff",               label: "Staff",            match: (l) => l === "/staff" },
+      { href: "/tasks",               label: "Tasks",            match: (l) => l === "/tasks" },
+      { href: "/automation/telegram", label: "Telegram Bot",     match: (l) => l === "/automation/telegram" },
+      { href: "/automation/whatsapp", label: "WhatsApp API",     match: (l) => l === "/automation/whatsapp" },
+      { href: "/automation/inbox",    label: "Bot Upload Inbox", match: (l) => l === "/automation/inbox" },
+      { href: "/admin",               label: "Users",            match: (l) => l === "/admin" },
+      { href: "/admin/roles",         label: "Roles",            match: (l) => l === "/admin/roles" },
+      { href: "/admin/settings",      label: "Settings",         match: (l) => l === "/admin/settings" },
     ],
     roles: ["admin", "manager"],
   },
@@ -188,21 +182,21 @@ const SidebarSection: React.FC<{
 }> = ({ section, location, hash, closeMobile }) => {
   const Icon = section.icon;
 
-  // Direct link section
+  // Direct link section (e.g. Dashboard)
   if (section.href && !section.items) {
     const active = location === section.href;
     return (
       <Link
         href={section.href}
         onClick={closeMobile}
-        className={`relative flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-all duration-150 group ${
+        className={`relative flex items-center gap-2.5 px-3 py-2 rounded-lg text-[13px] font-medium transition-all duration-150 group ${
           active
             ? "bg-orange-50 text-orange-700 font-semibold"
             : "text-slate-600 hover:text-slate-900 hover:bg-slate-100/70"
         }`}
       >
-        {active && <span className="absolute left-0 top-1/2 -translate-y-1/2 h-5 w-1 rounded-r-full bg-orange-500" />}
-        <Icon className={`w-[18px] h-[18px] shrink-0 ${active ? "text-orange-600" : "text-slate-400 group-hover:text-slate-600"}`} />
+        {active && <span className="absolute left-0 top-1/2 -translate-y-1/2 h-5 w-0.5 rounded-r-full bg-orange-500" />}
+        <Icon className={`w-4 h-4 shrink-0 ${active ? "text-orange-600" : "text-slate-400 group-hover:text-slate-500"}`} />
         {section.label}
       </Link>
     );
@@ -220,20 +214,20 @@ const SidebarSection: React.FC<{
     <div>
       <button
         onClick={() => setOpen(!open)}
-        className={`w-full flex items-center justify-between gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-all duration-150 group ${
-          anyActive ? "text-slate-900 font-semibold" : "text-slate-600 hover:text-slate-900 hover:bg-slate-100/70"
+        className={`w-full flex items-center justify-between gap-2.5 px-3 py-2 rounded-lg text-[13px] font-medium transition-all duration-150 group ${
+          anyActive
+            ? "text-slate-900 font-semibold"
+            : "text-slate-600 hover:text-slate-900 hover:bg-slate-100/70"
         }`}
       >
-        <span className="flex items-center gap-3">
-          <Icon className={`w-[18px] h-[18px] shrink-0 ${anyActive ? "text-orange-600" : "text-slate-400 group-hover:text-slate-600"}`} />
+        <span className="flex items-center gap-2.5">
+          <Icon className={`w-4 h-4 shrink-0 ${anyActive ? "text-orange-600" : "text-slate-400 group-hover:text-slate-500"}`} />
           {section.label}
         </span>
-        <span className={`transition-transform duration-200 ${open ? "rotate-0" : "-rotate-90"}`}>
-          <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
-        </span>
+        <ChevronDown className={`w-3.5 h-3.5 text-slate-300 transition-transform duration-200 ${open ? "rotate-0" : "-rotate-90"}`} />
       </button>
       {open && (
-        <div className="ml-[22px] mt-0.5 space-y-0.5 border-l border-slate-200/80 pl-3">
+        <div className="ml-[18px] mt-0.5 space-y-0.5 border-l border-slate-100 pl-3">
           {items.map((it) => {
             const active = it.match ? it.match(location, hash) : location === it.href;
             return (
@@ -241,13 +235,13 @@ const SidebarSection: React.FC<{
                 key={it.href}
                 href={it.href}
                 onClick={closeMobile}
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-[13px] transition-all duration-150 ${
+                className={`flex items-center gap-2 px-2.5 py-1.5 rounded-md text-[12.5px] transition-all duration-150 ${
                   active
-                    ? "text-orange-700 font-semibold"
-                    : "text-slate-500 hover:text-slate-900 hover:bg-slate-100/60"
+                    ? "text-orange-700 font-semibold bg-orange-50/60"
+                    : "text-slate-500 hover:text-slate-800 hover:bg-slate-100/60"
                 }`}
               >
-                <span className={`w-1 h-1 rounded-full shrink-0 transition-colors ${active ? "bg-orange-500" : "bg-transparent"}`} />
+                <span className={`w-1 h-1 rounded-full shrink-0 ${active ? "bg-orange-500" : "bg-slate-300"}`} />
                 {it.label}
               </Link>
             );
@@ -309,58 +303,59 @@ const AppContent: React.FC = () => {
 
       {/* Sidebar */}
       <aside
-        className={`app-sidebar fixed inset-y-0 left-0 z-50 flex flex-col w-72 bg-white border-r border-slate-200 transition-transform duration-300 lg:translate-x-0 lg:static lg:h-full lg:z-auto ${
+        className={`app-sidebar fixed inset-y-0 left-0 z-50 flex flex-col w-64 bg-white border-r border-slate-100 transition-transform duration-300 lg:translate-x-0 lg:static lg:h-full lg:z-auto ${
           sidebarOpen ? "translate-x-0" : "-translate-x-full"
         }`}
       >
-        <div className="flex items-center justify-between px-6 py-5 border-b border-slate-200 bg-slate-50/50">
-          <img src="/brand/logo.png" alt="Sunrise Media" className="h-8 w-auto" />
-          <button
-            onClick={() => setSidebarOpen(false)}
-            className="lg:hidden text-slate-500 hover:text-slate-900 transition"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-
-        {/* User profile block */}
-        <div className="px-6 py-4 border-b border-slate-200 bg-slate-50/30">
-          <div className="flex items-center gap-3">
-            <div className="h-10 w-10 rounded-full bg-gradient-to-tr from-orange-500 to-amber-400 flex items-center justify-center font-bold text-white shadow-md uppercase">
-              {user.name.slice(0, 2)}
-            </div>
-            <div className="flex flex-col">
-              <span className="text-sm font-semibold text-slate-900 leading-tight truncate max-w-[160px]">
-                {user.name}
-              </span>
-              <span className="text-xs text-orange-600 font-medium capitalize">{user.role}</span>
-            </div>
-            <div className="ml-auto hidden lg:block">
-              <NotificationBell />
-            </div>
+        {/* Logo */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
+          <img src="/brand/logo.png" alt="Sunrise Media" className="h-7 w-auto" />
+          <div className="flex items-center gap-2">
+            <NotificationBell />
+            <button
+              onClick={() => setSidebarOpen(false)}
+              className="lg:hidden text-slate-400 hover:text-slate-700 transition"
+            >
+              <X className="w-4 h-4" />
+            </button>
           </div>
         </div>
 
         {/* Navigation */}
-        <nav className="flex-1 px-3 py-3 space-y-1 overflow-y-auto">
+        <nav className="flex-1 px-3 py-3 space-y-0.5 overflow-y-auto">
           {sections.map((s) => (
-            <SidebarSection
-              key={s.key}
-              section={s}
-              location={location}
-              hash={hash}
-              closeMobile={() => setSidebarOpen(false)}
-            />
+            <React.Fragment key={s.key}>
+              {s.groupLabel && (
+                <div className="px-3 pt-5 pb-1.5">
+                  <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">{s.groupLabel}</span>
+                </div>
+              )}
+              <SidebarSection
+                section={s}
+                location={location}
+                hash={hash}
+                closeMobile={() => setSidebarOpen(false)}
+              />
+            </React.Fragment>
           ))}
         </nav>
 
-        {/* Footer */}
-        <div className="p-3 border-t border-slate-200">
+        {/* Footer — user info + logout */}
+        <div className="border-t border-slate-100 p-3 space-y-1">
+          <div className="flex items-center gap-2.5 px-3 py-2">
+            <div className="h-7 w-7 rounded-full bg-gradient-to-tr from-orange-500 to-amber-400 flex items-center justify-center font-bold text-white text-xs uppercase shrink-0">
+              {user.name.slice(0, 2)}
+            </div>
+            <div className="min-w-0">
+              <p className="text-[12.5px] font-semibold text-slate-800 truncate leading-tight">{user.name}</p>
+              <p className="text-[11px] text-orange-600 font-medium capitalize">{user.role}</p>
+            </div>
+          </div>
           <button
             onClick={logout}
-            className="flex items-center gap-3 w-full px-4 py-2.5 rounded-lg text-sm font-medium text-red-600 hover:text-red-700 hover:bg-red-50 transition border border-transparent hover:border-red-100"
+            className="flex items-center gap-2.5 w-full px-3 py-2 rounded-lg text-[13px] font-medium text-slate-500 hover:text-red-600 hover:bg-red-50 transition"
           >
-            <LogOut className="w-5 h-5" />
+            <LogOut className="w-4 h-4" />
             Logout
           </button>
         </div>
@@ -368,18 +363,7 @@ const AppContent: React.FC = () => {
 
       {/* Main */}
       <main className="app-main flex-1 flex flex-col min-w-0 overflow-hidden lg:pt-0 pt-12 relative bg-slate-50">
-        <div className="app-main-scroll flex-1 overflow-y-auto p-4 lg:p-8">
-          <div className="mb-4 flex flex-wrap justify-end gap-2">
-            <Link href="/staff" className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50">
-              <Clock className="w-3.5 h-3.5 text-orange-600" />
-              Check In/Out
-            </Link>
-            <Link href="/operations?new=1#estimates" className="inline-flex items-center gap-1.5 rounded-md bg-orange-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-orange-500">
-              <Plus className="w-3.5 h-3.5" />
-              New Estimate
-            </Link>
-            <GlobalDateFilter />
-          </div>
+        <div className="app-main-scroll flex-1 overflow-y-auto p-4 lg:p-6">
           <Switch>
             <Route path="/" component={Dashboard} />
             <Route path="/staff" component={StaffPage} />

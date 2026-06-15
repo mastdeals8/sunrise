@@ -2,13 +2,13 @@ import React, { useEffect, useMemo, useState } from "react";
 import { formatCurrency } from "@/utils/format";
 import { useAuth } from "../contexts/AuthContext";
 import { useGlobalDate } from "../contexts/GlobalDateContext";
+import { GlobalDateFilter } from "../components/GlobalDateFilter";
 import {
   TrendingUp,
   ArrowUpRight,
   Clock,
   AlertTriangle,
   FileText,
-  Plus,
   Wallet,
   FileSignature,
   PackageCheck,
@@ -201,69 +201,66 @@ const Dashboard: React.FC = () => {
 
   return (
     <div className="space-y-5">
-      {/* Header — minimal, just the page title + 2 most-used CTAs */}
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-2">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-slate-900">Dashboard</h1>
-          <p className="text-slate-500 text-xs mt-0.5">{globalDate.label} · live business status</p>
+          <h1 className="text-xl font-bold tracking-tight text-slate-900">Dashboard</h1>
+          <p className="text-slate-400 text-xs mt-0.5">Live business status</p>
         </div>
-        <div className="flex gap-2">
-          <Link href="/staff" className="flex items-center gap-1.5 px-3 py-2 bg-white border border-slate-200 hover:bg-slate-50 transition rounded-md text-xs text-slate-700 font-semibold">
-            <Clock className="w-3.5 h-3.5 text-orange-600" /> Check In/Out
-          </Link>
-          <Link href="/operations#estimates" className="flex items-center gap-1.5 px-3 py-2 bg-gradient-to-r from-orange-600 to-amber-500 hover:from-orange-500 hover:to-amber-400 text-white font-bold transition rounded-md text-xs shadow-md">
-            <Plus className="w-3.5 h-3.5" /> New Estimate
+        <div className="flex items-center gap-2 flex-wrap">
+          <GlobalDateFilter />
+          <Link
+            href="/staff"
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-200 hover:bg-slate-50 transition rounded-lg text-xs text-slate-600 font-semibold whitespace-nowrap"
+          >
+            <Clock className="w-3.5 h-3.5 text-orange-500" /> Check In/Out
           </Link>
         </div>
       </div>
 
-      {/* ── SECTION 1 — Business Snapshot (exactly 4 KPI cards) ───────── */}
-      <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col justify-between min-h-[120px]">
-          <div className="flex items-start justify-between">
-            <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Revenue This Month</span>
-            <span className="p-1.5 rounded bg-emerald-50 text-emerald-700"><TrendingUp className="w-3.5 h-3.5" /></span>
+      {/* ── SECTION 1 — Business Snapshot ─────────────────────────────── */}
+      <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        {[
+          {
+            label: "Revenue This Month",
+            value: formatCurrency(stats.monthlyBilling || 0),
+            sub: <span className="inline-flex items-center gap-1 text-emerald-600"><ArrowUpRight className="w-3 h-3" /> Billed in period</span>,
+            icon: <TrendingUp className="w-4 h-4" />,
+            iconCls: "bg-emerald-50 text-emerald-600",
+          },
+          {
+            label: "Outstanding Receivables",
+            value: formatCurrency(stats.totalOutstanding || 0),
+            sub: <Link href="/pending-payments" className="inline-flex items-center gap-1 text-orange-600 hover:underline">View receivables <ChevronRight className="w-3 h-3" /></Link>,
+            icon: <Wallet className="w-4 h-4" />,
+            iconCls: "bg-orange-50 text-orange-600",
+          },
+          {
+            label: "Pending Actions",
+            value: pendingActionsTotal,
+            sub: <span className="text-slate-400">Across PO · WCC · Invoice · Payment</span>,
+            icon: <AlertTriangle className="w-4 h-4" />,
+            iconCls: "bg-rose-50 text-rose-600",
+          },
+          {
+            label: "Collections This Month",
+            value: formatCurrency(stats.monthlyCollections || 0),
+            sub: <span className="text-emerald-600">Receipts in period</span>,
+            icon: <CreditCard className="w-4 h-4" />,
+            iconCls: "bg-emerald-50 text-emerald-600",
+          },
+        ].map((card) => (
+          <div key={card.label} className="bg-white border border-slate-200/80 rounded-xl p-4 flex flex-col justify-between shadow-sm">
+            <div className="flex items-start justify-between gap-2">
+              <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider leading-tight">{card.label}</span>
+              <span className={`p-1.5 rounded-lg shrink-0 ${card.iconCls}`}>{card.icon}</span>
+            </div>
+            <div className="mt-3">
+              <div className="text-2xl font-black text-slate-900 tracking-tight">{card.value}</div>
+              <div className="text-[11px] font-medium mt-1">{card.sub}</div>
+            </div>
           </div>
-          <div className="mt-3">
-            <h2 className="text-2xl font-black text-slate-900 tracking-tight">{formatCurrency(stats.monthlyBilling || 0)}</h2>
-            <span className="text-[11px] text-emerald-600 font-semibold inline-flex items-center gap-1 mt-0.5"><ArrowUpRight className="w-3 h-3" /> Billed in period</span>
-          </div>
-        </div>
-
-        <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col justify-between min-h-[120px]">
-          <div className="flex items-start justify-between">
-            <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Outstanding Receivables</span>
-            <span className="p-1.5 rounded bg-orange-50 text-orange-700"><Wallet className="w-3.5 h-3.5" /></span>
-          </div>
-          <div className="mt-3">
-            <h2 className="text-2xl font-black text-slate-900 tracking-tight">{formatCurrency(stats.totalOutstanding || 0)}</h2>
-            <Link href="/pending-payments" className="text-[11px] text-orange-700 font-semibold inline-flex items-center gap-1 mt-0.5 hover:underline">
-              View receivables <ChevronRight className="w-3 h-3" />
-            </Link>
-          </div>
-        </div>
-
-        <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col justify-between min-h-[120px]">
-          <div className="flex items-start justify-between">
-            <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Pending Actions</span>
-            <span className="p-1.5 rounded bg-rose-50 text-rose-700"><AlertTriangle className="w-3.5 h-3.5" /></span>
-          </div>
-          <div className="mt-3">
-            <h2 className="text-2xl font-black text-slate-900 tracking-tight">{pendingActionsTotal}</h2>
-            <span className="text-[11px] text-slate-500 font-semibold inline-flex items-center gap-1 mt-0.5">Across PO, WCC, Invoice, Payment</span>
-          </div>
-        </div>
-
-        <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col justify-between min-h-[120px]">
-          <div className="flex items-start justify-between">
-            <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Collections This Month</span>
-            <span className="p-1.5 rounded bg-emerald-50 text-emerald-700"><CreditCard className="w-3.5 h-3.5" /></span>
-          </div>
-          <div className="mt-3">
-            <h2 className="text-2xl font-black text-slate-900 tracking-tight">{formatCurrency(stats.monthlyCollections || 0)}</h2>
-            <span className="text-[11px] text-emerald-700 font-semibold inline-flex items-center gap-1 mt-0.5">Receipts in period</span>
-          </div>
-        </div>
+        ))}
       </section>
 
       {/* ── SECTION 2 — Workflow Pipeline (visual + clickable) ────────── */}

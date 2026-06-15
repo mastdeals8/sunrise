@@ -1669,6 +1669,15 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
 	                      <Download className="w-3.5 h-3.5" />
 	                      Export PDF
 	                    </button>
+	                    <a
+	                      href={`/api/operations/estimates/${selectedEstimate.id}/export-excel`}
+	                      target="_blank"
+	                      rel="noreferrer"
+	                      className="inline-flex items-center gap-1.5 py-1 px-3 bg-green-50 border border-green-200 text-green-700 text-xs font-bold rounded-lg hover:bg-green-100 transition"
+	                    >
+	                      <FileSpreadsheet className="w-3.5 h-3.5" />
+	                      Export to Excel
+	                    </a>
 	                    <button
 	                      type="button"
 	                      onClick={copySummary}
