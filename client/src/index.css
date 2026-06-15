@@ -1,0 +1,1177 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Brand palette (extracted from https://sunrsie.lovable.app/ logo):
+ *   - Brand orange (primary): #F86000  =  hsl(23, 100%, 49%)
+ *   - Brand dark (text/wordmark): #303030 = hsl(0, 0%, 19%)
+ *   - Background:               #F8FAFC (slate-50)
+ *   - Surface (cards):          #FFFFFF
+ * See BRAND_THEME_REPORT.md for the full breakdown.
+ */
+
+@layer base {
+  :root {
+    --background: 210 20% 98%; /* Light Slate-50: hsl(210, 20%, 98%) */
+    --foreground: 222.2 47.4% 11.2%; /* Dark Slate-900: hsl(222, 47%, 11%) */
+
+    --card: 0 0% 100%; /* Pure White: hsl(0, 0%, 100%) */
+    --card-foreground: 222.2 47.4% 11.2%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 47.4% 11.2%;
+
+    --primary: 23 100% 49%; /* Sunrise Brand Orange (#F86000) */
+    --primary-foreground: 210 40% 98%;
+
+    --secondary: 210 40% 96.1%; /* Light Slate-100 */
+    --secondary-foreground: 222.2 47.4% 11.2%;
+
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215.4 16.3% 46.9%;
+
+    --accent: 23 100% 96%; /* Soft orange tint (#FFEFE5) for highlighted surfaces */
+    --accent-foreground: 23 100% 30%;
+
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 214.3 31.8% 91.4%; /* Light Slate-200 */
+    --input: 214.3 31.8% 91.4%;
+    --ring: 23 100% 49%;
+    --radius: 0.75rem;
+
+    /* Brand-direct tokens (use these for explicit brand references). */
+    --brand-orange: 23 100% 49%;
+    --brand-orange-strong: 18 100% 42%; /* darker hover/border (#D75200) */
+    --brand-dark: 0 0% 19%; /* logo wordmark (#303030) */
+  }
+}
+
+@layer base {
+  * {
+    @apply border-slate-200/90;
+  }
+  body {
+    @apply bg-slate-50 text-slate-900 antialiased font-sans;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+}
+
+/* Custom premium light styles */
+.glass-panel {
+  @apply bg-white border border-slate-200/90 shadow-sm rounded-xl p-5;
+}
+
+.glass-panel-hover {
+  @apply transition-all duration-200 hover:shadow-md hover:border-slate-300;
+}
+
+.sunrise-gradient-text {
+  @apply bg-gradient-to-r from-orange-600 to-amber-500 bg-clip-text text-transparent font-bold;
+}
+
+.sunrise-gradient-bg {
+  @apply bg-gradient-to-r from-orange-600 to-amber-500;
+}
+
+/* Smooth light custom scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  @apply bg-slate-300 rounded-full hover:bg-orange-500/40 transition-all;
+}
+
+.glow-glow {
+  box-shadow: 0 4px 20px -2px rgba(249, 115, 22, 0.08);
+}
+
+/* Compact (Tally / Excel-style) form inputs and table actions
+ * Use:
+ *   - `.input-compact` on <input>, <select>, <textarea> inside compact panels
+ *   - `.table-compact` on a wrapping div for sticky-header tables
+ *   - `.btn-action`    for icon-sized row actions
+ */
+.input-compact {
+  @apply w-full px-2 py-1 text-xs bg-white border border-slate-200 rounded-md
+         text-slate-800 focus:outline-none focus:border-orange-500
+         focus:ring-1 focus:ring-orange-200 transition;
+}
+.input-compact:disabled {
+  @apply bg-slate-50 text-slate-400 cursor-not-allowed;
+}
+
+.btn-action {
+  @apply p-1 rounded hover:bg-slate-100 transition flex items-center justify-center;
+}
+
+.table-compact thead th {
+  @apply sticky top-0 bg-slate-50 px-2 py-1.5 text-[10px] uppercase
+         tracking-wide text-slate-500 font-bold text-left;
+}
+.table-compact tbody td {
+  @apply px-2 py-1.5 text-xs text-slate-700 border-b border-slate-100;
+}
+.table-compact tbody tr:hover {
+  @apply bg-orange-50/40;
+}
+
+.tag-pill {
+  @apply inline-block px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide;
+}
+.tag-pill-source-rate-card { @apply bg-emerald-50 text-emerald-700 border border-emerald-100; }
+.tag-pill-source-default   { @apply bg-slate-100 text-slate-600 border border-slate-200; }
+.tag-pill-source-manual    { @apply bg-amber-50 text-amber-700 border border-amber-100; }
+
+
+/* ============================================================ */
+/* Estimate print/export styles                                 */
+/* ============================================================ */
+@media print {
+  @page {
+    size: A4;
+    margin: 10mm 12mm 14mm;
+  }
+  /* Document exports must print only an explicit document subtree. */
+  body { background: #fff !important; counter-reset: page 1; }
+  body * { visibility: hidden !important; }
+  #root,
+  .app-shell,
+  .app-main,
+  .app-main-scroll {
+    display: block !important;
+    position: static !important;
+    width: 100% !important;
+    max-width: none !important;
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    background: #fff !important;
+  }
+  .app-sidebar,
+  .app-mobile-topbar,
+  .app-main-scroll > .mb-4,
+  .print\:hidden {
+    display: none !important;
+  }
+  [data-print-document="true"],
+  [data-print-document="true"] * {
+    visibility: visible !important;
+  }
+  [data-print-document="true"] {
+    display: block !important;
+    position: static !important;
+    width: 100% !important;
+    max-width: none !important;
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    background: #fff !important;
+    border: 0 !important;
+    box-shadow: none !important;
+    border-radius: 0 !important;
+  }
+  .estimate-preview-modal,
+  .estimate-preview-panel,
+  .estimate-preview-scroll {
+    position: static !important;
+    inset: auto !important;
+    display: block !important;
+    width: 100% !important;
+    max-width: none !important;
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    background: #fff !important;
+    border: 0 !important;
+    box-shadow: none !important;
+    border-radius: 0 !important;
+  }
+  .estimate-preview-chrome {
+    display: none !important;
+  }
+  .operations-print-root.has-estimate-preview > :not(.estimate-preview-modal):not(.wcc-modal-backdrop) {
+    display: none !important;
+  }
+  .estimate-print, .estimate-print * { visibility: visible !important; }
+  .estimate-print {
+    position: static !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+    border: none !important;
+    display: block !important;
+  }
+  .estimate-print-fixed-header {
+    display: none !important;
+  }
+  .estimate-print .estimate-table {
+    font-size: 9px !important;
+    border-collapse: separate !important;
+    border-spacing: 0 !important;
+    break-after: auto;
+    page-break-after: auto;
+  }
+  .estimate-print .estimate-table,
+  .estimate-print .estimate-table thead,
+  .estimate-print .estimate-table tbody,
+  .estimate-print .estimate-table tr,
+  .estimate-print .estimate-table td {
+    -webkit-box-decoration-break: clone;
+    box-decoration-break: clone;
+  }
+  .estimate-print .estimate-table td {
+    border: 0 !important;
+    border-right: 1px solid #000 !important;
+    border-bottom: 1px solid #000 !important;
+  }
+  .estimate-print .estimate-table tr > td:first-child {
+    border-left: 1px solid #000 !important;
+  }
+  .estimate-print .estimate-table thead tr:first-child > td,
+  .estimate-print .estimate-store-section-keep > tr:first-child > td {
+    border-top: 1px solid #000 !important;
+  }
+  body.estimate-print-mode-compact .estimate-print .estimate-table td {
+    padding: 1px 2px !important;
+    font-size: 8.5px !important;
+    line-height: 1.1 !important;
+  }
+  body.estimate-print-mode-compact .estimate-print .estimate-table thead td {
+    padding: 1.5px 2px !important;
+    line-height: 1.05 !important;
+  }
+  body.estimate-print-mode-compact .estimate-print > table:first-child td {
+    padding-top: 4px !important;
+    padding-bottom: 4px !important;
+    line-height: 1.2 !important;
+  }
+  body.estimate-print-mode-compact .estimate-document-footer td {
+    padding: 5px 7px !important;
+    line-height: 1.15 !important;
+  }
+  body.estimate-print-mode-compact .estimate-footer-block {
+    padding-top: 0.8mm !important;
+  }
+  body.estimate-print-mode-compact .estimate-signature-space {
+    height: 10mm !important;
+  }
+  body.estimate-print-mode-compact .estimate-signature-stamp {
+    max-height: 9mm !important;
+  }
+  body.estimate-print-mode-compact .estimate-brand-footer {
+    padding: 1.4mm 2mm !important;
+  }
+  body.estimate-print-mode-compact .summary-page-header {
+    margin-bottom: 6px !important;
+  }
+  body.estimate-print-mode-compact .summary-copy-table th,
+  body.estimate-print-mode-compact .summary-copy-table td {
+    padding: 3px 5px !important;
+    font-size: 10px !important;
+    line-height: 1.15 !important;
+  }
+  .estimate-print thead {
+    display: table-header-group !important;
+  }
+  .estimate-print tfoot {
+    display: table-footer-group !important;
+  }
+  .estimate-store-section-keep,
+  .estimate-store-total-keep,
+  .estimate-totals-keep,
+  .estimate-service-row-keep,
+  .estimate-print tr {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+  .estimate-store-section-keep tr:first-child {
+    break-after: avoid;
+    page-break-after: avoid;
+  }
+  .estimate-footer-block {
+    break-inside: avoid;
+    page-break-inside: avoid;
+    margin-top: auto !important;
+    padding-top: 1.5mm !important;
+  }
+  .estimate-document-footer {
+    break-inside: avoid;
+    page-break-inside: avoid;
+    margin-top: 0 !important;
+  }
+  .estimate-signature-cell {
+    text-align: right !important;
+    vertical-align: bottom !important;
+  }
+  .estimate-signature-space {
+    height: 13mm !important;
+    overflow: hidden !important;
+  }
+  .estimate-signature-stamp {
+    max-height: 12mm !important;
+    max-width: 42mm !important;
+    object-fit: contain !important;
+  }
+  .estimate-brand-footer {
+    break-inside: avoid;
+    page-break-inside: avoid;
+    margin-top: 0 !important;
+    padding: 2mm 3mm !important;
+    line-height: 1.15 !important;
+  }
+  .estimate-brand-footer-title {
+    font-size: 14px !important;
+    line-height: 1 !important;
+  }
+  /* Force colours to print (browsers ignore backgrounds by default) */
+  .estimate-print * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+  .summary-page-header {
+    break-after: avoid;
+    page-break-after: avoid;
+  }
+  .summary-copy-table th,
+  .summary-copy-table td {
+    border: 1px solid #000 !important;
+  }
+  .pageNumber::after {
+    content: counter(page);
+  }
+}
+
+/* On-screen scoping: the dense estimate is rendered inside the
+   preview modal. Keep its inner tables dense regardless of any
+   Tailwind utility classes that might leak in. */
+.estimate-print table {
+  border-collapse: collapse !important;
+  width: 100%;
+}
+.estimate-print .estimate-table td {
+  border: 1px solid #000;
+  padding: 2px 4px;
+  font-size: 10px;
+  line-height: 1.25;
+  vertical-align: top;
+}
+.estimate-print .summary-copy-table th,
+.estimate-print .summary-copy-table td {
+  border: 1px solid #000;
+}
+.estimate-print-fixed-header {
+  display: none;
+}
+
+/* ============================================================ */
+/* Estimate Builder — dense Excel-style inputs (square borders, */
+/* no number spinners, no rounded SaaS chrome).                 */
+/* ============================================================ */
+.eb-cell {
+  display: block;
+  width: 100%;
+  border: 1px solid #94a3b8;
+  background: #fff;
+  padding: 2px 5px;
+  font-size: 11px;
+  line-height: 1.3;
+  color: #0f172a;
+  border-radius: 0;
+  outline: none;
+}
+/* When .eb-cell is applied to a <td>, restore table-cell behaviour so the
+ * multi-column header grid (3 fields per row) renders correctly. Without
+ * this override, every <td> becomes a block element and every field stacks
+ * on its own line. */
+td.eb-cell, th.eb-cell {
+  display: table-cell;
+  width: auto;
+}
+.eb-cell:focus { border-color: #f59e0b; box-shadow: inset 0 0 0 1px #f59e0b; }
+.eb-cell:disabled { background: #f1f5f9; color: #94a3b8; }
+.eb-spreadsheet-workspace {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  background: #f3f4f6;
+  color: #0f172a;
+  overflow: hidden;
+}
+.eb-sheet-titlebar {
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 2px 6px;
+  border-bottom: 1px solid #9ca3af;
+  background: #e5e7eb;
+  flex: 0 0 auto;
+}
+.eb-sheet-titlebar h3 {
+  margin: 0;
+  font-size: 11px;
+  line-height: 13px;
+  font-weight: 800;
+}
+.eb-sheet-titlebar span {
+  display: block;
+  max-width: 70vw;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 9.5px;
+  line-height: 11px;
+  color: #475569;
+}
+.eb-sheet-titlebar button,
+.eb-sheet-savebar button,
+.eb-store-picker button,
+.eb-v2-visible button {
+  border: 1px solid #94a3b8;
+  border-radius: 0;
+  background: #fff;
+  color: #0f172a;
+  font-size: 10.5px;
+  font-weight: 800;
+  line-height: 14px;
+  padding: 2px 7px;
+}
+.eb-sheet-titlebar button:hover,
+.eb-sheet-savebar button:hover,
+.eb-store-picker button:hover,
+.eb-v2-visible button:hover {
+  background: #f8fafc;
+}
+.eb-sheet-savebar .eb-save-primary {
+  border-color: #c2410c;
+  background: #ea580c;
+  color: #fff;
+}
+.eb-sheet-savebar .eb-save-primary:hover {
+  background: #f97316;
+}
+.eb-sheet-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px;
+  overflow: hidden;
+}
+.eb-sheet-meta {
+  position: sticky;
+  top: 0;
+  z-index: 35;
+  display: grid;
+  grid-template-columns: minmax(120px, 0.8fr) minmax(128px, 0.75fr) minmax(220px, 1.7fr) minmax(190px, 1.2fr) minmax(170px, 1fr) minmax(136px, 0.8fr);
+  gap: 2px;
+  flex: 0 0 auto;
+  padding: 2px;
+  border: 1px solid #94a3b8;
+  background: #f8fafc;
+}
+.eb-sheet-meta.is-collapsed {
+  display: block;
+  min-height: 34px;
+}
+.eb-compact-estimate-bar {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: 11px;
+  color: #334155;
+}
+.eb-compact-estimate-bar button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  border: 1px solid #94a3b8;
+  background: #fff;
+  color: #0f172a;
+  padding: 0;
+}
+.eb-compact-estimate-bar .eb-show-details-btn {
+  width: auto;
+  gap: 4px;
+  padding: 0 7px;
+  font-size: 10px;
+  font-weight: 800;
+}
+.eb-compact-estimate-bar b {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  color: #0f172a;
+  font-weight: 900;
+}
+.eb-compact-estimate-bar span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.eb-compact-estimate-bar strong {
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 900;
+}
+.eb-compact-estimate-bar strong.ok {
+  color: #047857;
+}
+.eb-compact-estimate-bar strong.warn {
+  color: #b45309;
+}
+.eb-sheet-meta label,
+.eb-sheet-details-grid label,
+.eb-meta-profile label {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+.eb-sheet-meta span,
+.eb-sheet-details-grid span,
+.eb-meta-profile span {
+  font-size: 9px;
+  line-height: 10px;
+  font-weight: 800;
+  color: #475569;
+  text-transform: uppercase;
+}
+.eb-sheet-meta input,
+.eb-sheet-meta select,
+.eb-sheet-meta textarea,
+.eb-sheet-details-grid input,
+.eb-sheet-details-grid textarea,
+.eb-store-picker input {
+  width: 100%;
+  min-height: 20px;
+  border: 1px solid #94a3b8;
+  border-radius: 0;
+  background: #fff;
+  color: #0f172a;
+  font-size: 10px;
+  line-height: 13px;
+  padding: 1px 4px;
+  outline: none;
+}
+.eb-sheet-meta textarea,
+.eb-sheet-details-grid textarea {
+  resize: vertical;
+  font-family: inherit;
+}
+.eb-sheet-meta input:focus,
+.eb-sheet-meta select:focus,
+.eb-sheet-meta textarea:focus,
+.eb-sheet-details-grid input:focus,
+.eb-sheet-details-grid textarea:focus,
+.eb-store-picker input:focus {
+  border-color: #2563eb;
+  box-shadow: inset 0 0 0 1px #2563eb;
+}
+.eb-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+.eb-meta-wide {
+  grid-column: span 1;
+}
+.eb-meta-profile {
+  position: relative;
+  min-width: 0;
+}
+.eb-profile-menu {
+  position: absolute;
+  z-index: 80;
+  top: 100%;
+  left: 0;
+  right: 0;
+  max-height: 180px;
+  overflow: auto;
+  border: 1px solid #64748b;
+  background: #fff;
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.16);
+}
+.eb-profile-menu button {
+  display: block;
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid #e2e8f0;
+  background: #fff;
+  padding: 4px 6px;
+  text-align: left;
+  font-size: 10px;
+  line-height: 13px;
+}
+.eb-profile-menu button.active,
+.eb-profile-menu button:hover {
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+.eb-profile-empty {
+  padding: 5px 6px;
+  color: #64748b;
+  font-size: 10px;
+}
+.eb-sheet-details {
+  grid-column: 1 / -1;
+  border-top: 1px solid #cbd5e1;
+  padding-top: 2px;
+}
+.eb-sheet-details summary {
+  cursor: pointer;
+  font-size: 10px;
+  line-height: 14px;
+  font-weight: 800;
+  color: #334155;
+}
+.eb-sheet-details-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(120px, 1fr));
+  gap: 2px;
+  margin-top: 2px;
+}
+.eb-detail-wide {
+  grid-column: span 3;
+}
+.eb-company-strip {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-height: 18px;
+  border-top: 1px solid #cbd5e1;
+  padding-top: 2px;
+  font-size: 9.5px;
+  line-height: 12px;
+  color: #334155;
+}
+.eb-company-strip b {
+  color: #0f172a;
+  font-weight: 900;
+}
+.eb-company-strip strong {
+  color: #b45309;
+  font-weight: 900;
+}
+.eb-company-strip.warn {
+  background: #fffbeb;
+  box-shadow: inset 0 0 0 1px #f59e0b;
+  padding: 2px 4px;
+}
+.eb-v2-shell {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid #64748b;
+  background: #f8fafc;
+  color: #0f172a;
+  font-size: 11px;
+  overflow: hidden;
+}
+.eb-grid {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: max-content;
+  min-width: 100%;
+  table-layout: fixed;
+}
+.eb-grid th, .eb-grid td {
+  border: 0;
+  border-right: 1px solid #cbd5e1;
+  border-bottom: 1px solid #cbd5e1;
+  padding: 0 3px;
+  font-size: 10px;
+  line-height: 14px;
+  height: 24px;
+  vertical-align: middle;
+  text-align: left;
+  background: #fff;
+  overflow: hidden;
+}
+.eb-grid thead th {
+  position: sticky;
+  top: 24px;
+  z-index: 16;
+  background: #e5e7eb;
+  color: #334155;
+  font-weight: 800;
+  text-align: center;
+  height: 23px;
+  user-select: none;
+}
+.eb-grid .num { text-align: right; font-variant-numeric: tabular-nums; }
+.eb-grid .yellow td { background: #fff7a8 !important; font-weight: 800; }
+.eb-grid input[type="number"]::-webkit-outer-spin-button,
+.eb-grid input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.eb-grid input[type="number"] { -moz-appearance: textfield; }
+.eb-grid input, .eb-grid select, .eb-grid textarea {
+  width: 100%;
+  border: none;
+  background: transparent;
+  font-size: 10px;
+  line-height: 14px;
+  padding: 0 1px;
+  outline: none;
+  color: inherit;
+  border-radius: 0;
+  height: 20px;
+}
+.eb-grid select {
+  appearance: none;
+}
+.eb-grid input:focus, .eb-grid select:focus, .eb-grid textarea:focus {
+  background: #fff;
+}
+.eb-store-block {
+  min-width: max-content;
+  margin-bottom: 2px;
+}
+.eb-store-header {
+  position: sticky;
+  top: 0 !important;
+  z-index: 22 !important;
+  background: #dbeafe !important;
+  color: #0f172a;
+  font-weight: 800;
+  font-size: 10.5px;
+  /* Single-row banner — title section grows, actions section hugs the right. */
+  height: auto !important;
+  min-height: 32px !important;
+  padding: 3px 8px !important;
+  overflow: visible !important;
+  border-top: 1px solid #94a3b8 !important;
+  border-bottom: 1px solid #94a3b8 !important;
+  display: table-cell;
+  vertical-align: middle;
+}
+.eb-store-header-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-width: max-content;
+  box-sizing: border-box;
+}
+/* Left column: checkbox + chevron + name + code + city, all inline. */
+.eb-store-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  min-width: max-content;
+  overflow: visible;
+}
+.eb-store-title-wrap input[type="checkbox"] {
+  width: auto;
+  height: auto;
+}
+/* Right column: action buttons, single row, hug the right. */
+.eb-store-actions {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 2px;
+  margin-left: auto;
+  justify-content: flex-end;
+}
+.eb-store-toggle {
+  border: 0;
+  background: transparent;
+  color: #0f172a;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: max-content;
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 950;
+  line-height: 14px;
+  padding: 0;
+  text-align: left;
+  white-space: nowrap;
+  overflow: visible;
+}
+.eb-store-toggle svg {
+  flex: 0 0 auto;
+}
+.eb-store-toggle span {
+  overflow: visible;
+  text-overflow: clip;
+  min-width: max-content;
+}
+.eb-store-title-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.eb-store-name {
+  font-weight: 950;
+  font-size: 11px;
+  color: #0f172a;
+  white-space: nowrap;
+}
+.eb-store-code {
+  font-family: monospace;
+  font-size: 10px;
+  font-weight: 700;
+  color: #1d4ed8;
+  background: #dbeafe;
+  border: 1px solid #93c5fd;
+  padding: 0 4px;
+  border-radius: 2px;
+  white-space: nowrap;
+}
+.eb-store-city {
+  font-size: 10px;
+  font-weight: 600;
+  color: #475569;
+  white-space: nowrap;
+}
+.eb-store-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+.eb-store-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  height: 19px;
+  border: 1px solid #94a3b8;
+  background: #fff;
+  color: #334155;
+  padding: 0 5px;
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.eb-store-actions button:hover {
+  background: #f8fafc;
+  color: #0f172a;
+}
+.eb-store-actions button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.eb-store-actions button.danger {
+  color: #dc2626;
+  border-color: #fecaca;
+}
+.eb-v2-toolbar button,
+.eb-v2-metrics button,
+.eb-v2-visible button {
+  border: 1px solid transparent;
+  background: transparent;
+  padding: 2px 7px;
+  font-size: 10.5px;
+  line-height: 1.3;
+  font-weight: 700;
+  border-radius: 0;
+}
+.eb-v2-toolbar button:hover,
+.eb-v2-metrics button:hover,
+.eb-v2-visible button:hover {
+  border-color: #94a3b8;
+  background: #fff;
+}
+.eb-v2-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-wrap: wrap;
+  border-bottom: 1px solid #cbd5e1;
+  background: #f1f5f9;
+  padding: 1px 3px;
+  flex: 0 0 auto;
+}
+.eb-v2-toolbar button {
+  border-color: #94a3b8;
+  background: #fff;
+  min-height: 19px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.eb-v2-toolbar button:disabled {
+  color: #94a3b8;
+  background: #f8fafc;
+  cursor: not-allowed;
+}
+.eb-v2-toolbar-status {
+  margin-left: auto;
+  padding: 2px 6px;
+  color: #475569;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+.eb-v2-filters {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(112px, 1fr)) minmax(250px, 1.3fr);
+  gap: 2px;
+  align-items: end;
+  border-bottom: 1px solid #cbd5e1;
+  padding: 2px 3px;
+  flex: 0 0 auto;
+}
+.eb-v2-filters label {
+  display: grid;
+  gap: 1px;
+  color: #475569;
+  font-size: 9.5px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+.eb-v2-filters input {
+  border: 1px solid #94a3b8;
+  background: #fff;
+  color: #0f172a;
+  font-size: 10px;
+  line-height: 13px;
+  min-height: 19px;
+  padding: 1px 4px;
+  outline: none;
+  border-radius: 0;
+}
+.eb-v2-visible,
+.eb-v2-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 10.5px;
+}
+.eb-v2-metrics {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  border-bottom: 1px solid #cbd5e1;
+  padding: 2px 4px;
+  flex: 0 0 auto;
+}
+.eb-v2-metrics button {
+  border-color: #cbd5e1;
+  background: #fff;
+}
+.eb-v2-metrics button.active {
+  border-color: #f59e0b;
+  background: #fffbeb;
+  color: #92400e;
+}
+.eb-v2-summary {
+  justify-content: flex-end;
+  padding: 1px 5px;
+  background: #fff;
+  border-bottom: 1px solid #cbd5e1;
+  font-variant-numeric: tabular-nums;
+  flex: 0 0 auto;
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+.eb-store-picker-panel {
+  flex: 0 0 auto;
+  border-bottom: 1px solid #cbd5e1;
+  background: #fff;
+}
+.eb-store-gate {
+  padding: 4px 6px;
+  border-bottom: 1px solid #f59e0b;
+  background: #fffbeb;
+  color: #92400e;
+  font-size: 10.5px;
+  font-weight: 800;
+}
+.eb-store-picker {
+  display: grid;
+  gap: 3px;
+  padding: 4px;
+}
+.eb-manual-store,
+.eb-store-search-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) auto;
+  gap: 3px;
+}
+.eb-store-search-row {
+  grid-template-columns: minmax(280px, 1fr) auto auto;
+}
+.eb-store-results {
+  max-height: 120px;
+  overflow: auto;
+  border: 1px solid #cbd5e1;
+}
+.eb-store-results label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 23px;
+  border-bottom: 1px solid #e2e8f0;
+  padding: 2px 6px;
+  cursor: pointer;
+  font-size: 10.5px;
+}
+.eb-store-results label.active,
+.eb-store-results label:hover {
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+.eb-store-results input {
+  width: auto;
+  min-height: auto;
+}
+.eb-store-empty,
+.eb-store-more,
+.eb-empty-sheet {
+  padding: 8px;
+  color: #64748b;
+  font-size: 11px;
+}
+.eb-sheet-grid-viewport {
+  flex: 1 1 auto;
+  min-height: 440px;
+  overflow: auto;
+  background: #fff;
+  overscroll-behavior: contain;
+}
+.eb-sheet-savebar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  padding: 3px;
+  border-top: 1px solid #94a3b8;
+  background: #e5e7eb;
+}
+.eb-sheet-savebar-hint {
+  margin-right: auto;
+  font-size: 9.5px;
+  color: #64748b;
+  font-style: italic;
+  padding: 0 4px;
+}
+.eb-row-selected td {
+  background: #eff6ff !important;
+  box-shadow: inset 0 0 0 1px #60a5fa;
+}
+.eb-select-cell input {
+  width: auto;
+}
+.eb-freeze-head,
+.eb-freeze-cell {
+  position: sticky;
+  z-index: 18;
+  background: inherit;
+}
+.eb-freeze-head {
+  z-index: 24;
+  background: #e5e7eb !important;
+}
+.eb-freeze-cell {
+  background: #fff;
+}
+.eb-row-selected .eb-freeze-cell {
+  background: #eff6ff !important;
+}
+.yellow .eb-freeze-cell {
+  background: #fff7a8 !important;
+}
+.eb-cell-active {
+  box-shadow: inset 0 0 0 2px #2563eb;
+}
+.eb-cell-editing {
+  background: #fff !important;
+  box-shadow: inset 0 0 0 2px #f59e0b;
+}
+.eb-cell-readonly {
+  width: 100%;
+  height: 22px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: inherit;
+  font: inherit;
+  padding: 0 1px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.eb-row-number-cell button {
+  width: 100%;
+  height: 22px;
+  border: 0;
+  background: transparent;
+  color: #1d4ed8;
+  font: inherit;
+  font-weight: 800;
+  text-align: right;
+  padding: 0 1px;
+}
+.eb-col-resize {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+}
+.eb-col-drag-hint {
+  margin-left: 4px;
+  color: #64748b;
+  font-size: 9px;
+}
+.eb-col-dragging {
+  opacity: 0.72;
+}
+@media (max-width: 900px) {
+  .eb-spreadsheet-workspace {
+    position: fixed;
+  }
+  .eb-sheet-meta,
+  .eb-sheet-details-grid {
+    grid-template-columns: repeat(2, minmax(130px, 1fr));
+  }
+  .eb-detail-wide,
+  .eb-sheet-details {
+    grid-column: 1 / -1;
+  }
+  .eb-manual-store,
+  .eb-store-search-row {
+    grid-template-columns: 1fr;
+  }
+  .eb-v2-filters {
+    grid-template-columns: repeat(2, minmax(130px, 1fr));
+  }
+}

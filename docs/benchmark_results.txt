@@ -1,0 +1,41 @@
+=========== BEFORE (no indexes) ===========
+=== Q1: estimate items by estimate (Project Workspace load) ===
+   ->  Parallel Seq Scan on estimate_items  (cost=0.00..4411.88 rows=9 width=26) (actual time=3.712..16.258 rows=6 loops=2)
+ Execution Time: 20.578 ms
+=== Q2: invoices for client (Client Ledger) ===
+ Seq Scan on invoices  (cost=0.00..1080.00 rows=22 width=61) (actual time=0.193..2.581 rows=21 loops=1)
+ Execution Time: 2.593 ms
+=== Q3: payments for invoice (readiness check) ===
+ Seq Scan on payments  (cost=0.00..1305.00 rows=2 width=40) (actual time=0.246..3.413 rows=5 loops=1)
+ Execution Time: 3.420 ms
+=== Q4: execution docs by estimate+status (WCC register) ===
+ Seq Scan on execution_documents  (cost=0.00..1789.00 rows=1 width=30) (actual time=1.529..4.460 rows=2 loops=1)
+ Execution Time: 4.466 ms
+=== Q5: ledger join (client outstanding) ===
+         ->  Seq Scan on payments p  (cost=0.00..1155.00 rows=60000 width=16) (actual time=0.003..3.476 rows=60000 loops=1)
+               ->  Seq Scan on invoices i  (cost=0.00..980.00 rows=128 width=20) (actual time=0.028..2.198 rows=134 loops=1)
+ Execution Time: 9.487 ms
+=========== AFTER (with indexes) ===========
+=== Q1: estimate items by estimate (Project Workspace load) ===
+ Bitmap Heap Scan on estimate_items  (cost=4.54..61.02 rows=15 width=26) (actual time=0.061..0.104 rows=11 loops=1)
+   ->  Bitmap Index Scan on idx_estimate_items_estimate_id  (cost=0.00..4.54 rows=15 width=0) (actual time=0.028..0.028 rows=11 loops=1)
+ Execution Time: 0.154 ms
+=== Q2: invoices for client (Client Ledger) ===
+ Bitmap Heap Scan on invoices  (cost=84.73..167.99 rows=25 width=61) (actual time=0.229..0.292 rows=21 loops=1)
+   ->  BitmapAnd  (cost=84.73..84.73 rows=25 width=0) (actual time=0.222..0.222 rows=0 loops=1)
+         ->  Bitmap Index Scan on idx_invoices_client_id  (cost=0.00..5.39 rows=147 width=0) (actual time=0.019..0.020 rows=134 loops=1)
+         ->  Bitmap Index Scan on idx_invoices_status  (cost=0.00..79.08 rows=6772 width=0) (actual time=0.192..0.192 rows=6688 loops=1)
+ Execution Time: 0.310 ms
+=== Q3: payments for invoice (readiness check) ===
+ Bitmap Heap Scan on payments  (cost=4.31..11.97 rows=2 width=40) (actual time=0.022..0.037 rows=5 loops=1)
+   ->  Bitmap Index Scan on idx_payments_invoice_id  (cost=0.00..4.30 rows=2 width=0) (actual time=0.017..0.017 rows=5 loops=1)
+ Execution Time: 0.044 ms
+=== Q4: execution docs by estimate+status (WCC register) ===
+ Bitmap Heap Scan on execution_documents  (cost=4.32..19.39 rows=1 width=30) (actual time=0.021..0.028 rows=2 loops=1)
+   ->  Bitmap Index Scan on idx_execution_documents_estimate_id  (cost=0.00..4.32 rows=4 width=0) (actual time=0.013..0.013 rows=3 loops=1)
+ Execution Time: 0.034 ms
+=== Q5: ledger join (client outstanding) ===
+         ->  Seq Scan on payments p  (cost=0.00..1155.00 rows=60000 width=16) (actual time=0.003..3.866 rows=60000 loops=1)
+               ->  Bitmap Heap Scan on invoices i  (cost=5.43..320.97 rows=147 width=20) (actual time=0.023..0.211 rows=134 loops=1)
+                     ->  Bitmap Index Scan on idx_invoices_client_id  (cost=0.00..5.39 rows=147 width=0) (actual time=0.009..0.009 rows=134 loops=1)
+ Execution Time: 7.818 ms

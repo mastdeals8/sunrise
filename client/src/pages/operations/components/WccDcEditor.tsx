@@ -1,0 +1,1357 @@
+import React from "react";
+import { Copy, ImagePlus, Plus, Printer, Trash, X } from "lucide-react";
+import type { Estimate, WccPhoto } from "../types";
+import { isAblblFormat } from "../../../../../shared/textFormat";
+import { companyAssetUrl } from "../../../utils/companyAssets";
+import { orderedStoreKeysFromItems } from "../utils/estimateOrdering";
+
+// ============================================================
+// WccPictureArea — free-positioning canvas for WCC proof photos.
+// Renders the picture frame on the WCC. Each photo has xPct/yPct
+// (top/left within the frame) + wPct/hPct (size). When `editable`,
+// the user can drag images to move them, grab the bottom-right
+// corner to resize, and bring an image to the front by clicking.
+// Falls back to a tile grid for legacy WCCs without xPct/yPct.
+// ============================================================
+export const WccPictureArea: React.FC<{
+  photos: WccPhoto[];
+  editable: boolean;
+  onChange?: (next: WccPhoto[]) => void;
+  onFiles?: (files: File[] | FileList | null) => void;
+}> = ({ photos, editable, onChange, onFiles }) => {
+  const frameRef = React.useRef<HTMLDivElement | null>(null);
+  const dragRef = React.useRef<null | {
+    idx: number;
+    mode: "move" | "resize-se" | "resize-sw" | "resize-ne" | "resize-nw";
+    startX: number;
+    startY: number;
+    origX: number;
+    origY: number;
+    origW: number;
+    origH: number;
+    frameW: number;
+    frameH: number;
+  }>(null);
+
+  const beginDrag = (e: React.MouseEvent, idx: number, mode: "move" | "resize-se" | "resize-sw" | "resize-ne" | "resize-nw") => {
+    if (!editable) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const frame = frameRef.current;
+    if (!frame) return;
+    const rect = frame.getBoundingClientRect();
+    const p = photos[idx];
+    dragRef.current = {
+      idx,
+      mode,
+      startX: e.clientX,
+      startY: e.clientY,
+      origX: p.xPct ?? 0,
+      origY: p.yPct ?? 0,
+      origW: p.wPct ?? 100,
+      origH: p.hPct ?? 100,
+      frameW: rect.width,
+      frameH: rect.height,
+    };
+    const onMove = (ev: MouseEvent) => {
+      if (!dragRef.current || !onChange) return;
+      const { idx, mode, startX, startY, origX, origY, origW, origH, frameW, frameH } = dragRef.current;
+      const dxPct = ((ev.clientX - startX) / frameW) * 100;
+      const dyPct = ((ev.clientY - startY) / frameH) * 100;
+      const next = [...photos];
+      const cur = { ...next[idx] };
+      if (mode === "move") {
+        cur.xPct = clamp(origX + dxPct, 0, 100 - (cur.wPct ?? 30));
+        cur.yPct = clamp(origY + dyPct, 0, 100 - (cur.hPct ?? 30));
+      } else if (mode === "resize-se") {
+        cur.wPct = clamp(origW + dxPct, 8, 100 - origX);
+        cur.hPct = clamp(origH + dyPct, 8, 100 - origY);
+      } else if (mode === "resize-sw") {
+        const nextX = clamp(origX + dxPct, 0, origX + origW - 8);
+        cur.xPct = nextX;
+        cur.wPct = clamp(origW + (origX - nextX), 8, 100 - nextX);
+        cur.hPct = clamp(origH + dyPct, 8, 100 - origY);
+      } else if (mode === "resize-ne") {
+        const nextY = clamp(origY + dyPct, 0, origY + origH - 8);
+        cur.yPct = nextY;
+        cur.wPct = clamp(origW + dxPct, 8, 100 - origX);
+        cur.hPct = clamp(origH + (origY - nextY), 8, 100 - nextY);
+      } else {
+        const nextX = clamp(origX + dxPct, 0, origX + origW - 8);
+        const nextY = clamp(origY + dyPct, 0, origY + origH - 8);
+        cur.xPct = nextX;
+        cur.yPct = nextY;
+        cur.wPct = clamp(origW + (origX - nextX), 8, 100 - nextX);
+        cur.hPct = clamp(origH + (origY - nextY), 8, 100 - nextY);
+      }
+      next[idx] = cur;
+      onChange(next);
+    };
+    const onUp = () => {
+      dragRef.current = null;
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
+
+  const recrop = (idx: number) => {
+    if (!editable || !onChange) return;
+    const next = [...photos];
+    const cur = next[idx];
+    next[idx] = {
+      ...cur,
+      objectFit: cur.objectFit === "contain" ? "cover" : "contain",
+      objectPosition: "center center",
+    };
+    onChange(next);
+  };
+
+  const handlePaste = (e: React.ClipboardEvent) => {
+    if (!editable || !onFiles) return;
+    const files: File[] = [];
+    Array.from(e.clipboardData?.items || []).forEach((item) => {
+      if (item.kind === "file" && item.type.startsWith("image/")) {
+        const file = item.getAsFile();
+        if (file) files.push(file);
+      }
+    });
+    if (files.length > 0) {
+      e.preventDefault();
+      onFiles(files);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    if (!editable || !onFiles) return;
+    e.preventDefault();
+    e.stopPropagation();
+    onFiles(e.dataTransfer.files);
+  };
+
+  const renderHandle = (idx: number, mode: "resize-se" | "resize-sw" | "resize-ne" | "resize-nw", style: React.CSSProperties) => (
+    <div
+      onMouseDown={(e) => beginDrag(e, idx, mode)}
+      title="Drag to resize"
+      style={{
+        position: "absolute",
+        width: 14,
+        height: 14,
+        background: "#f59e0b",
+        cursor: mode === "resize-se" || mode === "resize-nw" ? "nwse-resize" : "nesw-resize",
+        border: "1px solid #fff",
+        ...style,
+      }}
+    />
+  );
+
+  const bringToFront = (idx: number) => {
+    if (!editable || !onChange) return;
+    const maxZ = photos.reduce((m, p) => Math.max(m, p.z ?? 0), 0);
+    const next = photos.map((p, i) => i === idx ? { ...p, z: maxZ + 1 } : p);
+    onChange(next);
+  };
+
+  // Legacy fallback layout when no photo has xPct/yPct yet.
+  const hasFreePositions = photos.some(p => typeof p.xPct === "number");
+
+  return (
+    <div
+      ref={frameRef}
+      className="flex-1 wcc-cell relative overflow-hidden"
+      style={{ minHeight: "85mm", background: "#fff" }}
+      onDragOver={(e) => { if (editable) e.preventDefault(); }}
+      onDrop={handleDrop}
+      onPaste={handlePaste}
+      tabIndex={editable ? 0 : undefined}
+    >
+      {photos.length === 0 && (
+        <div className="absolute inset-0 flex items-center justify-center text-slate-400 italic text-xs">
+          No proof photo attached yet.
+        </div>
+      )}
+      {hasFreePositions
+        ? photos.map((p, idx) => (
+            <div
+              key={idx}
+              onMouseDown={(e) => { bringToFront(idx); beginDrag(e, idx, "move"); }}
+              onDoubleClick={() => recrop(idx)}
+              className="absolute group"
+              style={{
+                left: `${p.xPct ?? 0}%`,
+                top: `${p.yPct ?? 0}%`,
+                width: `${p.wPct ?? 30}%`,
+                height: `${p.hPct ?? 30}%`,
+                zIndex: p.z ?? idx,
+                cursor: editable ? "move" : "default",
+                outline: editable ? "1px dashed rgba(0,0,0,0.4)" : "none",
+                background: "#fff",
+              }}
+            >
+              <img
+                src={p.path}
+                alt={p.caption || `proof ${idx + 1}`}
+                draggable={false}
+                className="w-full h-full"
+                style={{ objectFit: p.objectFit || "cover", objectPosition: p.objectPosition || "center", pointerEvents: "none" }}
+              />
+              {editable && (
+                <>
+                  {renderHandle(idx, "resize-nw", { left: 0, top: 0 })}
+                  {renderHandle(idx, "resize-ne", { right: 0, top: 0 })}
+                  {renderHandle(idx, "resize-sw", { left: 0, bottom: 0 })}
+                  {renderHandle(idx, "resize-se", { right: 0, bottom: 0 })}
+                  {p.caption && (
+                    <div style={{ position: "absolute", left: 0, bottom: 0, right: 0, fontSize: 9, padding: "2px 4px", background: "rgba(255,255,255,0.85)" }}>{p.caption}</div>
+                  )}
+                </>
+              )}
+              {!editable && p.caption && (
+                <div style={{ position: "absolute", left: 0, bottom: 0, right: 0, fontSize: 9, padding: "2px 4px", background: "rgba(255,255,255,0.85)" }}>{p.caption}</div>
+              )}
+            </div>
+          ))
+        : (
+          <div className={`grid gap-1 w-full h-full p-1 ${photos.length === 1 ? "grid-cols-1" : photos.length === 2 ? "grid-cols-2" : photos.length === 3 ? "grid-cols-3" : "grid-cols-2"}`}>
+            {photos.map((p, idx) => (
+              <img key={idx} src={p.path} alt={`Visual ${idx + 1}`} className="w-full h-full" style={{ objectFit: p.objectFit || "cover", objectPosition: p.objectPosition || "center" }} />
+            ))}
+          </div>
+        )}
+    </div>
+  );
+};
+
+function clamp(v: number, lo: number, hi: number) { return Math.min(hi, Math.max(lo, v)); }
+
+
+type WccDcEditorProps = {
+  [key: string]: any;
+  clients: any[];
+  brands: any[];
+  stores: any[];
+  estimates: any[];
+  challans: any[];
+  dcPhotos: any[];
+  selectedEstimateItems: any[];
+};
+
+const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
+  const {
+    clients,
+    brands,
+    stores,
+    wccChecklist,
+    setDcPhotos,
+    showDcModal,
+    selectedEstimate,
+    handleDcSubmit,
+    setShowDcModal,
+    dcFormat,
+    setDcFormat,
+    dcNumberVal,
+    setDcNumberVal,
+    dcWccStoreScope,
+    setDcWccStoreScope,
+    wccShortageNotes,
+    setWccShortageNotes,
+    setWccChecklist,
+    handleBatchGenerateWcc,
+    handleMultiPhotoUpload,
+    handleApplyCurrentPhotosToAllWccs,
+    handleApplyCurrentPhotosToSelectedWccs,
+    handleUseCurrentWccAsTemplateForRemainingStores,
+    handleBulkReplacePhoto,
+    dcPhotos,
+    dcRemarks,
+    setDcRemarks,
+    dcDeliveredBy,
+    dcReceivedBy,
+    wccAuthPerson,
+    selectedEstimateItems,
+    showDcPreviewModal,
+    selectedDcForPreview,
+    estimates,
+    challans,
+    setSelectedDcForPreview,
+    setShowDcPreviewModal,
+    editingDcId,
+    activeWccsForEditor = [],
+    navigateWccEditor,
+    printAllWccs,
+    wccPrintMode = "current",
+    setWccPrintMode,
+    token,
+    sellerProfile = {}
+  } = props;
+  const orderedSelectedStoreKeys = React.useMemo(
+    () => orderedStoreKeysFromItems(selectedEstimateItems || [], selectedEstimate?.storeGrouping as Record<string, any>),
+    [selectedEstimate, selectedEstimateItems],
+  );
+  const [bulkSelectedStoreIds, setBulkSelectedStoreIds] = React.useState<number[]>([]);
+  const selectedStoreIdSet = React.useMemo(() => new Set(bulkSelectedStoreIds), [bulkSelectedStoreIds]);
+  const selectableStores = React.useMemo(
+    () => orderedSelectedStoreKeys
+      .map((sid) => stores.find(s => s.id === Number(sid)))
+      .filter(Boolean),
+    [orderedSelectedStoreKeys, stores],
+  );
+  React.useEffect(() => {
+    setBulkSelectedStoreIds((prev) => prev.filter((id) => selectableStores.some((s: any) => s.id === id)));
+  }, [selectableStores]);
+
+  const toggleBulkStore = (storeId: number) => {
+    setBulkSelectedStoreIds((prev) => prev.includes(storeId) ? prev.filter(id => id !== storeId) : [...prev, storeId]);
+  };
+  const currentWccIndex = React.useMemo(
+    () => activeWccsForEditor.findIndex((dc: any) => dc.id === editingDcId),
+    [activeWccsForEditor, editingDcId],
+  );
+  const currentStoreTitle = React.useMemo(() => {
+    const current = currentWccIndex >= 0 ? activeWccsForEditor[currentWccIndex] : null;
+    if (!current) return "";
+    return current.metadata?.storeName || stores.find(s => s.id === Number(current.metadata?.storeId || 0))?.name || "";
+  }, [activeWccsForEditor, currentWccIndex, stores]);
+  return (
+    <>
+      {(() => {
+        // Dual-pane layout helper to render WCC/DC document perfectly
+        const renderA4ChallanCanvas = (
+          format: string,
+          dcNumber: string,
+          deliveryDate: string,
+          deliveredBy: string,
+          receivedBy: string,
+          remarks: string,
+          metadata: any,
+          est: Estimate,
+          items: any[]
+        ) => {
+          const targetClient = clients.find(c => c.id === est.clientId);
+          const targetBrand = brands.find(b => b.id === est.brandId);
+          // Honor an explicit metadata.storeId override (used by the WCC
+          // builder when the user picks a per-store scope for an ABFRL
+          // multi-store estimate), then fall back to the estimate's primary
+          // storeId. Same applies to read-only preview when the saved DC
+          // captured the storeId on its metadata.
+          const scopedStoreId = metadata?.storeId
+            ?? (metadata?.storeCode ? (stores.find(s => s.storeCode === metadata.storeCode)?.id) : undefined)
+            ?? est.storeId;
+          const targetStore = stores.find(s => s.id === scopedStoreId);
+          const photosList = metadata?.photos || (metadata?.visualBrief ? [{ path: metadata.visualBrief, widthPct: 100, objectFit: 'cover', objectPosition: 'center center', caption: 'Storefront proof' }] : []);
+          const authPersonVal = metadata?.authPerson || targetStore?.contactPerson || "";
+          const shortageNotesVal = metadata?.shortageNotes || "";
+          const storeCodeVal = metadata?.storeCode || targetStore?.storeCode || "LP-01";
+          const companyName = sellerProfile.name || "Sunrise Media";
+          const companyAddress = sellerProfile.address || "";
+          const companyEmail = sellerProfile.email || "";
+          const companyMobile = sellerProfile.mobile || "";
+          const companyGstin = sellerProfile.gstin || "";
+          const companyPan = sellerProfile.pan || "";
+          const logoSrc = companyAssetUrl(sellerProfile.logoPath, token);
+          const signatureStampSrc = companyAssetUrl(sellerProfile.signatureStampPath, token);
+          // Bottom checklist persisted on dc.metadata.checklist. Falls back to
+          // the live editor state when previewing an unsaved DC.
+          const checklist = (metadata?.checklist as { window?: boolean; inStore?: boolean; nso?: boolean; repairing?: boolean; materialTransfer?: boolean } | undefined) || wccChecklist;
+
+          const isWcc = isAblblFormat(format);
+
+          if (isWcc) {
+            // ==========================================
+            // AUTHENTIC ABLBL WORK COMPLETION CERTIFICATE (WCC)
+            //
+            // Layout is rebuilt to match reference-docs/wcc/AKOLA_challan.pdf
+            // (and the three Aundh / Black Vinyl variants). Structure:
+            //   1. Thick black outer border around the entire A4 page
+            //   2. Centered title row "WORK COMPLETION CERTIFICATE (Challan)"
+            //   3. Vendor block (left) + DC/PO/Date table (right)
+            //   4. "STORE NAME - X   Store code: Y" full-width row
+            //   5. "PROJECT / JOB TITEL – Z" full-width row  (TITEL is intentional)
+            //   6. "VISUAL BRIEF FOR EXECUTION (NON-COURIER)" header
+            //   7. Large picture area (single composite/montage) + "PICTURE" label
+            //   8. "DESCRIPTION" header + description input row
+            //   9. Red centered "Below section need to filled by Store"
+            //  10. Two-column store-only block:
+            //        LEFT  = IF SHORTAGE/DAMAGE + Store grid (CODE/NAME/CITY/STATE)
+            //        RIGHT = STORE SEAL AND SIGNATURE + NAME AND PHONE
+            //  11. Five-row checklist legend with interactive checkboxes:
+            //        WINDOW / IN STORE / NSO / REPAIRING SERVICES / MATERIAL TRANSFER
+            // ==========================================
+            const compositePhoto = photosList[0];
+            const descriptionLine = (items?.[0]?.itemName ? `${items[0].itemName}` : (est.title || "")).toUpperCase();
+            return (
+              <div id="dc-print-canvas" className="w-[210mm] min-h-[297mm] bg-white text-black p-[10mm] shadow-2xl relative font-sans text-[11px] flex flex-col print:shadow-none print:m-0 print:p-0" style={{ border: "3px solid black", boxSizing: "border-box" }}>
+                <style dangerouslySetInnerHTML={{ __html: `
+                  @media print {
+                    /* Kill the browser's default page margins so the WCC
+                       fills the entire A4 sheet edge to edge. */
+                    @page { size: A4 portrait; margin: 0; }
+                    html, body { width: 210mm; height: 297mm; margin: 0 !important; padding: 0 !important; background: #fff !important; }
+                    body * { visibility: hidden !important; }
+                    body { width: 210mm !important; height: auto !important; min-height: 0 !important; margin: 0 !important; padding: 0 !important; overflow: visible !important; background: #fff !important; }
+                    #root, .app-shell, .app-main, .app-main-scroll, .operations-print-root,
+                    .wcc-modal-backdrop, .wcc-modal-panel, .wcc-print-shell {
+                      display: contents !important;
+                    }
+                    .operations-print-root > :not(.wcc-modal-backdrop),
+                    .wcc-modal-panel > :not(.wcc-print-shell),
+                    .wcc-print-root > :not(#dc-print-canvas):not(.wcc-print-page) {
+                      display: none !important;
+                    }
+                    .wcc-print-root, .wcc-print-root * { visibility: visible !important; }
+                    .wcc-print-root {
+                      display: block !important;
+                      position: static !important;
+                      width: 210mm !important;
+                      height: auto !important;
+                      padding: 0 !important;
+                      margin: 0 !important;
+                      overflow: visible !important;
+                      background: #fff !important;
+                    }
+                    .wcc-print-page { page-break-after: always !important; break-after: page !important; width: 210mm !important; height: 297mm !important; overflow: hidden !important; }
+                    .wcc-print-page:last-child { page-break-after: auto !important; break-after: auto !important; }
+                    #dc-print-canvas {
+                      position: relative !important;
+                      left: auto !important; top: auto !important;
+                      width: 210mm !important;
+                      height: 297mm !important;
+                      box-sizing: border-box !important;
+                      background: white !important;
+                      color: black !important;
+                      padding: 6mm !important;
+                      box-shadow: none !important;
+                      margin: 0 !important;
+                      border: 3pt solid black !important;
+                      overflow: hidden !important;
+                    }
+                    /* Force background colours / borders to print */
+                    #dc-print-canvas, #dc-print-canvas * {
+                      -webkit-print-color-adjust: exact !important;
+                      print-color-adjust: exact !important;
+                    }
+                  }
+                  .wcc-cell { border: 1px solid black !important; padding: 4px 6px !important; vertical-align: top; }
+                  .wcc-title { letter-spacing: 1px; }
+                ` }} />
+
+                {/* 2. TITLE */}
+                <div className="text-center font-black text-[15px] py-2 wcc-title" style={{ borderBottom: "2px solid black" }}>
+                  WORK COMPLETION CERTIFICATE (Challan)
+                </div>
+
+                {/* 3. Vendor block (left) + DC/PO/Date table (right) — no
+                    empty rowSpan padding cell; rowSpan=3 keeps the vendor
+                    block flush against the meta column. */}
+                <table className="w-full border-collapse" style={{ borderLeft: "1px solid black", borderRight: "1px solid black" }}>
+                  <tbody>
+                    <tr>
+                      <td className="wcc-cell w-[55%]" rowSpan={3}>
+                        {logoSrc && (
+                          <img
+                            src={logoSrc}
+                            alt={companyName}
+                            className="h-8 w-auto max-w-[180px] object-contain mb-1"
+                          />
+                        )}
+                        <div><b>Vendor Name:</b> {companyName}</div>
+                        <div><b>Vendor Address &amp; GST:</b> {[companyAddress, companyGstin].filter(Boolean).join(" | ")}</div>
+                        <div><b>Mail ID:</b> {companyEmail}</div>
+                        <div><b>Contact No:</b> {companyMobile}</div>
+                      </td>
+                      <td className="wcc-cell w-[15%]"><b>DC No:</b></td>
+                      <td className="wcc-cell w-[30%] font-bold">{dcNumber}</td>
+                    </tr>
+                    <tr>
+                      <td className="wcc-cell"><b>PO No:</b></td>
+                      <td className="wcc-cell font-bold">{est.poNumber || ""}</td>
+                    </tr>
+                    <tr>
+                      <td className="wcc-cell"><b>Date:</b></td>
+                      <td className="wcc-cell font-bold">{new Date((est as any)?.poDate || deliveryDate || Date.now()).toLocaleDateString('en-GB')}</td>
+                    </tr>
+                  </tbody>
+                </table>
+
+                {/* 4. STORE NAME / Store code */}
+                <table className="w-full border-collapse">
+                  <tbody>
+                    <tr>
+                      <td className="wcc-cell">
+                        <b>STORE NAME -&nbsp;</b>{targetStore?.name || ""}
+                        <span className="ml-8"><b>- Store code :</b> {storeCodeVal}</span>
+                      </td>
+                    </tr>
+                    {/* 5. PROJECT / JOB TITEL — spelling preserved per reference */}
+                    <tr>
+                      <td className="wcc-cell"><b>PROJECT / JOB TITEL –</b> {(est.subject || est.title || "").toUpperCase()}</td>
+                    </tr>
+                  </tbody>
+                </table>
+
+                {/* 6. VISUAL BRIEF header */}
+                <div className="text-center font-black py-1 wcc-title" style={{ borderLeft: "1px solid black", borderRight: "1px solid black", borderBottom: "1px solid black" }}>
+                  VISUAL BRIEF FOR EXECUTION (NON-COURIER)
+                </div>
+
+                {/* 7. LARGE picture area — free-positioning canvas. Photos can be
+                    dragged anywhere inside this frame and resized via the
+                    bottom-right corner handle. On older WCCs without xPct/yPct,
+                    photos fall back to a tile grid. Interactive editing is
+                    disabled when this canvas is rendered inside the read-only
+                    preview modal (no editable callback). */}
+                <WccPictureArea
+                  photos={photosList}
+                  editable={!!metadata?.__editable}
+                  onChange={(next) => { if (metadata?.__editable) setDcPhotos(next); }}
+                  onFiles={handleMultiPhotoUpload}
+                />
+                <div className="text-center font-black py-0.5 wcc-title" style={{ borderLeft: "1px solid black", borderRight: "1px solid black", borderBottom: "1px solid black" }}>PICTURE</div>
+
+                {/* 8. DESCRIPTION header + line */}
+                <div className="text-center font-black py-0.5 wcc-title" style={{ borderLeft: "1px solid black", borderRight: "1px solid black", borderBottom: "1px solid black" }}>DESCRIPTION</div>
+                <table className="w-full border-collapse">
+                  <tbody>
+                    <tr><td className="wcc-cell" style={{ minHeight: "8mm" }}>{descriptionLine}</td></tr>
+                  </tbody>
+                </table>
+
+                {/* 9. Red "Below section…" banner */}
+                <div className="text-center font-bold py-1" style={{ color: "#c20000", borderLeft: "1px solid black", borderRight: "1px solid black", borderBottom: "1px solid black" }}>
+                  Below section need to filled by Store
+                </div>
+
+                {/* 10. Two-column store-only block */}
+                <table className="w-full border-collapse">
+                  <tbody>
+                    <tr>
+                      {/* LEFT: IF SHORTAGE/DAMAGE then small store grid */}
+                      <td className="wcc-cell w-1/2" style={{ verticalAlign: "top" }}>
+                        <div className="font-bold mb-1">IF SHORTAGE/DAMAGE, PLEASE DESCRIBE</div>
+                        <div className="whitespace-pre-wrap text-[10px]" style={{ minHeight: "8mm" }}>{shortageNotesVal}</div>
+                        <table className="w-full border-collapse mt-2 text-[10px]">
+                          <tbody>
+                            <tr><td className="wcc-cell font-bold w-1/2">STORE CODE</td><td className="wcc-cell">{storeCodeVal}</td></tr>
+                            <tr><td className="wcc-cell font-bold">STORE NAME</td><td className="wcc-cell">{targetStore?.name || ""}</td></tr>
+                            <tr><td className="wcc-cell font-bold">CITY</td><td className="wcc-cell">{targetStore?.city || ""}</td></tr>
+                            <tr><td className="wcc-cell font-bold">STATE</td><td className="wcc-cell">{targetStore?.state || ""}</td></tr>
+                          </tbody>
+                        </table>
+                      </td>
+                      {/* RIGHT: STORE SEAL AND SIGNATURE + NAME AND PHONE NUMBER */}
+                      <td className="wcc-cell w-1/2" style={{ verticalAlign: "top" }}>
+                        <div className="font-bold mb-1">STORE SEAL AND SIGNATURE</div>
+                        <div className="border border-dashed border-slate-400 h-[35mm] flex items-center justify-center text-slate-300 italic text-[10px]">
+                          Affix store seal &amp; signature here
+                        </div>
+                        <div className="font-bold mt-3">NAME AND PHONE NUMBER OF AUTHORISED</div>
+                        <div className="text-[10px] pt-1">{authPersonVal}</div>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+
+                {/* 11. Bottom checklist — 5 rows of interactive checkboxes.
+                    Print-stable: checkboxes are rendered as filled or empty
+                    bordered squares regardless of @media. */}
+                <table className="w-full border-collapse">
+                  <tbody>
+                    {[
+                      { key: "window",           label: "WINDOW :- Adaptation picture + Window category + Window size", checked: !!checklist.window },
+                      { key: "inStore",          label: "IN STORE :- Mannequin /Hanger / Easel/ POSM / VM hardware .", checked: !!checklist.inStore },
+                      { key: "nso",              label: "NSO :- Signage adaptation/ negative area / in store branding", checked: !!checklist.nso },
+                      { key: "repairing",        label: "REPAIRING SERVICES :- Before pictures + Description", checked: !!checklist.repairing },
+                      { key: "materialTransfer", label: "MATERIAL TRANSFER :- Picture/ description", checked: !!checklist.materialTransfer },
+                    ].map(row => (
+                      <tr key={row.key}>
+                        <td className="wcc-cell" style={{ width: "12mm", textAlign: "center" }}>
+                          <span style={{
+                            display: "inline-block",
+                            width: "5mm",
+                            height: "5mm",
+                            border: "1.5px solid black",
+                            background: row.checked ? "#16a34a" : "transparent",
+                            color: "white",
+                            lineHeight: "5mm",
+                            textAlign: "center",
+                            fontWeight: 900,
+                            fontSize: "9px",
+                          }}>{row.checked ? "✓" : ""}</span>
+                        </td>
+                        <td className="wcc-cell"><b>{row.label}</b></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            );
+          } else {
+            // ==========================================
+            // HIGH-FIDELITY STANDARD SUNRISE DELIVERY CHALLAN
+            // ==========================================
+            return (
+              <div id="dc-print-canvas" className="w-[210mm] min-h-[297mm] bg-white text-slate-900 p-[15mm] border border-slate-800 shadow-2xl relative font-sans text-xs flex flex-col justify-between print:border-none print:shadow-none print:m-0 print:p-0" style={{ boxSizing: "border-box" }}>
+                <style dangerouslySetInnerHTML={{ __html: `
+                  @media print {
+                    @page { size: A4 portrait; margin: 0; }
+                    html, body { width: 210mm; height: 297mm; margin: 0 !important; padding: 0 !important; background: #fff !important; }
+                    body * { visibility: hidden !important; }
+                    body { width: 210mm !important; height: auto !important; min-height: 0 !important; margin: 0 !important; padding: 0 !important; overflow: visible !important; background: #fff !important; }
+                    #root, .app-shell, .app-main, .app-main-scroll, .operations-print-root,
+                    .wcc-modal-backdrop, .wcc-modal-panel, .wcc-print-shell {
+                      display: contents !important;
+                    }
+                    .operations-print-root > :not(.wcc-modal-backdrop),
+                    .wcc-modal-panel > :not(.wcc-print-shell),
+                    .wcc-print-root > :not(#dc-print-canvas):not(.wcc-print-page) {
+                      display: none !important;
+                    }
+                    .wcc-print-root, .wcc-print-root * { visibility: visible !important; }
+                    .wcc-print-root {
+                      display: block !important;
+                      position: static !important;
+                      width: 210mm !important;
+                      height: auto !important;
+                      padding: 0 !important;
+                      margin: 0 !important;
+                      overflow: visible !important;
+                      background: #fff !important;
+                    }
+                    .wcc-print-page { page-break-after: always !important; break-after: page !important; width: 210mm !important; height: 297mm !important; overflow: hidden !important; }
+                    .wcc-print-page:last-child { page-break-after: auto !important; break-after: auto !important; }
+                    #dc-print-canvas {
+                      position: relative !important;
+                      left: auto !important;
+                      top: auto !important;
+                      width: 210mm !important;
+                      height: 297mm !important;
+                      box-sizing: border-box !important;
+                      background: white !important;
+                      color: black !important;
+                      padding: 10mm !important;
+                      box-shadow: none !important;
+                      margin: 0 !important;
+                      overflow: hidden !important;
+                    }
+                    #dc-print-canvas, #dc-print-canvas * {
+                      -webkit-print-color-adjust: exact !important;
+                      print-color-adjust: exact !important;
+                    }
+                  }
+                  .dc-table th, .dc-table td {
+                    border: 1px solid #1e293b !important;
+                    padding: 5px 6px !important;
+                  }
+                `}} />
+
+                <div className="space-y-5">
+                  {/* Header */}
+                  <div className="flex justify-between items-start border-b-2 border-slate-800 pb-3">
+                    <div className="text-left">
+                      {logoSrc ? (
+                        <img
+                          src={logoSrc}
+                          alt={companyName}
+                          className="h-11 w-auto max-w-[220px] object-contain mb-1"
+                        />
+                      ) : (
+                        <h2 className="text-xl font-black text-slate-900 tracking-tight">{companyName.toUpperCase()}</h2>
+                      )}
+                      <p className="text-[8px] text-slate-500 font-mono mt-0.5">{[companyAddress, companyEmail, companyMobile].filter(Boolean).join(" | ")}</p>
+                      <div className="text-[8px] text-slate-500 font-mono leading-tight max-w-[115mm]">
+                        <div className="grid grid-cols-[12mm_1fr] gap-x-1">
+                          <span className="font-bold">GSTIN:</span>
+                          <span className="break-all">{companyGstin || "N/A"}</span>
+                        </div>
+                        <div className="grid grid-cols-[12mm_1fr] gap-x-1">
+                          <span className="font-bold">PAN:</span>
+                          <span className="break-all">{companyPan || "N/A"}</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <span className="text-[10px] font-black border border-slate-800 py-0.5 px-2 rounded uppercase tracking-wider font-sans inline-block bg-slate-50">
+                        DELIVERY CHALLAN
+                      </span>
+                      <p className="text-xs font-mono font-bold text-slate-800 mt-1.5">No: {dcNumber}</p>
+                      <p className="text-[8px] text-slate-500 font-mono mt-0.5">Date: {new Date((est as any)?.poDate || deliveryDate || Date.now()).toLocaleDateString('en-GB')}</p>
+                    </div>
+                  </div>
+
+                  {/* Reference Grid */}
+                  <table className="w-full dc-table border-collapse border border-slate-800 text-[9px]">
+                    <tbody>
+                      <tr className="bg-slate-50 font-semibold">
+                        <td className="w-1/4">Estimate Ref:</td>
+                        <td className="w-1/4 font-mono font-bold">{est.estimateNumber}</td>
+                        <td className="w-1/4">PO Ref / Date:</td>
+                        <td className="w-1/4 font-mono font-bold">{est.poNumber ? `${est.poNumber} (${est.poDate ? new Date(est.poDate).toLocaleDateString('en-GB') : ""})` : "N/A"}</td>
+                      </tr>
+                      <tr>
+                        <td>Delivered Via:</td>
+                        <td>{deliveredBy || "Sunrise vehicle"}</td>
+                        <td>Client Profile:</td>
+                        <td className="uppercase">{format}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+
+                  {/* Addresses */}
+                  <div className="grid grid-cols-2 gap-4 text-[9px]">
+                    <div className="border border-slate-800 p-2.5 space-y-1 bg-white">
+                      <span className="text-[7.5px] uppercase block font-black text-slate-400 tracking-wider">Client Billing Details</span>
+                      <p className="font-extrabold text-slate-800 text-[10px]">{est.billingLegalNameSnapshot || est.billingTo || targetClient?.name}</p>
+                      <p className="text-slate-650 leading-relaxed whitespace-pre-wrap">{est.billingAddressSnapshot || est.billingTo || targetClient?.address || "N/A"}</p>
+                      <div className="pt-1.5 border-t border-slate-200 mt-1.5 font-mono text-[8px] text-slate-500 space-y-0.5">
+                        <div><strong>GSTIN:</strong> {est.billingGstinSnapshot || est.gstin || targetClient?.gstNumber || "N/A"}</div>
+                        <div><strong>PAN:</strong> {est.pan || targetClient?.pan || "N/A"}</div>
+                        <div><strong>State / Code:</strong> {est.billingStateSnapshot || "N/A"} ({est.billingStateCodeSnapshot || est.stateCode || "N/A"})</div>
+                      </div>
+                    </div>
+                    <div className="border border-slate-800 p-2.5 space-y-1 bg-white">
+                      <span className="text-[7.5px] uppercase block font-black text-slate-400 tracking-wider">Delivery Site / Consignee</span>
+                      <p className="font-extrabold text-slate-800 text-[10px]">{targetStore?.name || "Default Site"} {storeCodeVal ? `(${storeCodeVal})` : ""}</p>
+                      <p className="text-slate-650 leading-relaxed whitespace-pre-wrap">{targetStore?.address || "N/A"}</p>
+                      <div className="pt-1.5 border-t border-slate-200 mt-1.5 font-mono text-[8px] text-slate-500 space-y-0.5">
+                        <div><strong>City / Zone:</strong> {targetStore?.city || "N/A"} / {targetStore?.regionZone || "N/A"}</div>
+                        <div><strong>State / Code:</strong> {targetStore?.state || "N/A"} ({targetStore?.stateCode || "N/A"})</div>
+                        <div><strong>Contact Name:</strong> {receivedBy || targetStore?.contactPerson || "Store Manager"}</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Items list */}
+                  <table className="w-full dc-table border-collapse border border-slate-800 text-[9px]">
+                    <thead className="bg-slate-50 font-bold text-center">
+                      <tr>
+                        <th className="w-8">Sl.</th>
+                        <th>Element / Product Details</th>
+                        <th className="w-24">Specs (W x H)</th>
+                        <th className="w-16">Quantity</th>
+                        <th className="w-16">Unit</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {items.map((item, idx) => (
+                        <tr key={idx}>
+                          <td className="text-center font-mono">{idx + 1}</td>
+                          <td>
+                            <p className="font-bold text-slate-800">{item.itemName}</p>
+                            {item.description && <p className="text-[8px] text-slate-500 font-sans leading-tight mt-0.5">{item.description}</p>}
+                          </td>
+                          <td className="text-center font-mono">
+                            {item.width && item.height ? `${item.width}" × ${item.height}"` : "-"}
+                          </td>
+                          <td className="text-center font-mono font-bold">{item.quantity}</td>
+                          <td className="text-center uppercase">{item.unit || "sqft"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+
+                  {/* Photos proof layout (for simple DC showing thumbnails) */}
+                  {photosList.length > 0 && (
+                    <div className="space-y-2 border border-slate-850 p-2.5 rounded bg-slate-50/20">
+                      <span className="text-[8px] uppercase block font-black text-slate-450 tracking-wider">Installation Proof Attachments</span>
+                      <div className="grid grid-cols-2 gap-3">
+                        {photosList.map((photo: any, index: number) => (
+                          <div key={index} className="border border-slate-200 rounded overflow-hidden bg-white p-1 flex gap-2">
+                            <img
+                              src={photo.path}
+                              alt={`Proof ${index + 1}`}
+                              className="w-12 h-12 object-cover rounded border border-slate-100 flex-shrink-0"
+                            />
+                            <div className="text-[8px] space-y-0.5 truncate flex-1 justify-center flex flex-col">
+                              <div className="font-bold text-slate-800 truncate">Proof Image #{index + 1}</div>
+                              {photo.caption && <div className="text-slate-500 italic truncate">{photo.caption}</div>}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Remarks & terms */}
+                  <div className="grid grid-cols-2 gap-4 text-[9px] pt-1">
+                    <div className="space-y-1">
+                      <span className="font-bold block uppercase text-slate-500 text-[8px]">Terms and Declarations:</span>
+                      <ol className="list-decimal pl-3 space-y-0.5 text-slate-500 text-[8px] leading-tight">
+                        <li>Materials received in good and satisfactory condition.</li>
+                        <li>Mountings are subject to client verification on site.</li>
+                        <li>This is a commercial dispatch document, not a tax invoice.</li>
+                      </ol>
+                    </div>
+                    {remarks && (
+                      <div className="border-l border-slate-300 pl-3 italic text-slate-600 self-center">
+                        <strong>Dispatch Notes:</strong> {remarks}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Footer / Signatories */}
+                <div className="grid grid-cols-2 gap-12 pt-8 border-t border-slate-800 mt-8 text-[9px] font-sans text-slate-600">
+                  <div className="space-y-10">
+                    <p className="font-bold text-left">Received above goods in perfect condition</p>
+                    <div className="pt-1.5 border-t border-dashed border-slate-450 font-bold text-slate-800 text-left">
+                      Customer Seal & Signature (Date: ____________)
+                    </div>
+                  </div>
+                  <div className="space-y-10 text-right">
+                    <p className="font-bold">For {companyName.toUpperCase()}</p>
+                    <div className="h-[22mm] flex items-center justify-end">
+                      {signatureStampSrc && (
+                        <img
+                          src={signatureStampSrc}
+                          alt="Signature and stamp"
+                          className="max-h-[20mm] max-w-[48mm] object-contain"
+                        />
+                      )}
+                    </div>
+                    <div className="pt-1.5 border-t border-dashed border-slate-450 font-bold text-slate-800">
+                      Authorized Signatory (Sign & Stamp)
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          }
+        };
+
+        return (
+          <>
+            {/* 1. CREATION / EDITING CANVAS MODAL */}
+            {showDcModal && selectedEstimate && (
+              <div className="wcc-modal-backdrop fixed inset-0 z-[150] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 print:p-0" onClick={() => setShowDcModal(false)}>
+                <div className="wcc-modal-panel bg-slate-100 w-full max-w-7xl h-[95vh] rounded-2xl shadow-2xl border border-slate-200 flex flex-col md:flex-row overflow-hidden print:w-screen print:h-screen print:rounded-none print:border-none print:shadow-none" onClick={(event) => event.stopPropagation()}>
+                  
+                  {/* Left Controls Panel */}
+                  <form onSubmit={handleDcSubmit} className="w-full md:w-1/3 bg-white p-6 border-r border-slate-200 overflow-y-auto space-y-6 flex flex-col justify-between print:hidden">
+                    <div className="space-y-6">
+                      <div className="border-b border-slate-200 pb-3 flex justify-between items-start">
+                        <div>
+                          <span className="text-[10px] font-black text-orange-600 uppercase tracking-widest block">A4 Document Canvas & Editor</span>
+                          <h4 className="font-extrabold text-slate-800 text-lg">WCC / Dispatch Builder</h4>
+                          {activeWccsForEditor.length > 1 && currentWccIndex >= 0 && (
+                            <div className="mt-2 space-y-1">
+                              <div className="text-[11px] font-bold text-slate-600">
+                                Store {currentWccIndex + 1} of {activeWccsForEditor.length}
+                                {currentStoreTitle ? <span className="block text-slate-900">{currentStoreTitle}</span> : null}
+                              </div>
+                              <div className="flex gap-1">
+                                <button
+                                  type="button"
+                                  disabled={currentWccIndex <= 0}
+                                  onClick={() => navigateWccEditor && navigateWccEditor(activeWccsForEditor[currentWccIndex - 1].id)}
+                                  className="px-2 py-1 text-[10px] font-bold rounded border border-slate-200 disabled:opacity-40 hover:bg-slate-50"
+                                >
+                                  Previous Store
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={currentWccIndex >= activeWccsForEditor.length - 1}
+                                  onClick={() => navigateWccEditor && navigateWccEditor(activeWccsForEditor[currentWccIndex + 1].id)}
+                                  className="px-2 py-1 text-[10px] font-bold rounded border border-slate-200 disabled:opacity-40 hover:bg-slate-50"
+                                >
+                                  Next Store
+                                </button>
+                              </div>
+                              <select
+                                value={editingDcId || ""}
+                                onChange={(e) => navigateWccEditor && navigateWccEditor(Number(e.target.value))}
+                                className="w-full px-2 py-1 bg-white border border-slate-200 rounded text-[11px] font-bold"
+                              >
+                                {activeWccsForEditor.map((dc: any, idx: number) => (
+                                  <option key={dc.id} value={dc.id}>
+                                    Store {idx + 1}: {dc.metadata?.storeCode ? `${dc.metadata.storeCode} - ` : ""}{dc.metadata?.storeName || `WCC ${dc.dcNumber}`}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          )}
+                        </div>
+                        <button type="button" onClick={() => setShowDcModal(false)} className="text-slate-400 hover:text-slate-600 p-1.5 hover:bg-slate-100 rounded-full transition">
+                          <X className="w-5 h-5" />
+                        </button>
+                      </div>
+
+                      <div className="space-y-4 text-xs">
+                        {/* Format selector override */}
+                        <div>
+                          <label className="block font-bold text-slate-500 uppercase mb-1">Document Format Layout</label>
+                          <select
+                            value={dcFormat}
+                            onChange={(e) => setDcFormat(e.target.value)}
+                            className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-slate-800 font-bold focus:outline-none focus:border-orange-500"
+                          >
+                            <option value="normal">Standard Sunrise Delivery Challan (DC)</option>
+                            <option value="ABFRL">ABLBL Store Work Completion Certificate (WCC)</option>
+                          </select>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-4">
+                          <div>
+                            <label className="block font-bold text-slate-500 uppercase mb-1">Document Number</label>
+                            <input
+                              type="text"
+                              required
+                              value={dcNumberVal}
+                              onChange={(e) => setDcNumberVal(e.target.value)}
+                              className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-slate-800 focus:outline-none focus:border-orange-500 font-bold font-mono"
+                            />
+                          </div>
+                          {dcFormat === "ABFRL" && (() => {
+                            // Per-store scope picker for ABFRL multi-store estimates.
+                            const sids = orderedSelectedStoreKeys;
+                            if (sids.length === 0) return null;
+                            return (
+                              <div>
+                                <label className="block font-bold text-slate-500 uppercase mb-1">Store scope</label>
+                                <select
+                                  value={dcWccStoreScope}
+                                  onChange={(e) => setDcWccStoreScope(e.target.value)}
+                                  className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-slate-800 focus:outline-none focus:border-purple-500"
+                                >
+                                  <option value="">(default: estimate primary store)</option>
+                                  {sids.map(sid => {
+                                    const tStore = stores.find(s => s.id === Number(sid));
+                                    return <option key={sid} value={sid}>{tStore?.storeCode ? `${tStore.storeCode} — ` : ""}{tStore?.name || `Store ${sid}`}</option>;
+                                  })}
+                                </select>
+                              </div>
+                            );
+                          })()}
+                        </div>
+
+                        {/* Format-specific configurations */}
+                        {dcFormat === "ABFRL" ? (
+                          <div className="space-y-4 bg-purple-50/30 p-4 rounded-xl border border-purple-100">
+                            <h5 className="font-bold text-purple-800 text-xs uppercase tracking-wider">WCC Audit Parameters</h5>
+                            {/* City / state / contact auto-fill from the selected store — no manual Store Manager field. */}
+                            {(() => {
+                              const sid = dcWccStoreScope ? Number(dcWccStoreScope) : selectedEstimate.storeId;
+                              const tStore = stores.find(s => s.id === sid);
+                              if (!tStore) return null;
+                              return (
+                                <div className="bg-white p-3 rounded-lg border border-purple-100 text-[11px] text-slate-600 space-y-0.5">
+                                  <div><span className="font-bold">Store:</span> {tStore.name} {tStore.storeCode ? `(${tStore.storeCode})` : ""}</div>
+                                  <div><span className="font-bold">City / State:</span> {tStore.city || "—"} / {tStore.state || "—"}</div>
+                                  {tStore.contactPerson && <div><span className="font-bold">Auto-fill auth contact:</span> {tStore.contactPerson}{tStore.contactPhone ? ` (${tStore.contactPhone})` : ""}</div>}
+                                </div>
+                              );
+                            })()}
+                            <div>
+                              <label className="block font-bold text-slate-500 uppercase mb-1">Shortage &amp; mounting discrepancies notes</label>
+                              <textarea
+                                rows={2}
+                                value={wccShortageNotes}
+                                onChange={(e) => setWccShortageNotes(e.target.value)}
+                                className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-slate-800 focus:outline-none resize-none font-sans"
+                                placeholder="Mention minor shortage/damage. Write 'None' if perfectly mounted."
+                              />
+                            </div>
+                            {/* Bottom-of-WCC checklist: matches the 5 rows in
+                                reference-docs/wcc/*.pdf (Window, In-Store, NSO,
+                                Repairing Services, Material Transfer). Persists
+                                onto dc.metadata.checklist. */}
+                            <div>
+                              <label className="block font-bold text-slate-500 uppercase mb-1">Job category checklist</label>
+                              <div className="space-y-1.5 text-[11px]">
+                                {([
+                                  { key: "window",           label: "WINDOW — Adaptation picture + Window category + Window size" },
+                                  { key: "inStore",          label: "IN STORE — Mannequin / Hanger / Easel / POSM / VM hardware" },
+                                  { key: "nso",              label: "NSO — Signage adaptation / negative area / in store branding" },
+                                  { key: "repairing",        label: "REPAIRING SERVICES — Before pictures + Description" },
+                                  { key: "materialTransfer", label: "MATERIAL TRANSFER — Picture / description" },
+                                ] as const).map(row => (
+                                  <label key={row.key} className="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                      type="checkbox"
+                                      checked={!!wccChecklist[row.key]}
+                                      onChange={(e) => setWccChecklist({ ...wccChecklist, [row.key]: e.target.checked })}
+                                      className="accent-purple-600"
+                                    />
+                                    <span className="text-slate-700">{row.label}</span>
+                                  </label>
+                                ))}
+                              </div>
+                            </div>
+                            {/* Batch action for multi-store ABFRL estimates. */}
+                            {(() => {
+                              const sids = orderedSelectedStoreKeys;
+                              if (sids.length < 2) return null;
+                              return (
+                                <div className="space-y-2 border-t border-purple-100 pt-3">
+                                  <button
+                                    type="button"
+                                    onClick={() => { handleBatchGenerateWcc(); setShowDcModal(false); }}
+                                    className="w-full py-2 px-3 bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold rounded-lg transition shadow-sm"
+                                  >
+                                    Generate {sids.length} WCC drafts (one per store)
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={handleUseCurrentWccAsTemplateForRemainingStores}
+                                    className="w-full py-2 px-3 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-lg transition shadow-sm flex items-center justify-center gap-1.5"
+                                  >
+                                    <Copy className="w-3.5 h-3.5" />
+                                    Use Current WCC As Template For Remaining Stores
+                                  </button>
+                                  <div className="grid grid-cols-2 gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={handleApplyCurrentPhotosToAllWccs}
+                                      disabled={dcPhotos.length === 0}
+                                      className="py-2 px-2 bg-white hover:bg-purple-50 disabled:opacity-45 border border-purple-200 text-purple-800 text-[10px] font-bold rounded-lg transition"
+                                    >
+                                      Apply Current Photos To All WCCs
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleApplyCurrentPhotosToSelectedWccs(bulkSelectedStoreIds)}
+                                      disabled={dcPhotos.length === 0 || bulkSelectedStoreIds.length === 0}
+                                      className="py-2 px-2 bg-white hover:bg-purple-50 disabled:opacity-45 border border-purple-200 text-purple-800 text-[10px] font-bold rounded-lg transition"
+                                    >
+                                      Apply To Selected Stores
+                                    </button>
+                                  </div>
+                                  <div className="space-y-1">
+                                    <div className="flex items-center justify-between gap-2">
+                                      <span className="text-[10px] font-bold uppercase text-slate-500">Selected Stores</span>
+                                      <button
+                                        type="button"
+                                        onClick={() => setBulkSelectedStoreIds(selectableStores.map((s: any) => s.id))}
+                                        className="text-[10px] font-bold text-purple-700 hover:text-purple-900"
+                                      >
+                                        Select all
+                                      </button>
+                                    </div>
+                                    <div className="max-h-24 overflow-y-auto rounded-lg border border-purple-100 bg-white p-2 space-y-1">
+                                      {selectableStores.map((store: any) => (
+                                        <label key={store.id} className="flex items-center gap-2 text-[10px] text-slate-700 cursor-pointer">
+                                          <input
+                                            type="checkbox"
+                                            checked={selectedStoreIdSet.has(store.id)}
+                                            onChange={() => toggleBulkStore(store.id)}
+                                            className="accent-purple-600"
+                                          />
+                                          <span className="truncate">{store.storeCode ? `${store.storeCode} - ` : ""}{store.name}</span>
+                                        </label>
+                                      ))}
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })()}
+                          </div>
+                        ) : null}
+
+                        {/* Photo Upload Board — multi-file, drag-drop, paste, drag/resize */}
+                        <div
+                          className="space-y-2 bg-slate-50 p-3 rounded-lg border border-dashed border-slate-300"
+                          onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                          onDrop={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            handleMultiPhotoUpload(e.dataTransfer.files);
+                          }}
+                          onPaste={(e) => {
+                            const items = e.clipboardData?.items || [];
+                            const blobs: File[] = [];
+                            for (let i = 0; i < items.length; i++) {
+                              const it = items[i];
+                              if (it.kind === "file" && it.type.startsWith("image/")) {
+                                const f = it.getAsFile();
+                                if (f) blobs.push(f);
+                              }
+                            }
+                            if (blobs.length > 0) handleMultiPhotoUpload(blobs);
+                          }}
+                          tabIndex={0}
+                        >
+                          <div className="flex justify-between items-center">
+                            <h5 className="font-bold text-slate-700 text-xs uppercase tracking-wider">Proof Photos</h5>
+                            <label className="flex items-center gap-1 py-1 px-2 bg-orange-600 hover:bg-orange-500 text-white text-[10px] font-bold rounded cursor-pointer transition">
+                              <Plus className="w-3 h-3" />
+                              Upload
+                              <input
+                                type="file"
+                                accept="image/*"
+                                multiple
+                                className="hidden"
+                                onChange={(e) => { handleMultiPhotoUpload(e.target.files); e.target.value = ""; }}
+                              />
+                            </label>
+                          </div>
+                          <p className="text-[9px] text-slate-400 leading-snug">
+                            Drag-drop multiple JPG / PNG files here, paste from clipboard (Cmd/Ctrl+V), or click <b>Upload</b>. Drag images inside the picture frame on the right to position them; grab the corner handle to resize.
+                          </p>
+                          {dcPhotos.length === 0 ? (
+                            <p className="text-[10px] text-slate-400 italic">No proofs yet.</p>
+                          ) : (
+                            <div className="space-y-1.5 max-h-[260px] overflow-y-auto pr-1">
+                              {dcPhotos.map((photo, pIdx) => (
+                                <div key={pIdx} className="bg-white p-2 rounded border border-slate-200 flex items-center gap-2 group">
+                                  <img src={photo.path} alt="" className="w-9 h-9 object-cover rounded border border-slate-200 flex-shrink-0" />
+                                  <input
+                                    type="text"
+                                    placeholder="Caption…"
+                                    value={photo.caption}
+                                    onChange={(e) => {
+                                      const updated = [...dcPhotos];
+                                      updated[pIdx] = { ...updated[pIdx], caption: e.target.value };
+                                      setDcPhotos(updated);
+                                    }}
+                                    className="flex-1 px-1.5 py-1 bg-slate-50 border border-slate-200 rounded text-[10px] focus:outline-none focus:bg-white min-w-0"
+                                  />
+                                  <label
+                                    className="text-slate-400 hover:text-orange-600 p-1 rounded hover:bg-slate-50 cursor-pointer"
+                                    title={`Replace Photo #${pIdx + 1}`}
+                                  >
+                                    <ImagePlus className="w-3.5 h-3.5" />
+                                    <input
+                                      type="file"
+                                      accept="image/*"
+                                      className="hidden"
+                                      onChange={async (e) => {
+                                        const file = e.target.files?.[0];
+                                        if (file) await handleBulkReplacePhoto(pIdx, file, bulkSelectedStoreIds);
+                                        e.target.value = "";
+                                      }}
+                                    />
+                                  </label>
+                                  <button
+                                    type="button"
+                                    onClick={() => setDcPhotos(dcPhotos.filter((_, idx) => idx !== pIdx))}
+                                    className="text-slate-400 hover:text-red-500 p-1 rounded hover:bg-slate-50"
+                                    title="Remove"
+                                  >
+                                    <Trash className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
+                        <div>
+                          <label className="block font-bold text-slate-500 uppercase mb-1">Dispatch Remarks</label>
+                          <textarea
+                            rows={2}
+                            value={dcRemarks}
+                            onChange={(e) => setDcRemarks(e.target.value)}
+                            className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-slate-800 focus:outline-none resize-none font-sans"
+                            placeholder="General remarks about delivery status..."
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex gap-2 pt-4 border-t border-slate-100 bg-white print:hidden">
+                      <button
+                        type="button"
+                        onClick={() => { setWccPrintMode && setWccPrintMode("current"); window.print(); }}
+                        className="flex-1 h-9 px-4 border border-slate-200 bg-white hover:bg-slate-50 hover:border-slate-300 text-slate-700 text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2"
+                      >
+                        <Printer className="w-4 h-4 text-slate-400" />
+                        Print Current Store
+                      </button>
+                      {activeWccsForEditor.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={printAllWccs}
+                          className="flex-1 h-9 px-4 border border-slate-200 bg-white hover:bg-slate-50 hover:border-slate-300 text-slate-700 text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2"
+                        >
+                          <Printer className="w-4 h-4 text-slate-400" />
+                          Print All WCCs
+                        </button>
+                      )}
+                      <button
+                        type="submit"
+                        className="flex-1 h-9 px-4 bg-orange-600 hover:bg-orange-700 active:bg-orange-800 text-white text-sm font-semibold rounded-lg transition-all shadow-sm flex items-center justify-center gap-2"
+                      >
+                        Save &amp; Close
+                      </button>
+                    </div>
+                  </form>
+
+                  {/* Right Live Canvas (A4 Page View) */}
+                  <div className="wcc-print-shell flex-1 bg-white p-8 overflow-y-auto flex items-start justify-center print:bg-white print:p-0 print:overflow-visible" data-print-document="true">
+                    <div className="wcc-print-root">
+                    {wccPrintMode === "all" && activeWccsForEditor.length > 0
+                      ? activeWccsForEditor.map((dc: any) => {
+                          const linkedEst = estimates.find((e: any) => e.id === dc.estimateId) || selectedEstimate;
+                          if (!linkedEst) return null;
+                          const dcItemsList = Array.isArray(dc.items) ? dc.items : [];
+                          return (
+                            <div key={dc.id} className="wcc-print-page">
+                              {renderA4ChallanCanvas(
+                                dc.clientFormat,
+                                dc.dcNumber,
+                                dc.deliveryDate,
+                                dc.deliveredBy || "",
+                                dc.receivedBy || "",
+                                dc.remarks || "",
+                                dc.metadata,
+                                linkedEst,
+                                dcItemsList
+                              )}
+                            </div>
+                          );
+                        })
+                      : renderA4ChallanCanvas(
+                          dcFormat,
+                          dcNumberVal,
+                          new Date().toISOString(),
+                          dcDeliveredBy,
+                          dcReceivedBy,
+                          dcRemarks,
+                          {
+                            photos: dcPhotos,
+                            authPerson: wccAuthPerson,
+                            shortageNotes: wccShortageNotes,
+                            checklist: wccChecklist,
+                            storeId: dcWccStoreScope ? Number(dcWccStoreScope) : undefined,
+                            __editable: true,
+                          },
+                          selectedEstimate,
+                          selectedEstimateItems
+                        )}
+                    </div>
+                  </div>
+
+                </div>
+              </div>
+            )}
+
+            {/* 2. READ-ONLY PREVIEW & PRINT MODAL FOR EXISTING DC */}
+            {showDcPreviewModal && selectedDcForPreview && (() => {
+              const linkedEst = estimates.find(e => e.id === selectedDcForPreview.estimateId);
+              if (!linkedEst) return null;
+
+              const dcItemsList = Array.isArray(selectedDcForPreview.items)
+                ? selectedDcForPreview.items
+                : [];
+
+              // For multi-store ABFRL estimates, group all WCCs that share the
+              // same estimate id so the user can step prev/next through them.
+              const siblingDcs = challans
+                .filter(c => c.estimateId === selectedDcForPreview.estimateId)
+                .filter(c => c.status !== "deleted" && !c.metadata?.deleted)
+                .sort((a, b) => (a.id || 0) - (b.id || 0));
+              const curIdx = siblingDcs.findIndex(c => c.id === selectedDcForPreview.id);
+              const prevDc = curIdx > 0 ? siblingDcs[curIdx - 1] : null;
+              const nextDc = curIdx >= 0 && curIdx < siblingDcs.length - 1 ? siblingDcs[curIdx + 1] : null;
+
+              return (
+                <div className="wcc-modal-backdrop fixed inset-0 z-[150] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 print:p-0" onClick={() => { setShowDcPreviewModal(false); setSelectedDcForPreview(null); }}>
+                  <div className="wcc-modal-panel bg-slate-100 w-full max-w-5xl h-[95vh] rounded-2xl shadow-2xl border border-slate-200 flex flex-col overflow-hidden print:w-screen print:h-screen print:rounded-none print:border-none print:shadow-none" onClick={(event) => event.stopPropagation()}>
+
+                    {/* Header bar (Not printed) */}
+                    <div className="bg-white px-6 py-4 border-b border-slate-200 flex justify-between items-center print:hidden shadow-sm">
+                      <div className="flex items-center gap-3">
+                        <div>
+                          <h3 className="font-black text-slate-800 text-lg">Document View / Export Canvas</h3>
+                          <p className="text-xs text-slate-400">Previewing <span className="font-bold text-orange-600">{selectedDcForPreview.dcNumber}</span>{siblingDcs.length > 1 ? ` — ${curIdx + 1} of ${siblingDcs.length} stores` : ""}</p>
+                        </div>
+                        {siblingDcs.length > 1 && (
+                          <div className="flex items-center gap-1 ml-3">
+                            <button
+                              onClick={() => prevDc && setSelectedDcForPreview(prevDc)}
+                              disabled={!prevDc}
+                              className="inline-flex items-center gap-1 py-1.5 px-3 bg-slate-100 hover:bg-slate-200 disabled:opacity-40 text-slate-700 text-xs font-bold rounded-lg transition"
+                            >
+                              ← Prev store
+                            </button>
+                            <button
+                              onClick={() => nextDc && setSelectedDcForPreview(nextDc)}
+                              disabled={!nextDc}
+                              className="inline-flex items-center gap-1 py-1.5 px-3 bg-slate-100 hover:bg-slate-200 disabled:opacity-40 text-slate-700 text-xs font-bold rounded-lg transition"
+                            >
+                              Next store →
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => { setWccPrintMode && setWccPrintMode("current"); window.print(); }}
+                          className="inline-flex items-center gap-1.5 py-2 px-4 bg-orange-600 hover:bg-orange-500 text-white text-xs font-bold rounded-lg transition shadow-md"
+                        >
+                          <Printer className="w-4 h-4" />
+                          Print Current Store
+                        </button>
+                        {siblingDcs.length > 1 && (
+                          <button
+                            onClick={() => { setWccPrintMode && setWccPrintMode("all"); window.setTimeout(() => window.print(), 100); }}
+                            className="inline-flex items-center gap-1.5 py-2 px-4 bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold rounded-lg transition shadow-md"
+                          >
+                            <Printer className="w-4 h-4" />
+                            Print All WCCs
+                          </button>
+                        )}
+                        <button
+                          onClick={() => {
+                            setShowDcPreviewModal(false);
+                            setSelectedDcForPreview(null);
+                          }}
+                          className="text-slate-400 hover:text-slate-700 p-2 hover:bg-slate-100 rounded-full transition"
+                        >
+                          <X className="w-5 h-5" />
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Proportional canvas viewer */}
+                    <div className="wcc-print-shell flex-1 bg-white p-8 overflow-y-auto flex items-start justify-center print:bg-white print:p-0 print:overflow-visible" data-print-document="true">
+                      <div className="wcc-print-root">
+                      {wccPrintMode === "all" && siblingDcs.length > 0
+                        ? siblingDcs.map((dc: any) => {
+                            const est = estimates.find((e: any) => e.id === dc.estimateId) || linkedEst;
+                            return (
+                              <div key={dc.id} className="wcc-print-page">
+                                {renderA4ChallanCanvas(
+                                  dc.clientFormat,
+                                  dc.dcNumber,
+                                  dc.deliveryDate,
+                                  dc.deliveredBy || "",
+                                  dc.receivedBy || "",
+                                  dc.remarks || "",
+                                  dc.metadata,
+                                  est,
+                                  Array.isArray(dc.items) ? dc.items : []
+                                )}
+                              </div>
+                            );
+                          })
+                        : (
+                          <div className="wcc-print-page">
+                            {renderA4ChallanCanvas(
+                              selectedDcForPreview.clientFormat,
+                              selectedDcForPreview.dcNumber,
+                              selectedDcForPreview.deliveryDate,
+                              selectedDcForPreview.deliveredBy || "",
+                              selectedDcForPreview.receivedBy || "",
+                              selectedDcForPreview.remarks || "",
+                              selectedDcForPreview.metadata,
+                              linkedEst,
+                              dcItemsList
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                  </div>
+                </div>
+              );
+            })()}
+          </>
+        );
+      })()}
+    </>
+  );
+};
+
+export default WccDcEditor;
