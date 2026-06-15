@@ -23,7 +23,6 @@ import {
   Briefcase,
   Building2,
   Bot,
-  Clock,
 } from "lucide-react";
 
 // Lazy pages
@@ -290,10 +289,9 @@ const AppContent: React.FC = () => {
   return (
     <div className="app-shell flex h-screen w-screen bg-slate-50 text-slate-800 overflow-hidden font-sans">
       {/* Mobile Top Bar */}
-      <div className="app-mobile-topbar lg:hidden flex justify-between items-center bg-white border-b border-slate-200 px-4 py-3 fixed top-0 w-full z-40">
+      <div className="app-mobile-topbar lg:hidden flex justify-between items-center bg-white border-b border-slate-100 px-4 py-3 fixed top-0 w-full z-40">
         <img src="/brand/logo.png" alt="Sunrise Media" className="h-7 w-auto" />
         <div className="flex items-center gap-3">
-          <GlobalDateFilter />
           <NotificationBell />
           <button onClick={() => setSidebarOpen(!sidebarOpen)} className="text-slate-500 hover:text-slate-900 transition">
             {sidebarOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
