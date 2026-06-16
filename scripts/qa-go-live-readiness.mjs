@@ -3,7 +3,7 @@ import { readFile } from "fs/promises";
 import { resolve } from "path";
 import { chromium } from "playwright";
 
-const BASE = process.env.QA_BASE || "http://localhost:5088";
+const BASE = process.env.QA_BASE || "http://localhost:5000";
 const OUT = resolve(process.cwd(), "screenshots/go_live_signoff");
 mkdirSync(OUT, { recursive: true });
 

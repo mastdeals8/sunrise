@@ -15,7 +15,7 @@
 import { writeFileSync, mkdirSync, existsSync } from "fs";
 import { resolve } from "path";
 
-const BASE = process.env.AUDIT_BASE || "http://localhost:5088";
+const BASE = process.env.AUDIT_BASE || "http://localhost:5000";
 const USER = "admin";
 const PASS = "admin123";
 const OUT = resolve(process.cwd(), "screenshots/wcc_format_check");

@@ -8,7 +8,7 @@
 import { writeFileSync } from "fs";
 import { resolve } from "path";
 
-const BASE = process.env.AUDIT_BASE || "http://localhost:5088";
+const BASE = process.env.AUDIT_BASE || "http://localhost:5000";
 const RESULTS_PATH = resolve(process.cwd(), "TEST_RESULTS.md");
 const results = [];
 let token = "";

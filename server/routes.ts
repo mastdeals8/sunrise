@@ -607,62 +607,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
       counts: { storeCount, generated, signed, photos, completed },
     };
   };
-  await db.execute(sql`
-    ALTER TABLE brands
-    ADD COLUMN IF NOT EXISTS parent_client_id integer REFERENCES clients(id) ON DELETE SET NULL
-  `);
-  await db.execute(sql`
-    UPDATE brands b
-    SET parent_client_id = c.id
-    FROM clients c
-    WHERE b.parent_client_id IS NULL
-      AND b.parent_brand IS NOT NULL
-      AND (
-        lower(trim(b.parent_brand)) = lower(trim(c.name))
-        OR lower(trim(b.parent_brand)) = lower(trim(coalesce(c.client_group_name, '')))
-      )
-  `);
-  // Estimate Date: explicit document date the user picks (defaults to today on
-  // new estimates). Falls back to created_at for backfills so existing rows
-  // don't lose their effective date. Idempotent.
-  await db.execute(sql`
-    ALTER TABLE estimates
-    ADD COLUMN IF NOT EXISTS estimate_date timestamp
-  `);
-  await db.execute(sql`
-    UPDATE estimates SET estimate_date = created_at WHERE estimate_date IS NULL
-  `);
-  // Estimate Grid V2 ordering. Additive and nullable so existing estimates
-  // continue to load; reads fall back to legacy SL / ID until rows are saved.
-  await db.execute(sql`
-    ALTER TABLE estimate_items
-    ADD COLUMN IF NOT EXISTS store_sort_order integer
-  `);
-  await db.execute(sql`
-    ALTER TABLE estimate_items
-    ADD COLUMN IF NOT EXISTS row_sort_order integer
-  `);
-  await db.execute(sql`
-    UPDATE estimate_items
-    SET
-      store_sort_order = COALESCE(store_sort_order, sl, id),
-      row_sort_order = COALESCE(row_sort_order, sl, id)
-    WHERE store_sort_order IS NULL
-      OR row_sort_order IS NULL
-  `);
-  await db.execute(sql`
-    ALTER TABLE delivery_challans
-    ADD COLUMN IF NOT EXISTS document_type text NOT NULL DEFAULT 'dc'
-  `);
-  await db.execute(sql`
-    UPDATE delivery_challans
-    SET document_type = CASE
-      WHEN lower(coalesce(document_type, '')) = 'wcc'
-        OR lower(coalesce(client_format, '')) IN ('abfrl', 'ablbl', 'abfrl_multi_store', 'ablbl_multi_store')
-      THEN 'wcc'
-      ELSE 'dc'
-    END
-  `);
+  // DDL: additive columns — fast, idempotent, must complete before routes serve queries.
+  await db.execute(sql`ALTER TABLE brands ADD COLUMN IF NOT EXISTS parent_client_id integer REFERENCES clients(id) ON DELETE SET NULL`);
+  await db.execute(sql`ALTER TABLE estimates ADD COLUMN IF NOT EXISTS estimate_date timestamp`);
+  await db.execute(sql`ALTER TABLE estimate_items ADD COLUMN IF NOT EXISTS store_sort_order integer`);
+  await db.execute(sql`ALTER TABLE estimate_items ADD COLUMN IF NOT EXISTS row_sort_order integer`);
+  await db.execute(sql`ALTER TABLE delivery_challans ADD COLUMN IF NOT EXISTS document_type text NOT NULL DEFAULT 'dc'`);
+
+  // Data backfills: idempotent UPDATEs that run in background so they never
+  // delay server.listen. Safe because all columns have defaults and app code
+  // handles NULL values via COALESCE / OR fallbacks already.
+  void (async () => {
+    try {
+      await db.execute(sql`
+        UPDATE brands b SET parent_client_id = c.id FROM clients c
+        WHERE b.parent_client_id IS NULL AND b.parent_brand IS NOT NULL
+          AND (lower(trim(b.parent_brand)) = lower(trim(c.name))
+            OR lower(trim(b.parent_brand)) = lower(trim(coalesce(c.client_group_name, ''))))
+      `);
+      await db.execute(sql`UPDATE estimates SET estimate_date = created_at WHERE estimate_date IS NULL`);
+      await db.execute(sql`
+        UPDATE estimate_items
+        SET store_sort_order = COALESCE(store_sort_order, sl, id),
+            row_sort_order = COALESCE(row_sort_order, sl, id)
+        WHERE store_sort_order IS NULL OR row_sort_order IS NULL
+      `);
+      await db.execute(sql`
+        UPDATE delivery_challans SET document_type = CASE
+          WHEN lower(coalesce(document_type, '')) = 'wcc'
+            OR lower(coalesce(client_format, '')) IN ('abfrl', 'ablbl', 'abfrl_multi_store', 'ablbl_multi_store')
+          THEN 'wcc' ELSE 'dc' END
+      `);
+    } catch (e) { console.error("[startup] data backfills:", e); }
+  })();
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS execution_documents (
       id serial PRIMARY KEY,
@@ -688,27 +665,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     )
   `);
   await db.execute(sql`
-    CREATE INDEX IF NOT EXISTS idx_execution_documents_estimate
-    ON execution_documents(estimate_id)
-  `);
-  await db.execute(sql`
-    CREATE INDEX IF NOT EXISTS idx_execution_documents_dc
-    ON execution_documents(delivery_challan_id)
-  `);
-  await db.execute(sql`
-    CREATE INDEX IF NOT EXISTS idx_execution_documents_store
-    ON execution_documents(estimate_id, store_code)
-  `);
-  await db.execute(sql`
-    CREATE INDEX IF NOT EXISTS idx_execution_documents_type
-    ON execution_documents(document_type, status)
-  `);
-  // Run heavy backfills after server starts — all idempotent, safe to defer.
-  void (async () => {
-    try { await backfillExecutionDocuments(); } catch (e) { console.error("[startup] backfillExecutionDocuments:", e); }
-    try { await reconcileSignedExecutionDocumentOwners(); } catch (e) { console.error("[startup] reconcileSignedExecutionDocumentOwners:", e); }
-  })();
-  await db.execute(sql`
     CREATE TABLE IF NOT EXISTS execution_stores (
       id serial PRIMARY KEY,
       estimate_id integer NOT NULL REFERENCES estimates(id) ON DELETE CASCADE,
@@ -726,21 +682,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       updated_at timestamp DEFAULT now()
     )
   `);
-  await db.execute(sql`
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_execution_stores_estimate_store
-    ON execution_stores(estimate_id, lower(store_code))
-  `);
-  await db.execute(sql`
-    CREATE INDEX IF NOT EXISTS idx_execution_stores_estimate
-    ON execution_stores(estimate_id)
-  `);
-  await db.execute(sql`
-    CREATE INDEX IF NOT EXISTS idx_execution_stores_status
-    ON execution_stores(status)
-  `);
-  void (async () => {
-    try { await backfillExecutionStores(); } catch (e) { console.error("[startup] backfillExecutionStores:", e); }
-  })();
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS field_access_links (
       id serial PRIMARY KEY,
@@ -764,21 +705,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
       updated_at timestamp DEFAULT now()
     )
   `);
-  await db.execute(sql`
-    CREATE INDEX IF NOT EXISTS idx_field_access_links_estimate
-    ON field_access_links(estimate_id)
-  `);
-  await db.execute(sql`
-    CREATE INDEX IF NOT EXISTS idx_field_access_links_expiry
-    ON field_access_links(expires_at)
-  `);
-  await db.execute(sql`
-    CREATE INDEX IF NOT EXISTS idx_field_access_links_channel
-    ON field_access_links(channel)
-  `);
-
-  // Production hardening (audit H1): run indexes in background — all IF NOT EXISTS.
+  // All indexes and heavy backfills run in background — all IF NOT EXISTS / idempotent.
   void (async () => {
+    try {
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_execution_documents_estimate ON execution_documents(estimate_id)`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_execution_documents_dc ON execution_documents(delivery_challan_id)`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_execution_documents_store ON execution_documents(estimate_id, store_code)`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_execution_documents_type ON execution_documents(document_type, status)`);
+      await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_execution_stores_estimate_store ON execution_stores(estimate_id, lower(store_code))`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_execution_stores_estimate ON execution_stores(estimate_id)`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_execution_stores_status ON execution_stores(status)`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_field_access_links_estimate ON field_access_links(estimate_id)`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_field_access_links_expiry ON field_access_links(expires_at)`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_field_access_links_channel ON field_access_links(channel)`);
+    } catch (e) { console.error("[startup] indexes:", e); }
+    try { await backfillExecutionDocuments(); } catch (e) { console.error("[startup] backfillExecutionDocuments:", e); }
+    try { await reconcileSignedExecutionDocumentOwners(); } catch (e) { console.error("[startup] reconcileSignedExecutionDocumentOwners:", e); }
+    try { await backfillExecutionStores(); } catch (e) { console.error("[startup] backfillExecutionStores:", e); }
     try { await ensureIndexes(db); } catch (e) { console.error("[startup] ensureIndexes:", e); }
   })();
 

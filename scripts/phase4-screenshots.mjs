@@ -10,7 +10,7 @@ import { chromium } from "playwright";
 import { mkdirSync, existsSync } from "fs";
 import { resolve } from "path";
 
-const BASE = process.env.AUDIT_BASE || "http://localhost:5088";
+const BASE = process.env.AUDIT_BASE || "http://localhost:5000";
 const USER = process.env.QA_USER || "admin";
 const PASS = process.env.QA_PASS || "admin123";
 const PHASE = process.env.PHASE || "after";

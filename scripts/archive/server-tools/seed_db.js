@@ -1,6 +1,7 @@
 import pg from 'pg';
 
-const SUPABASE_CONNECTION = process.env.DATABASE_URL || 'postgresql://postgres.qopynbelowyghyciuofo:Furnili@123@aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres';
+if (!process.env.DATABASE_URL) { console.error("DATABASE_URL is required"); process.exit(1); }
+const SUPABASE_CONNECTION = process.env.DATABASE_URL;
 
 const pool = new pg.Pool({
   connectionString: SUPABASE_CONNECTION,

@@ -5,7 +5,7 @@
  * Requires: a running server, env QA_USER/QA_PASS for an admin account
  * (defaults qaadmin / QaTest@12345 for local test DBs).
  */
-const BASE = process.argv[2] || "http://localhost:5077";
+const BASE = process.argv[2] || "http://localhost:5000";
 const USER = process.env.QA_USER || "qaadmin";
 const PASS = process.env.QA_PASS || "QaTest@12345";
 
