@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 import { useAuth } from "../../contexts/AuthContext";
 import { useGlobalDate } from "../../contexts/GlobalDateContext";
 import { formatCurrency } from "./utils/formatters";
@@ -169,6 +169,7 @@ interface OperationsPageProps {
 const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, focusSubtitle }) => {
   const { token, user } = useAuth();
   const globalDate = useGlobalDate();
+  const [, setLocation] = useLocation();
   const [activeTab, setActiveTab] = useState<OpTab>(getInitialTab(focusTab));
   const [message, setMessage] = useState("");
   const {
@@ -185,6 +186,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     invoices,
     ledgerSummary,
     fetchLedgerData,
+    fetchEstimates,
     fetchData,
   } = useOperationsData(token, globalDate.range);
 
@@ -1956,11 +1958,24 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
       if (res.ok) {
         const _bodyStart = performance.now();
         const savedEstimate = await res.json().catch(() => null);
-        console.log(`[save] response body parsed (${_ms()}ms, body ${Math.round(performance.now() - _bodyStart)}ms)`);
+        console.log(`[save] Estimate update API completed in ${_ms()}ms (body parse: ${Math.round(performance.now() - _bodyStart)}ms)`);
         const savedEstimateNumber = savedEstimate?.estimateNumber || estNumber;
         showSuccess(`Estimate "${savedEstimateNumber}" ${editingEstimateId ? "updated" : "saved"} successfully!`);
         setLastSavedAt(new Date());
         setIsDirty(false);
+
+        // ── IMPORTANT: reset isSaving immediately so the button is no longer
+        // stuck on "Saving…". Do NOT move any awaits between here and this call.
+        setIsSaving(false);
+
+        // Optimistically patch the local estimates array so the register
+        // shows the updated amount the instant the form closes.
+        if (editingEstimateId && savedEstimate) {
+          setEstimates(prev =>
+            prev.map(e => (e.id === editingEstimateId ? { ...e, ...savedEstimate } : e))
+          );
+        }
+
         setShowEstimateForm(false);
         setEstBillingProfileId("");
         setEditingEstimateId(null);
@@ -1983,15 +1998,24 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
         setEstTransport("0");
         setEstItems([]);
         setEstStoreOverrides({});
-        console.log(`[save] form state cleared, navigation done (${_ms()}ms)`);
-        // fetchData is fire-and-forget — we do NOT await it because it would
-        // delay setIsSaving(false). We log when it completes so a slow refresh
-        // is visible but never blocks the spinner.
-        console.log(`[save] refresh start (${_ms()}ms, non-blocking)`);
-        fetchData().then(
-          () => console.log(`[save] refresh complete (${_ms()}ms)`),
-          (err) => console.warn(`[save] refresh failed`, err),
+
+        // Navigate to register, then refresh estimates in background.
+        if (editingEstimateId) {
+          setLocation("/estimates");
+          console.log(`[save] Navigated to estimate register (${_ms()}ms total)`);
+        }
+
+        // Background refresh — fire-and-forget, never blocks the UI.
+        const _t1 = performance.now();
+        fetchEstimates().then(
+          () => console.log(`[save] Estimate register refetched in ${Math.round(performance.now() - _t1)}ms`),
+          (err) => console.warn(`[save] fetchEstimates failed`, err),
         );
+        fetchData().then(
+          () => console.log(`[save] full refresh complete (${_ms()}ms)`),
+          (err) => console.warn(`[save] full refresh failed`, err),
+        );
+        return; // prevent finally from calling setIsSaving(false) again (harmless but clean)
       } else {
         const body = await res.text().catch(() => "");
         console.warn(`[save] non-OK response`, res.status, body.slice(0, 200));

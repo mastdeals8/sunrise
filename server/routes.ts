@@ -23,8 +23,9 @@ import { strToU8, unzipSync, zipSync } from "fflate";
 import XLSX from "xlsx-js-style";
 import jwt from "jsonwebtoken";
 import crypto from "crypto";
-import { JWT_SECRET, UPLOAD_MAX_BYTES, TELEGRAM_WEBHOOK_SECRET } from "./config";
+import { JWT_SECRET, UPLOAD_DIR, UPLOAD_MAX_BYTES, TELEGRAM_WEBHOOK_SECRET } from "./config";
 import { preprocessDateFields, nowDefault } from "./utils/dateFields";
+import { buildInvoicePacketPdf } from "./utils/pdfPacket.js";
 import { ABLBL_LEGAL_NAME, isAblblFormat, normalizeDisplayName, normalizeFormatMode, normalizeGstinPan, nameMatchKey, nameSimilarity, NAME_SIMILAR_THRESHOLD } from "../shared/textFormat";
 import { formatProductDetails } from "../shared/productDetails";
 
@@ -781,8 +782,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try { await ensureIndexes(db); } catch (e) { console.error("[startup] ensureIndexes:", e); }
   })();
 
+  // Health check — used by Railway / Render / Fly.io to verify the server is up.
+  // Must be registered BEFORE authentication middleware so probes are not rejected.
+  app.get("/api/health", (_req: Request, res: Response) => {
+    res.json({ ok: true, app: "Sunrise Media ERP" });
+  });
+
   // Configure uploads folder and multer
-  const uploadDir = path.join(process.cwd(), "uploads");
+  const uploadDir = UPLOAD_DIR;
   if (!fs.existsSync(uploadDir)) {
     fs.mkdirSync(uploadDir, { recursive: true });
   }
@@ -2724,6 +2731,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.patch("/api/operations/estimates/:id", authenticateToken, requireRole(["admin", "manager", "accounts"]), async (req: AuthRequest, res: Response) => {
+    console.log(`[estimate-update] route hit, id: ${req.params.id}, hasItems: ${Array.isArray(req.body?.items)}`);
     try {
       const id = parseInt(req.params.id, 10);
       // Drizzle timestamp columns -> z.date() (no coercion). See server/utils/dateFields.ts.
@@ -2764,6 +2772,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       if (replaceItems) {
+        console.log(`[estimate-update] replaceItems path, count: ${replaceItems.length}`);
         try {
           const updated = await db.transaction(async (tx) => {
             const updatedRows = await tx.update(estimates).set(updates).where(eq(estimates.id, id)).returning();
@@ -2779,17 +2788,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
             return updatedEstimate;
           });
           if (!updated) return res.status(404).json({ message: "Estimate not found" });
-          return (res as any).__auditDone = true;
-        if (priorEstimate) {
-          const d = diffForAudit(priorEstimate, { ...priorEstimate, ...updates });
-          audit(req, {
-            action: updates.status && updates.status !== (priorEstimate as any).status ? "status_change" : "update",
-            entityType: "estimate", entityId: id,
-            entityLabel: (priorEstimate as any).estimateNumber,
-            estimateId: id, oldValue: d.oldValue, newValue: d.newValue,
-          });
-        }
-        res.json(updated);
+          console.log(`[estimate-update] transaction complete, sending response`);
+          (res as any).__auditDone = true;
+          if (priorEstimate) {
+            const d = diffForAudit(priorEstimate, { ...priorEstimate, ...updates });
+            audit(req, {
+              action: updates.status && updates.status !== (priorEstimate as any).status ? "status_change" : "update",
+              entityType: "estimate", entityId: id,
+              entityLabel: (priorEstimate as any).estimateNumber,
+              estimateId: id, oldValue: d.oldValue, newValue: d.newValue,
+            });
+          }
+          return res.json(updated);
         } catch (e: any) {
           return res.status(400).json({ message: `Items replace failed: ${e.message}` });
         }
@@ -5026,7 +5036,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (estimate) {
           estimateItems = orderedEstimateItems(await storage.getEstimateItems(estimate.id));
           const allDc = await storage.getAllDeliveryChallans();
-          challans = allDc.filter((d) => d.estimateId === estimate.id);
+          challans = allDc.filter((d) => d.estimateId === estimate.id && d.status !== "deleted" && !(d.metadata as any)?.deleted);
         }
       }
       if (invoice.clientId) {
@@ -5040,6 +5050,41 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({ invoice, estimate, estimateItems, challans, client, payments, stores, clients: allClients, products: allProducts });
     } catch (err: any) {
       res.status(500).json({ message: err.message });
+    }
+  });
+
+  // POST /api/finance/invoice-packet/:invoiceId/pdf
+  // Pure server-side packet PDF assembly:
+  //   playwright → Tax Invoice PDF + Estimate PDF
+  //   pdf-lib copyPages → PO and other uploaded PDFs
+  //   pdf-lib drawImage → transport receipts, signed WCCs, photos (images)
+  // No filePages from client — server determines order from DB.
+  app.post("/api/finance/invoice-packet/:invoiceId/pdf", authenticateToken, async (req: AuthRequest, res: Response) => {
+    try {
+      const invoiceId = parseInt(req.params.invoiceId, 10);
+      if (isNaN(invoiceId)) return res.status(400).json({ message: "Invalid invoice ID" });
+
+      const user = req.user as any;
+      if (!user) return res.status(401).json({ message: "Unauthorized" });
+
+      const port = parseInt(process.env.PORT || "5000", 10);
+
+      const result = await buildInvoicePacketPdf({
+        invoiceId,
+        userId: user.id,
+        username: user.username,
+        role: user.role,
+        port,
+      });
+
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename="invoice-packet-${invoiceId}.pdf"`);
+      res.setHeader("Content-Length", result.buffer.length);
+      res.setHeader("X-Packet-Pages", String(result.totalPages));
+      res.send(result.buffer);
+    } catch (err: any) {
+      console.error("[invoice-packet/pdf]", err);
+      res.status(500).json({ message: err.message || "PDF generation failed" });
     }
   });
 
