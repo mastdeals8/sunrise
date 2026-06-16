@@ -3,6 +3,7 @@ import { Plus, Search, X } from "lucide-react";
 import type { Client } from "../types";
 import { normalizeDisplayName, normalizeGstinPan } from "../../../../../shared/textFormat";
 import { composeBillingAddress, parseBillingAddress } from "../../../../../shared/billingAddress";
+import { CityCombobox, StateSelect } from "@/components/IndiaLocationFields";
 
 interface BillingProfile {
   id: number;
@@ -378,13 +379,11 @@ const BillingProfilesDialog: React.FC<BillingProfilesDialogProps> = ({
                 </div>
                 <div>
                   <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">State *</label>
-                  <input
-                    type="text"
-                    required
+                  <StateSelect
                     value={bpState}
-                    onChange={(e) => setBpState(e.target.value)}
+                    onChange={(name, code) => { setBpState(name); setBpStateCode(code); }}
+                    required
                     className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-slate-800 text-xs focus:outline-none focus:border-orange-500"
-                    placeholder="e.g. Maharashtra"
                   />
                 </div>
                 <div>
@@ -392,10 +391,11 @@ const BillingProfilesDialog: React.FC<BillingProfilesDialogProps> = ({
                   <input
                     type="text"
                     required
+                    readOnly
                     value={bpStateCode}
-                    onChange={(e) => setBpStateCode(e.target.value)}
-                    className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-slate-800 text-xs focus:outline-none focus:border-orange-500"
-                    placeholder="e.g. 27"
+                    className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-slate-500 text-xs cursor-default"
+                    placeholder="Auto-filled from state"
+                    tabIndex={-1}
                   />
                 </div>
                 <div className="sm:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-3 bg-white border border-slate-200 rounded-lg p-3">
@@ -426,10 +426,13 @@ const BillingProfilesDialog: React.FC<BillingProfilesDialogProps> = ({
                   </div>
                   <div>
                     <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">City</label>
-                    <input
-                      type="text"
+                    <CityCombobox
                       value={addrCity}
-                      onChange={(e) => setAddrCity(e.target.value)}
+                      onChange={(city, inferredState, inferredCode) => {
+                        setAddrCity(city);
+                        if (inferredState && !bpState) { setBpState(inferredState); setBpStateCode(inferredCode || ""); }
+                      }}
+                      stateName={bpState}
                       className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-slate-800 text-xs focus:outline-none focus:border-orange-500"
                       placeholder="e.g. Mumbai"
                     />

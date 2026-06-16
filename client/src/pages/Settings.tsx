@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useAuth } from "../contexts/AuthContext";
 import { Settings as SettingsIcon, Save, Building2, FileText, CreditCard, Image as ImageIcon, Upload } from "lucide-react";
+import { INDIA_STATES, getStateCode } from "@/utils/indiaLocations";
 
 interface SettingsState {
   companyName: string;
@@ -287,7 +288,23 @@ const SettingsPage: React.FC = () => {
               <Field label="GSTIN" k="companyGstin" />
               <div className="md:col-span-2"><Field label="Registered address" k="companyAddress" rows={2} /></div>
               <Field label="PAN" k="companyPan" />
-              <Field label="State code" k="companyStateCode" />
+              <div>
+                <label className="text-xs font-bold uppercase text-slate-600">State / State Code</label>
+                <select
+                  value={INDIA_STATES.find(s => s.code === form.companyStateCode)?.name || ""}
+                  onChange={(e) => {
+                    const code = getStateCode(e.target.value);
+                    setForm({ ...form, companyStateCode: code });
+                  }}
+                  className="w-full border border-slate-200 rounded-md px-3 py-2 text-sm"
+                  disabled={!isAdmin}
+                >
+                  <option value="">Select state</option>
+                  {INDIA_STATES.map(s => (
+                    <option key={s.code} value={s.name}>{s.name} ({s.code})</option>
+                  ))}
+                </select>
+              </div>
               <Field label="Mobile" k="companyMobile" />
               <Field label="Email" k="companyEmail" type="email" />
             </div>

@@ -728,7 +728,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Health check — used by Railway / Render / Fly.io to verify the server is up.
   // Must be registered BEFORE authentication middleware so probes are not rejected.
   app.get("/api/health", (_req: Request, res: Response) => {
-    res.json({ ok: true, app: "Sunrise Media ERP" });
+    res.json({ status: "ok" });
   });
 
   // Configure uploads folder and multer
@@ -4487,14 +4487,45 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const seenCode = new Map<string, number>();
         const seenName = new Map<string, number>();
 
+        // GST state code lookup for auto-fill from state name
+        const INDIA_STATE_CODES: Record<string, string> = {
+          "Jammu & Kashmir": "01", "Himachal Pradesh": "02", "Punjab": "03", "Chandigarh": "04",
+          "Uttarakhand": "05", "Haryana": "06", "Delhi": "07", "Rajasthan": "08",
+          "Uttar Pradesh": "09", "Bihar": "10", "Sikkim": "11", "Arunachal Pradesh": "12",
+          "Nagaland": "13", "Manipur": "14", "Mizoram": "15", "Tripura": "16",
+          "Meghalaya": "17", "Assam": "18", "West Bengal": "19", "Jharkhand": "20",
+          "Odisha": "21", "Chhattisgarh": "22", "Madhya Pradesh": "23", "Gujarat": "24",
+          "Daman & Diu": "25", "Dadra & Nagar Haveli": "26", "Maharashtra": "27",
+          "Andhra Pradesh": "28", "Karnataka": "29", "Goa": "30", "Lakshadweep": "31",
+          "Kerala": "32", "Tamil Nadu": "33", "Puducherry": "34", "Andaman & Nicobar Islands": "35",
+          "Telangana": "36", "Andhra Pradesh (New)": "37", "Ladakh": "38",
+        };
+        const INDIA_CODE_STATES: Record<string, string> = Object.fromEntries(
+          Object.entries(INDIA_STATE_CODES).map(([k, v]) => [v, k])
+        );
+        function resolveStateCode(stateName: string, existingCode: string): string {
+          if (existingCode) return existingCode;
+          const normalized = (stateName || "").trim();
+          return INDIA_STATE_CODES[normalized] || "";
+        }
+        function resolveStateName(stateCode: string, existingName: string): string {
+          if (existingName) return existingName;
+          const code = String(stateCode || "").trim().padStart(2, "0");
+          return INDIA_CODE_STATES[code] || "";
+        }
+
         for (let i = 0; i < items.length; i++) {
           const item = items[i] || {};
           const excelRow = i + 2;
           try {
             const name = normalizeDisplayName(item.name);
             const code = String(item.storeCode || "").trim();
-            if (!name && !code) {
-              recordError(excelRow, "Missing store name and store code");
+            if (!name) {
+              recordError(excelRow, "Missing required field 'Store Name'");
+              continue;
+            }
+            if (!code) {
+              recordError(excelRow, "Missing required field 'Store Code'");
               continue;
             }
             // Resolve client: name first, ID only if valid
@@ -4565,40 +4596,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 s.clientId === client!.id && s.brandId === brand!.id
               ) || null;
             }
+            const inStateName = normalizeDisplayName(item.state) || "";
+            const inStateCode = String(item.stateCode || "").trim();
+            const resolvedStateCode = resolveStateCode(inStateName, inStateCode);
+            const resolvedStateName = inStateName || resolveStateName(inStateCode, "");
+
             if (existing) {
               await db.update(stores).set({
                 name: name || existing.name,
                 clientId: client.id,
                 brandId: brand.id,
-                location: normalizeDisplayName(item.location) || existing.location,
                 address: item.address || existing.address,
                 contactPerson: normalizeDisplayName(item.contactPerson) || existing.contactPerson,
                 contactPhone: item.contactPhone || existing.contactPhone,
                 storeCode: code || existing.storeCode,
                 city: normalizeDisplayName(item.city) || existing.city,
-                state: normalizeDisplayName(item.state) || existing.state,
-                stateCode: item.stateCode || existing.stateCode,
+                state: resolvedStateName || existing.state,
+                stateCode: resolvedStateCode || existing.stateCode,
                 regionZone: item.regionZone || existing.regionZone,
-                contact: normalizeDisplayName(item.contact) || existing.contact,
-                isActive: item.isActive !== undefined ? normalizeBool(item.isActive, true) : existing.isActive
               }).where(eq(stores.id, existing.id));
               updatedCount++;
             } else {
               const created = await storage.createStore({
-                name: name || code,
+                name,
                 clientId: client.id,
                 brandId: brand.id,
-                location: normalizeDisplayName(item.location) || null,
                 address: item.address || null,
                 contactPerson: normalizeDisplayName(item.contactPerson) || null,
                 contactPhone: item.contactPhone || null,
-                storeCode: code || null,
+                storeCode: code,
                 city: normalizeDisplayName(item.city) || null,
-                state: normalizeDisplayName(item.state) || null,
-                stateCode: item.stateCode || null,
+                state: resolvedStateName || null,
+                stateCode: resolvedStateCode || null,
                 regionZone: item.regionZone || null,
-                contact: normalizeDisplayName(item.contact) || null,
-                isActive: item.isActive !== undefined ? normalizeBool(item.isActive, true) : true
+                isActive: true,
               });
               existingStores.push(created);
               importedCount++;

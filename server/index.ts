@@ -146,11 +146,14 @@ app.use((req, res, next) => {
     serveStatic(app);
   }
 
-  const port = parseInt(process.env.PORT || '5000', 10);
+  // Bolt injects PORT=9091 for its own preview proxy — never bind to that.
+  const rawPort = parseInt(process.env.PORT || '5000', 10);
+  const port = rawPort === 9091 ? 5000 : rawPort;
   server.listen({
     port,
     host: "0.0.0.0",
-  }, async () => {
+  }, () => {
     log(`serving on port ${port}`);
+    console.log(`http://localhost:${port}`);
   });
 })();

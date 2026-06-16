@@ -1,7 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Plus, Pencil, Trash2, Archive, ArchiveRestore, Eye, Save, X, Search, Copy, Download, Filter, ArrowUp, ArrowDown, ArrowUpDown } from "lucide-react";
+import { Plus, Pencil, Trash2, Archive, ArchiveRestore, Eye, Save, X, Search, Copy, Download, Upload, Filter, ArrowUp, ArrowDown, ArrowUpDown } from "lucide-react";
 import type { Client, Brand, Store } from "../types";
 import { normalizeDisplayName } from "../../../../../shared/textFormat";
+import StoreImportModal from "./StoreImportModal";
+import { CityCombobox, StateSelect } from "@/components/IndiaLocationFields";
 
 // Subsequence "fuzzy" match: every char in `needle` appears in `haystack` in
 // order (case-insensitive). "aun" matches "Launch" / "auntie" / "Aurangabad".
@@ -101,6 +103,7 @@ const StoresPanel: React.FC<StoresPanelProps> = ({
   const [showArchived, setShowArchived] = useState(false);
   const [view, setView] = useState<Store | null>(null);
   const [edit, setEdit] = useState<Store | null>(null);
+  const [showImport, setShowImport] = useState(false);
 
   // Debounce the global search by ~120ms so typing remains smooth at 550+ rows.
   useEffect(() => {
@@ -279,15 +282,14 @@ const StoresPanel: React.FC<StoresPanelProps> = ({
   };
 
   const exportCsv = () => {
+    const headers = ["Store Name", "Store Code", "Client", "Brand", "City", "State", "State Code", "Region / Zone", "Contact Person", "Phone", "Address"];
     const rows = [
-      ["Store Name", "Code", "Client", "Brand", "City", "State", "Region", "Contact", "Phone", "Active"].join(","),
-      ...visible.map(({ s, client, brand }) => {
-        return [
-          s.name, s.storeCode || "", client?.name || "", brand?.name || "",
-          s.city || "", s.state || "", s.regionZone || "",
-          s.contactPerson || "", s.contactPhone || "", s.isActive ? "yes" : "no",
-        ].map(v => `"${String(v).replace(/"/g, '""')}"`).join(",");
-      }),
+      headers.join(","),
+      ...visible.map(({ s, client, brand }) => [
+        s.name, s.storeCode || "", client?.name || "", brand?.name || "",
+        s.city || "", s.state || "", s.stateCode || "", s.regionZone || "",
+        s.contactPerson || "", s.contactPhone || "", s.address || "",
+      ].map(v => `"${String(v).replace(/"/g, '""')}"`).join(",")),
     ].join("\n");
     const blob = new Blob([rows], { type: "text/csv" });
     const a = document.createElement("a");
@@ -320,6 +322,12 @@ const StoresPanel: React.FC<StoresPanelProps> = ({
           <label className="flex items-center gap-1 text-xs text-slate-600 cursor-pointer select-none">
             <input type="checkbox" checked={showArchived} onChange={e => setShowArchived(e.target.checked)} /> Inactive
           </label>
+          <button
+            onClick={() => setShowImport(true)}
+            className="flex items-center gap-1 px-3 py-2 text-xs font-bold rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700"
+          >
+            <Upload className="w-3.5 h-3.5" /> Import CSV
+          </button>
           <button onClick={exportCsv} className="flex items-center gap-1 px-3 py-2 text-xs font-bold rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700">
             <Download className="w-3.5 h-3.5" /> CSV
           </button>
@@ -349,9 +357,27 @@ const StoresPanel: React.FC<StoresPanelProps> = ({
               {brandsForCreate.map(b => <option key={b.id} value={String(b.id)}>{normalizeDisplayName(b.name)}</option>)}
             </select>
           </Field>
-          <Field label="City"><input value={storeCity} onChange={(e) => setStoreCity(e.target.value)} className="input-compact" placeholder="e.g. Mumbai" /></Field>
-          <Field label="State"><input value={storeState} onChange={(e) => setStoreState(e.target.value)} className="input-compact" placeholder="e.g. Maharashtra" /></Field>
-          <Field label="State Code"><input value={storeStateCode} onChange={(e) => setStoreStateCode(e.target.value)} className="input-compact" placeholder="e.g. 27" /></Field>
+          <Field label="City">
+            <CityCombobox
+              value={storeCity}
+              onChange={(city, inferredState, inferredCode) => {
+                setStoreCity(city);
+                if (inferredState && !storeState) { setStoreState(inferredState); setStoreStateCode(inferredCode || ""); }
+              }}
+              stateName={storeState}
+              className="input-compact"
+            />
+          </Field>
+          <Field label="State">
+            <StateSelect
+              value={storeState}
+              onChange={(name, code) => { setStoreState(name); setStoreStateCode(code); }}
+              className="input-compact"
+            />
+          </Field>
+          <Field label="State Code">
+            <input value={storeStateCode} readOnly className="input-compact bg-slate-50 text-slate-500 cursor-default" placeholder="Auto-filled" tabIndex={-1} />
+          </Field>
           <Field label="Region / Zone"><input value={storeRegion} onChange={(e) => setStoreRegion(e.target.value)} className="input-compact" placeholder="West / North" /></Field>
           <Field label="Contact Person"><input value={storeContact} onChange={(e) => setStoreContact(e.target.value)} className="input-compact" /></Field>
           <Field label="Phone"><input value={storePhone} onChange={(e) => setStorePhone(e.target.value)} className="input-compact" /></Field>
@@ -441,6 +467,17 @@ const StoresPanel: React.FC<StoresPanelProps> = ({
         </Modal>
       )}
 
+      {showImport && (
+        <StoreImportModal
+          token={token ?? null}
+          clients={clients}
+          brands={brands}
+          stores={stores}
+          onClose={() => setShowImport(false)}
+          onImported={() => reload && reload()}
+        />
+      )}
+
       {edit && (
         <Modal onClose={() => setEdit(null)}>
           <h3 className="text-sm font-bold text-slate-800 mb-3">Edit Store</h3>
@@ -468,9 +505,28 @@ const StoresPanel: React.FC<StoresPanelProps> = ({
                 {brandsForEdit.map(b => <option key={b.id} value={String(b.id)}>{normalizeDisplayName(b.name)}</option>)}
               </select>
             </Field>
-            <Field label="City"><input value={edit.city || ""} onChange={e => setEdit({ ...edit, city: e.target.value })} className="input-compact" /></Field>
-            <Field label="State"><input value={edit.state || ""} onChange={e => setEdit({ ...edit, state: e.target.value })} className="input-compact" /></Field>
-            <Field label="State code"><input value={edit.stateCode || ""} onChange={e => setEdit({ ...edit, stateCode: e.target.value })} className="input-compact" /></Field>
+            <Field label="City">
+              <CityCombobox
+                value={edit.city || ""}
+                onChange={(city, inferredState, inferredCode) => {
+                  const upd: Partial<Store> = { city };
+                  if (inferredState && !edit.state) { upd.state = inferredState; upd.stateCode = inferredCode; }
+                  setEdit({ ...edit, ...upd });
+                }}
+                stateName={edit.state || ""}
+                className="input-compact"
+              />
+            </Field>
+            <Field label="State">
+              <StateSelect
+                value={edit.state || ""}
+                onChange={(name, code) => setEdit({ ...edit, state: name, stateCode: code })}
+                className="input-compact"
+              />
+            </Field>
+            <Field label="State code">
+              <input value={edit.stateCode || ""} readOnly className="input-compact bg-slate-50 text-slate-500 cursor-default" placeholder="Auto-filled" tabIndex={-1} />
+            </Field>
             <Field label="Region"><input value={edit.regionZone || ""} onChange={e => setEdit({ ...edit, regionZone: e.target.value })} className="input-compact" /></Field>
             <Field label="Contact"><input value={edit.contactPerson || ""} onChange={e => setEdit({ ...edit, contactPerson: e.target.value })} className="input-compact" /></Field>
             <Field label="Phone"><input value={edit.contactPhone || ""} onChange={e => setEdit({ ...edit, contactPhone: e.target.value })} className="input-compact" /></Field>

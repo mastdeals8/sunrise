@@ -1,4 +1,5 @@
 import React from "react";
+import { CityCombobox } from "@/components/IndiaLocationFields";
 
 // Single source of truth for the client input form. Used by:
 //   - Clients page Add Client
@@ -96,7 +97,7 @@ const ClientForm: React.FC<ClientFormProps> = ({ value, onChange }) => {
         <input value={value.paymentTerms} onChange={e => set("paymentTerms", e.target.value)} className={cls} placeholder="e.g. Net 30" />
       </Row>
       <Row label="City">
-        <input value={value.city} onChange={e => set("city", e.target.value)} className={cls} placeholder="Mumbai" />
+        <CityCombobox value={value.city} onChange={(city) => set("city", city)} className={cls} placeholder="Mumbai" />
       </Row>
       <Row label="Vendor Code (optional)">
         <input value={value.vendorCode} onChange={e => set("vendorCode", e.target.value)} className={cls} placeholder="Vendor code on client's books" />

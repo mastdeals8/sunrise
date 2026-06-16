@@ -113,12 +113,11 @@ export const ensureIndexes = async (db: { execute: (q: any) => Promise<any> }) =
     sql`CREATE INDEX IF NOT EXISTS idx_telegram_deliveries_field_link_id ON telegram_deliveries(field_link_id)`,
     sql`CREATE INDEX IF NOT EXISTS idx_telegram_deliveries_status ON telegram_deliveries(status)`,
   ];
-  for (const stmt of statements) {
-    try {
-      await db.execute(stmt);
-    } catch (err: any) {
-      // Never block startup on index creation — log and continue.
-      console.error("[indexes] failed:", err?.message);
-    }
-  }
+  await Promise.all(
+    statements.map((stmt) =>
+      db.execute(stmt).catch((err: any) => {
+        console.error("[indexes] failed:", err?.message);
+      })
+    )
+  );
 };
