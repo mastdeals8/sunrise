@@ -1,7 +1,0 @@
-# BUGFIX REPORT — Phase 2 — 12 June 2026
-1. **"Bearer null" auth failure:** fetch helpers sending `Authorization: Bearer null` (when no cached token) blocked otherwise-valid cookie sessions. Junk header values now treated as absent. Found via security probing; fixed in auth middleware.
-2. **Receipt filename path-traversal hardening:** client-supplied fileName flowed raw into the stored `/uploads/receipts/...` path; now sanitized with `path.basename()`. (Read-side was already safe via express.static traversal protection — defense in depth.)
-3. **formatCurrency crash guard:** Finance/PettyCash local copies called `val.toLocaleString` without a null guard (would throw on null); consolidated shared helper renders ₹0.00 instead. Only behavioral change is in the previously-crashing case.
-4. **QA false positive corrected (process bug, not app bug):** earlier E2E used `PUT /api/operations/estimates/:id`, which doesn't exist — the dev SPA fallback returned HTML with status 200, masking the miss. Real route is PATCH. Worth knowing: in dev, unmatched API calls return 200+HTML; a JSON 404 for unmatched `/api/*` paths would prevent this class of confusion (small follow-up, not changed in this pass).
-5. **Duplicate `/uploads` static registration removed** (index.ts + routes.ts both registered it; one was dead) — resolved as part of authenticated serving.
-No regressions: full E2E workflow, tsc, and production build all pass.
