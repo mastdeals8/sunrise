@@ -1849,6 +1849,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // 6. Invoice Tracking (Sales & Purchases)
   // ==========================================
   app.get("/api/finance/invoices", authenticateToken, async (req: AuthRequest, res: Response) => {
+    const _t0 = performance.now();
     try {
       const type = req.query.type as string | undefined;
       const status = req.query.status as string | undefined;
@@ -1858,6 +1859,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Without params, full list is returned — existing clients unaffected.
       const { page, total } = paginateList(list, req);
       if (total !== null) res.setHeader("X-Total-Count", String(total));
+      const _ms = Math.round(performance.now() - _t0);
+      console.log(`[perf] ${_ms > 2000 ? "🔴 SLOW" : _ms > 500 ? "🟡 WARN" : "🟢"} GET /api/finance/invoices ${_ms}ms rows=${list.length}`);
       res.json(page);
     } catch (err: any) {
       res.status(500).json({ message: err.message });
@@ -2044,6 +2047,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // 8. Finance & Operations Summary Dashboard
   // ==========================================
   app.get("/api/finance/dashboard", authenticateToken, async (req: AuthRequest, res: Response) => {
+    const _t0 = performance.now();
     try {
       const startDate = req.query.startDate ? new Date(String(req.query.startDate)) : null;
       const endDate = req.query.endDate ? new Date(String(req.query.endDate)) : null;
@@ -2055,11 +2059,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const time = new Date(value).getTime();
         return Number.isFinite(time) && time >= startDate.getTime() && time <= endDate.getTime();
       };
-      // Calculate operational & financial statistics
-      const allInvoices = (await storage.getAllInvoices()).filter((inv: any) => inRange(inv.date || inv.createdAt));
-      const allExpenses = (await storage.getAllPettyCashExpenses({ status: "approved" })).filter((exp: any) => inRange(exp.expenseDate || exp.createdAt));
-      const allTasks = (await storage.getAllTasks()).filter((task: any) => inRange(task.dueDate || task.createdAt));
-      const allStaff = await storage.getAllUsers();
+
+      // Fetch all shared data in ONE parallel round-trip (was 3× estimates, 3× challans, 2× invoices).
+      const _tf0 = performance.now();
+      const [
+        _invoicesRaw, _expensesRaw, _tasksRaw, allStaff,
+        _estimatesRaw, _dcRaw, _paymentsRaw,
+      ] = await Promise.all([
+        storage.getAllInvoices(),
+        storage.getAllPettyCashExpenses({ status: "approved" }),
+        storage.getAllTasks(),
+        storage.getAllUsers(),
+        storage.getAllEstimates(),
+        storage.getAllDeliveryChallans(),
+        storage.getAllPayments(),
+      ]);
+      console.log(`[perf] dashboard parallel fetch ${Math.round(performance.now() - _tf0)}ms invoices=${_invoicesRaw.length} estimates=${_estimatesRaw.length} dc=${_dcRaw.length}`);
+
+      // Apply date filters once — reuse throughout handler.
+      const allInvoices   = _invoicesRaw.filter((inv: any)  => inRange(inv.date || inv.createdAt));
+      const allExpenses   = _expensesRaw.filter((exp: any)  => inRange(exp.expenseDate || exp.createdAt));
+      const allTasks      = _tasksRaw.filter((task: any)    => inRange(task.dueDate || task.createdAt));
+      const allEstimates  = _estimatesRaw.filter((e: any)   => inRange(e.estimateDate || e.createdAt));
+      const allDcFiltered = _dcRaw.filter((dc: any)         => inRange(dc.createdAt || dc.deliveryDate));
 
       const totalRevenue = allInvoices
         .filter(inv => inv.type === "sales")
@@ -2107,8 +2129,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       let dcWccPending = 0;      // ABFRL po_received estimates with no DC yet
 
       try {
-        const allEstimates = (await storage.getAllEstimates()).filter((e: any) => inRange(e.estimateDate || e.createdAt));
-        const allDc = (await storage.getAllDeliveryChallans()).filter((dc: any) => inRange(dc.createdAt || dc.deliveryDate));
+        const allDc = allDcFiltered;
         for (const e of allEstimates) {
           if (e.status === "awaiting_po" || e.status === "approved") estimatesAwaitingPo++;
           if (e.status === "po_received" || e.poNumber) poReceived++;
@@ -2146,8 +2167,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } catch (e) { /* table may not exist */ }
 
       try {
-        const allDc = (await storage.getAllDeliveryChallans()).filter((dc: any) => inRange(dc.createdAt || dc.deliveryDate));
-        for (const d of allDc) {
+        for (const d of allDcFiltered) {
           if (d.status === "draft" || d.status === "pending") dcPending++;
           if (d.status === "delivered" || d.status === "completed") dcDelivered++;
         }
@@ -2262,23 +2282,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // - NearCompletion    : estimate has issued invoice (not yet paid)
       let projectHealth = { active: 0, completed: 0, delayed: 0, nearCompletion: 0 };
       try {
-        const estList = await storage.getAllEstimates();
-        const allInvLookup = await storage.getAllInvoices();
+        // Reuse pre-fetched raw lists (no date filter — project health is all-time).
         const invByEstimate = new Map<number, any[]>();
-        allInvLookup.forEach((inv: any) => {
+        _invoicesRaw.forEach((inv: any) => {
           if (!inv.estimateId) return;
           const list = invByEstimate.get(inv.estimateId) || [];
           list.push(inv);
           invByEstimate.set(inv.estimateId, list);
         });
         const SIXTY_DAYS = 60 * 24 * 60 * 60 * 1000;
-        const now = Date.now();
-        estList.forEach((est: any) => {
+        const nowMs = Date.now();
+        _estimatesRaw.forEach((est: any) => {
           const invs = invByEstimate.get(est.id) || [];
           const hasPaid = invs.some((i: any) => i.status === "paid");
           const hasIssued = invs.some((i: any) => i.status !== "draft");
-          const createdMs = new Date(est.createdAt || est.estimateDate || now).getTime();
-          const ageMs = Number.isFinite(createdMs) ? (now - createdMs) : 0;
+          const createdMs = new Date(est.createdAt || est.estimateDate || nowMs).getTime();
+          const ageMs = Number.isFinite(createdMs) ? (nowMs - createdMs) : 0;
           if (hasPaid) projectHealth.completed++;
           else if (hasIssued) projectHealth.nearCompletion++;
           else if (ageMs > SIXTY_DAYS && est.status !== "rejected" && est.status !== "archived") projectHealth.delayed++;
@@ -2293,12 +2312,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         date: string | Date | null; href: string;
       }> = [];
       try {
-        const [estList, dcList, invList, paymentList] = await Promise.all([
-          storage.getAllEstimates(),
-          storage.getAllDeliveryChallans(),
-          Promise.resolve(allInvoices),
-          storage.getAllPayments(),
-        ]);
+        // All data already pre-fetched at handler start — no additional DB calls.
+        const estList = _estimatesRaw;
+        const dcList  = _dcRaw;
+        const invList = allInvoices;
+        const paymentList = _paymentsRaw;
         const events: typeof recentActivity = [];
         estList.forEach((e: any) => events.push({
           type: "estimate",
@@ -2343,6 +2361,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         recentActivity = events.slice(0, 10);
       } catch (e) { /* */ }
 
+      const _dashMs = Math.round(performance.now() - _t0);
+      const _dashTag = _dashMs > 2000 ? "🔴 SLOW" : _dashMs > 500 ? "🟡 WARN" : "🟢";
+      console.log(`[perf] ${_dashTag} GET /api/finance/dashboard ${_dashMs}ms`);
       res.json({
         totalRevenue,
         totalReceivables,
@@ -2567,11 +2588,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.get("/api/operations/estimates", authenticateToken, async (req: AuthRequest, res: Response) => {
+    const _t0 = performance.now();
     try {
       const list = searchList(await storage.getAllEstimates(), req,
         ["estimateNumber", "title", "clientName", "billingTo", "status"]);
       const { page, total } = paginateList(list, req);
       if (total !== null) res.setHeader("X-Total-Count", String(total));
+      const _ms = Math.round(performance.now() - _t0);
+      console.log(`[perf] ${_ms > 2000 ? "🔴 SLOW" : _ms > 500 ? "🟡 WARN" : "🟢"} GET /api/operations/estimates ${_ms}ms rows=${list.length}`);
       res.json(page);
     } catch (err: any) {
       res.status(500).json({ message: err.message });
@@ -3495,11 +3519,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.get("/api/operations/delivery-challans", authenticateToken, async (req: AuthRequest, res: Response) => {
+    const _t0 = performance.now();
     try {
       const list = searchList(await storage.getAllDeliveryChallans(), req,
         ["dcNumber", "challanNumber", "status", "storeCode"]);
       const { page, total } = paginateList(list, req);
       if (total !== null) res.setHeader("X-Total-Count", String(total));
+      const _ms = Math.round(performance.now() - _t0);
+      console.log(`[perf] ${_ms > 2000 ? "🔴 SLOW" : _ms > 500 ? "🟡 WARN" : "🟢"} GET /api/operations/delivery-challans ${_ms}ms rows=${list.length}`);
       res.json(page);
     } catch (err: any) {
       res.status(500).json({ message: err.message });
@@ -3529,6 +3556,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.get("/api/operations/execution-documents", authenticateToken, async (req: AuthRequest, res: Response) => {
+    const _t0 = performance.now();
     try {
       const estimateId = req.query.estimateId ? Number(req.query.estimateId) : null;
       const deliveryChallanId = req.query.deliveryChallanId ? Number(req.query.deliveryChallanId) : null;
@@ -3544,6 +3572,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       rows = rows
         .filter((row) => includeHistory ? row.status !== "deleted" : row.status === "active")
         .sort((a, b) => new Date((b.uploadedAt || b.createdAt) as any).getTime() - new Date((a.uploadedAt || a.createdAt) as any).getTime());
+      const _ms = Math.round(performance.now() - _t0);
+      console.log(`[perf] ${_ms > 2000 ? "🔴 SLOW" : _ms > 500 ? "🟡 WARN" : "🟢"} GET /api/operations/execution-documents ${_ms}ms rows=${rows.length} estimateId=${estimateId ?? "all"}`);
       res.json(rows);
     } catch (err: any) {
       res.status(500).json({ message: err.message });
@@ -3873,6 +3903,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.get("/api/operations/execution-stores", authenticateToken, async (req: AuthRequest, res: Response) => {
+    const _t0 = performance.now();
     try {
       const estimateId = req.query.estimateId ? Number(req.query.estimateId) : null;
       if (!estimateId) return res.status(400).json({ message: "estimateId is required" });
@@ -3915,6 +3946,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         };
       }).sort((a, b) => String(a.storeCode).localeCompare(String(b.storeCode), undefined, { numeric: true }));
 
+      const _ms = Math.round(performance.now() - _t0);
+      console.log(`[perf] ${_ms > 2000 ? "🔴 SLOW" : _ms > 500 ? "🟡 WARN" : "🟢"} GET /api/operations/execution-stores ${_ms}ms rows=${byStore.length} estimateId=${estimateId}`);
       res.json(byStore);
     } catch (err: any) {
       res.status(500).json({ message: err.message });
@@ -3945,6 +3978,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // GET /api/projects/:estimateId — aggregated project data in one call
   app.get("/api/projects/:estimateId", authenticateToken, async (req: AuthRequest, res: Response) => {
+    const _t0 = performance.now();
     try {
       const estimateId = parseInt(req.params.estimateId, 10);
       if (isNaN(estimateId)) return res.status(400).json({ message: "Invalid estimateId" });
@@ -4008,6 +4042,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         };
       }).sort((a, b) => String(a.storeCode).localeCompare(String(b.storeCode), undefined, { numeric: true }));
 
+      const _ms = Math.round(performance.now() - _t0);
+      console.log(`[perf] ${_ms > 2000 ? "🔴 SLOW" : _ms > 500 ? "🟡 WARN" : "🟢"} GET /api/projects/${estimateId} ${_ms}ms stores=${byStore.length} docs=${docRows.length} items=${itemRows.length}`);
       res.json({
         estimate: est,
         items: itemRows,
