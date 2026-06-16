@@ -2243,35 +2243,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
         monthlyBilling = salesInvoices.reduce((s: number, inv: any) => s + (inv.totalAmount || 0), 0);
       } catch (e) { /* */ }
 
+      // Second parallel batch: payroll, advances, bot inbox (were sequential, each ~300ms).
+      const _tf1 = performance.now();
+      const thisM = new Date();
+      const [_payrollList, _advances, _inbox] = await Promise.all([
+        storage.getPayrollByMonthYear(thisM.getMonth() + 1, thisM.getFullYear()).catch(() => []),
+        storage.getAllAdvances().catch(() => []),
+        db.select().from(botUploadInbox).where(eq(botUploadInbox.status, "unlinked")).catch(() => []),
+      ]);
+      console.log(`[perf] dashboard secondary fetch ${Math.round(performance.now() - _tf1)}ms`);
+
       try {
-        const thisM = new Date();
-        const payrollList = await storage.getPayrollByMonthYear(thisM.getMonth() + 1, thisM.getFullYear());
-        // Payroll schema status values: "draft" | "approved" | "paid".
-        // Anything not yet paid is payable; the source of truth amount is `netSalary`.
-        salaryPayable = payrollList
+        salaryPayable = (_payrollList as any[])
           .filter((p: any) => p.status !== "paid")
           .reduce((s: number, p: any) => s + (p.netSalary || 0), 0);
       } catch (e) { /* */ }
 
       try {
-        // Advances schema has `isAdjusted` (no `status`); unadjusted advances are still owed.
-        const advances = (await storage.getAllAdvances()).filter((a: any) => inRange(a.date || a.createdAt));
-        totalAdvances = advances
-          .filter((a: any) => !a.isAdjusted)
+        totalAdvances = (_advances as any[])
+          .filter((a: any) => inRange(a.date || a.createdAt) && !a.isAdjusted)
           .reduce((s: number, a: any) => s + (a.amount || 0), 0);
       } catch (e) { /* */ }
 
-      try {
-        const inbox = await db.select().from(botUploadInbox).where(eq(botUploadInbox.status, "unlinked"));
-        botInboxPending = inbox.length;
-      } catch (e) { /* */ }
+      botInboxPending = (_inbox as any[]).length;
 
-      // ── Dashboard Command Center additions ─────────────────────────────
-      // monthlyCollections: sum of receipt-type payments inside the date range
+      // monthlyCollections: use pre-fetched payments (no extra DB call).
       let monthlyCollections = 0;
       try {
-        const receipts = (await storage.getAllPayments({ type: "receipt" }))
-          .filter((p: any) => inRange(p.paymentDate || p.createdAt));
+        const receipts = _paymentsRaw
+          .filter((p: any) => p.type === "receipt" && inRange(p.paymentDate || p.createdAt));
         monthlyCollections = receipts.reduce((s: number, p: any) => s + Number(p.amount || 0), 0);
       } catch (e) { /* */ }
 
