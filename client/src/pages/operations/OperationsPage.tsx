@@ -182,6 +182,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     setProducts,
     materialCodes,
     estimates,
+    setEstimates,
     challans,
     invoices,
     ledgerSummary,

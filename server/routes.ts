@@ -4503,16 +4503,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const INDIA_CODE_STATES: Record<string, string> = Object.fromEntries(
           Object.entries(INDIA_STATE_CODES).map(([k, v]) => [v, k])
         );
-        function resolveStateCode(stateName: string, existingCode: string): string {
+        const resolveStateCode = (stateName: string, existingCode: string): string => {
           if (existingCode) return existingCode;
           const normalized = (stateName || "").trim();
           return INDIA_STATE_CODES[normalized] || "";
-        }
-        function resolveStateName(stateCode: string, existingName: string): string {
+        };
+        const resolveStateName = (stateCode: string, existingName: string): string => {
           if (existingName) return existingName;
           const code = String(stateCode || "").trim().padStart(2, "0");
           return INDIA_CODE_STATES[code] || "";
-        }
+        };
 
         for (let i = 0; i < items.length; i++) {
           const item = items[i] || {};
