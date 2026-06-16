@@ -5,6 +5,10 @@ dist/
 !.env.example
 backups/
 uploads/
+docs/
 .claude/
 *.local
 .DS_Store
+*.zip
+*.pdf
+*.docx
