@@ -7,7 +7,7 @@ import path from "path";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 import { authenticateBrowserRequest } from "./auth";
-import { NODE_ENV, CORS_ORIGINS } from "./config";
+import { NODE_ENV, CORS_ORIGINS, UPLOAD_DIR } from "./config";
 
 const app = express();
 
@@ -63,7 +63,7 @@ app.use('/uploads/company-assets', (_req, res) => {
 app.use(
   '/uploads',
   authenticateBrowserRequest,
-  express.static(path.join(process.cwd(), 'uploads'), {
+  express.static(UPLOAD_DIR, {
     fallthrough: false,
     setHeaders: (res, filePath) => {
       // Force download-safe handling of anything that isn't a known inline type.

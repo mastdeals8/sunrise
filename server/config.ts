@@ -1,4 +1,5 @@
 import "dotenv/config";
+import path from "path";
 
 if (!process.env.DATABASE_URL) {
   console.error("🚨 DATABASE_URL is missing in sunrise-media-erp/.env!");
@@ -17,6 +18,11 @@ export const config = {
   JWT_SECRET: process.env.JWT_SECRET,
   NODE_ENV: process.env.NODE_ENV || "development",
   PORT: parseInt(process.env.PORT || "5000", 10),
+  // UPLOAD_DIR: absolute path to the uploads root. Override in production via
+  // UPLOAD_DIR=/app/uploads (or whatever the persistent volume mount path is).
+  UPLOAD_DIR: process.env.UPLOAD_DIR
+    ? path.resolve(process.env.UPLOAD_DIR)
+    : path.join(process.cwd(), "uploads"),
   UPLOAD_PATHS: {
     receipts: "uploads/receipts/",
     documents: "uploads/documents/"
@@ -38,6 +44,7 @@ export const {
   DATABASE_URL,
   NODE_ENV,
   PORT,
+  UPLOAD_DIR,
   UPLOAD_PATHS,
   JWT_SECRET,
   CORS_ORIGINS,

@@ -5,24 +5,12 @@ import { GlobalDateProvider } from "./contexts/GlobalDateContext";
 import { NotificationBell } from "./components/NotificationBell";
 import {
   LayoutDashboard,
-  Users,
-  CheckSquare,
-  Coins,
-  Wallet,
-  ShoppingBag,
   LogOut,
   Menu,
   X,
-  FileText,
-  Truck,
-  Receipt,
   Database,
   Shield,
   ChevronDown,
-  ChevronRight,
-  Briefcase,
-  Building2,
-  Bot,
 } from "lucide-react";
 
 // Lazy pages
@@ -40,6 +28,7 @@ import ClientLedgerPage from "./pages/ClientLedger";
 import ProjectDocumentsPage from "./pages/ProjectDocuments";
 import InvoicePacketPage from "./pages/InvoicePacket";
 import SettingsPage from "./pages/Settings";
+import MyProfile from "./pages/MyProfile";
 import RolesPage from "./pages/Roles";
 import Login from "./pages/Login";
 import TelegramSettings from "./pages/TelegramSettings";
@@ -72,16 +61,13 @@ interface NavItem {
 
 interface NavSection {
   key: string;
-  label: string;
-  icon: React.ComponentType<{ className?: string }>;
-  href?: string; // section direct link (no sub-items)
-  items?: NavItem[]; // sub-items
-  roles?: string[]; // role guard, undefined = all
-  groupLabel?: string; // uppercase separator label above this section
+  label: string;         // group heading text (shown in uppercase label)
+  icon?: React.ComponentType<{ className?: string }>; // only used for collapsible sections
+  href?: string;         // if set: single direct link, no subitems
+  items?: NavItem[];
+  roles?: string[];
+  alwaysOpen?: boolean;  // if true: items always visible, no expand button
 }
-
-const matchHash = (loc: string, hash: string, path: string, expectedHash: string) =>
-  loc === path && hash.replace(/^#/, "") === expectedHash;
 
 const SECTIONS: NavSection[] = [
   {
@@ -92,22 +78,20 @@ const SECTIONS: NavSection[] = [
   },
   {
     key: "sales",
-    label: "Sales",
-    icon: FileText,
-    groupLabel: "SALES",
+    label: "SALES",
+    alwaysOpen: true,
     items: [
-      { href: "/estimates",          label: "Estimate Register",   match: (l) => l === "/estimates" || l === "/operations" },
-      { href: "/projects",           label: "Projects",            match: (l) => l === "/projects" },
-      { href: "/invoices",           label: "Invoices",            match: (l) => l === "/invoices" },
-      { href: "/estimate-templates", label: "Estimate Templates",  match: (l) => l === "/estimate-templates" },
+      { href: "/estimates",          label: "Estimate Register",  match: (l) => l === "/estimates" || l === "/operations" },
+      { href: "/projects",           label: "Projects",           match: (l) => l === "/projects" },
+      { href: "/invoices",           label: "Invoices",           match: (l) => l === "/invoices" },
+      { href: "/estimate-templates", label: "Estimate Templates", match: (l) => l === "/estimate-templates" },
     ],
     roles: ["admin", "manager", "designer", "accounts", "staff"],
   },
   {
     key: "operations",
-    label: "Operations",
-    icon: Briefcase,
-    groupLabel: "OPERATIONS",
+    label: "OPERATIONS",
+    alwaysOpen: true,
     items: [
       { href: "/delivery-challans", label: "WCC Audit Register", match: (l) => l === "/delivery-challans" },
       { href: "/project-documents", label: "Document Archive",   match: (l) => l === "/project-documents" },
@@ -116,16 +100,15 @@ const SECTIONS: NavSection[] = [
   },
   {
     key: "finance",
-    label: "Finance",
-    icon: Wallet,
-    groupLabel: "FINANCE",
+    label: "FINANCE",
+    alwaysOpen: true,
     items: [
-      { href: "/client-ledger",      label: "Client Ledger",       match: (l) => l === "/client-ledger" },
-      { href: "/pending-payments",   label: "Pending Payments",    match: (l) => l === "/pending-payments" },
-      { href: "/petty-cash",         label: "Petty Cash",          match: (l) => l === "/petty-cash" },
-      { href: "/finance",            label: "Payment Ledger",      match: (l) => l === "/finance" },
-      { href: "/automation/tally",   label: "Tally Export",        match: (l) => l === "/automation/tally" },
-      { href: "/submitted-invoices", label: "Submitted Invoices",  match: (l) => l === "/submitted-invoices" },
+      { href: "/client-ledger",      label: "Client Ledger",      match: (l) => l === "/client-ledger" },
+      { href: "/pending-payments",   label: "Pending Payments",   match: (l) => l === "/pending-payments" },
+      { href: "/petty-cash",         label: "Petty Cash",         match: (l) => l === "/petty-cash" },
+      { href: "/finance",            label: "Payment Ledger",     match: (l) => l === "/finance" },
+      { href: "/automation/tally",   label: "Tally Export",       match: (l) => l === "/automation/tally" },
+      { href: "/submitted-invoices", label: "Submitted Invoices", match: (l) => l === "/submitted-invoices" },
     ],
     roles: ["admin", "manager", "accounts"],
   },
@@ -133,7 +116,6 @@ const SECTIONS: NavSection[] = [
     key: "master-data",
     label: "Master Data",
     icon: Database,
-    groupLabel: "MASTER DATA",
     items: [
       { href: "/clients",             label: "Clients",        match: (l: string) => l === "/clients" },
       { href: "/products",            label: "Products",       match: (l: string) => l === "/products" },
@@ -148,13 +130,12 @@ const SECTIONS: NavSection[] = [
     key: "system",
     label: "System",
     icon: Shield,
-    groupLabel: "SYSTEM",
     items: [
       { href: "/staff",               label: "Staff",            match: (l) => l === "/staff" },
       { href: "/tasks",               label: "Tasks",            match: (l) => l === "/tasks" },
       { href: "/automation/telegram", label: "Telegram Bot",     match: (l) => l === "/automation/telegram" },
       { href: "/automation/whatsapp", label: "WhatsApp API",     match: (l) => l === "/automation/whatsapp" },
-      { href: "/automation/inbox",    label: "Bot Upload Inbox", match: (l) => l === "/automation/inbox" },
+      { href: "/automation/inbox",    label: "Bot Inbox",        match: (l) => l === "/automation/inbox" },
       { href: "/admin",               label: "Users",            match: (l) => l === "/admin" },
       { href: "/admin/roles",         label: "Roles",            match: (l) => l === "/admin/roles" },
       { href: "/admin/settings",      label: "Settings",         match: (l) => l === "/admin/settings" },
@@ -173,6 +154,28 @@ const useHash = () => {
   return hash;
 };
 
+// Shared NavItem link — used by both always-open and collapsible sections.
+const NavLink: React.FC<{ item: NavItem; location: string; hash: string; closeMobile: () => void }> = ({
+  item, location, hash, closeMobile,
+}) => {
+  const active = item.match ? item.match(location, hash) : location === item.href;
+  return (
+    <Link
+      href={item.href}
+      onClick={closeMobile}
+      className={`relative flex items-center gap-2 px-3 py-1.5 rounded-md text-[12.5px] transition-all duration-150 ${
+        active
+          ? "text-orange-700 font-bold bg-orange-50"
+          : "text-slate-500 hover:text-slate-800 hover:bg-slate-100/70"
+      }`}
+    >
+      {active && <span className="absolute left-0 top-1/2 -translate-y-1/2 h-4 w-0.5 rounded-r-full bg-orange-500" />}
+      <span className={`w-1 h-1 rounded-full shrink-0 ml-0.5 ${active ? "bg-orange-500" : "bg-slate-300"}`} />
+      {item.label}
+    </Link>
+  );
+};
+
 const SidebarSection: React.FC<{
   section: NavSection;
   location: string;
@@ -181,21 +184,21 @@ const SidebarSection: React.FC<{
 }> = ({ section, location, hash, closeMobile }) => {
   const Icon = section.icon;
 
-  // Direct link section (e.g. Dashboard)
+  // Direct link (Dashboard)
   if (section.href && !section.items) {
     const active = location === section.href;
     return (
       <Link
         href={section.href}
         onClick={closeMobile}
-        className={`relative flex items-center gap-2.5 px-3 py-2 rounded-lg text-[13px] font-medium transition-all duration-150 group ${
+        className={`relative flex items-center gap-2.5 px-3 py-1.5 rounded-lg text-[13px] font-medium transition-all duration-150 group ${
           active
             ? "bg-orange-50 text-orange-700 font-semibold"
             : "text-slate-600 hover:text-slate-900 hover:bg-slate-100/70"
         }`}
       >
         {active && <span className="absolute left-0 top-1/2 -translate-y-1/2 h-5 w-0.5 rounded-r-full bg-orange-500" />}
-        <Icon className={`w-4 h-4 shrink-0 ${active ? "text-orange-600" : "text-slate-400 group-hover:text-slate-500"}`} />
+        {Icon && <Icon className={`w-4 h-4 shrink-0 ${active ? "text-orange-600" : "text-slate-400 group-hover:text-slate-500"}`} />}
         {section.label}
       </Link>
     );
@@ -204,6 +207,18 @@ const SidebarSection: React.FC<{
   const items = section.items || [];
   const anyActive = items.some((it) => (it.match ? it.match(location, hash) : location === it.href));
 
+  // Always-open: render items directly, no expand button
+  if (section.alwaysOpen) {
+    return (
+      <div>
+        {items.map((it) => (
+          <NavLink key={it.href} item={it} location={location} hash={hash} closeMobile={closeMobile} />
+        ))}
+      </div>
+    );
+  }
+
+  // Collapsible (Master Data, System)
   const [open, setOpen] = React.useState(anyActive);
   React.useEffect(() => {
     if (anyActive) setOpen(true);
@@ -213,38 +228,21 @@ const SidebarSection: React.FC<{
     <div>
       <button
         onClick={() => setOpen(!open)}
-        className={`w-full flex items-center justify-between gap-2.5 px-3 py-2 rounded-lg text-[13px] font-medium transition-all duration-150 group ${
-          anyActive
-            ? "text-slate-900 font-semibold"
-            : "text-slate-600 hover:text-slate-900 hover:bg-slate-100/70"
+        className={`w-full flex items-center justify-between gap-2 px-3 py-1.5 rounded-lg text-[12.5px] font-semibold transition-all duration-150 group ${
+          anyActive ? "text-slate-900" : "text-slate-500 hover:text-slate-800 hover:bg-slate-100/70"
         }`}
       >
-        <span className="flex items-center gap-2.5">
-          <Icon className={`w-4 h-4 shrink-0 ${anyActive ? "text-orange-600" : "text-slate-400 group-hover:text-slate-500"}`} />
+        <span className="flex items-center gap-2">
+          {Icon && <Icon className={`w-3.5 h-3.5 shrink-0 ${anyActive ? "text-orange-600" : "text-slate-400 group-hover:text-slate-500"}`} />}
           {section.label}
         </span>
-        <ChevronDown className={`w-3.5 h-3.5 text-slate-300 transition-transform duration-200 ${open ? "rotate-0" : "-rotate-90"}`} />
+        <ChevronDown className={`w-3 h-3 text-slate-300 transition-transform duration-200 ${open ? "rotate-0" : "-rotate-90"}`} />
       </button>
       {open && (
-        <div className="ml-[18px] mt-0.5 space-y-0.5 border-l border-slate-100 pl-3">
-          {items.map((it) => {
-            const active = it.match ? it.match(location, hash) : location === it.href;
-            return (
-              <Link
-                key={it.href}
-                href={it.href}
-                onClick={closeMobile}
-                className={`flex items-center gap-2 px-2.5 py-1.5 rounded-md text-[12.5px] transition-all duration-150 ${
-                  active
-                    ? "text-orange-700 font-semibold bg-orange-50/60"
-                    : "text-slate-500 hover:text-slate-800 hover:bg-slate-100/60"
-                }`}
-              >
-                <span className={`w-1 h-1 rounded-full shrink-0 ${active ? "bg-orange-500" : "bg-slate-300"}`} />
-                {it.label}
-              </Link>
-            );
-          })}
+        <div className="mt-0.5 space-y-0">
+          {items.map((it) => (
+            <NavLink key={it.href} item={it} location={location} hash={hash} closeMobile={closeMobile} />
+          ))}
         </div>
       )}
     </div>
@@ -306,8 +304,10 @@ const AppContent: React.FC = () => {
         }`}
       >
         {/* Logo */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
-          <img src="/brand/logo.png" alt="Sunrise Media" className="h-7 w-auto" />
+        <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
+          <Link href="/" onClick={() => setSidebarOpen(false)}>
+            <img src="/brand/logo.png" alt="Sunrise Media" className="h-7 w-auto cursor-pointer" />
+          </Link>
           <div className="flex items-center gap-2">
             <NotificationBell />
             <button
@@ -320,13 +320,19 @@ const AppContent: React.FC = () => {
         </div>
 
         {/* Navigation */}
-        <nav className="flex-1 px-3 py-3 space-y-0.5 overflow-y-auto">
-          {sections.map((s) => (
+        <nav className="flex-1 px-2 py-2 overflow-y-auto">
+          {sections.map((s, idx) => (
             <React.Fragment key={s.key}>
-              {s.groupLabel && (
-                <div className="px-3 pt-5 pb-1.5">
-                  <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">{s.groupLabel}</span>
+              {/* Group label: always-open sections show their label as a heading;
+                  collapsible sections show the label inside the button instead */}
+              {s.alwaysOpen && (
+                <div className={`px-3 pb-1 ${idx === 0 ? "pt-2" : "pt-4"}`}>
+                  <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">{s.label}</span>
                 </div>
+              )}
+              {/* Dashboard gets a small gap before collapsible sections below it */}
+              {!s.alwaysOpen && !s.href && idx > 0 && (
+                <div className="pt-3 pb-0.5" />
               )}
               <SidebarSection
                 section={s}
@@ -339,8 +345,12 @@ const AppContent: React.FC = () => {
         </nav>
 
         {/* Footer — user info + logout */}
-        <div className="border-t border-slate-100 p-3 space-y-1">
-          <div className="flex items-center gap-2.5 px-3 py-2">
+        <div className="border-t border-slate-100 p-2 space-y-0.5">
+          <Link
+            href="/profile"
+            onClick={() => setSidebarOpen(false)}
+            className="flex items-center gap-2.5 px-3 py-2 rounded-lg hover:bg-slate-100/70 transition"
+          >
             <div className="h-7 w-7 rounded-full bg-gradient-to-tr from-orange-500 to-amber-400 flex items-center justify-center font-bold text-white text-xs uppercase shrink-0">
               {user.name.slice(0, 2)}
             </div>
@@ -348,7 +358,7 @@ const AppContent: React.FC = () => {
               <p className="text-[12.5px] font-semibold text-slate-800 truncate leading-tight">{user.name}</p>
               <p className="text-[11px] text-orange-600 font-medium capitalize">{user.role}</p>
             </div>
-          </div>
+          </Link>
           <button
             onClick={logout}
             className="flex items-center gap-2.5 w-full px-3 py-2 rounded-lg text-[13px] font-medium text-slate-500 hover:text-red-600 hover:bg-red-50 transition"
@@ -386,6 +396,7 @@ const AppContent: React.FC = () => {
                 points to it but old URLs still resolve. */}
             <Route path="/operations">{() => <OperationsPage />}</Route>
 
+            <Route path="/profile" component={MyProfile} />
             <Route path="/admin" component={AdminPage} />
             <Route path="/admin/roles" component={RolesPage} />
             <Route path="/admin/settings" component={SettingsPage} />

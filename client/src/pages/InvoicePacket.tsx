@@ -3,7 +3,7 @@ import { formatCurrency } from "@/utils/format";
 import { useAuth } from "../contexts/AuthContext";
 import { isAblblFormat } from "../../../shared/textFormat";
 import { companyAssetUrl } from "../utils/companyAssets";
-import { Package, Search, Printer, Eye, Download, FileText, Image as ImageIcon, ChevronUp, ChevronDown, Check } from "lucide-react";
+import { Package, Search, Printer, FileDown, ChevronUp, ChevronDown, Check, Loader2 } from "lucide-react";
 import EstimateDocument from "../components/EstimateDocument";
 import type { Client, Brand, Product, Store } from "./operations/types";
 
@@ -69,11 +69,20 @@ const InvoicePacketPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [sellerProfile, setSellerProfile] = useState<any>({});
+  const [fromUrl, setFromUrl] = useState(false);
+  // pdfMode is the value of ?pdfMode= URL param: "invoice" | "estimate" | null
+  const [pdfMode, setPdfMode] = useState<string | null>(null);
+  const [generatingPdf, setGeneratingPdf] = useState(false);
 
   useEffect(() => {
     const u = new URLSearchParams(window.location.search);
     const id = u.get("id");
-    if (id) setSelectedId(parseInt(id, 10));
+    if (id) {
+      setSelectedId(parseInt(id, 10));
+      setFromUrl(true);
+    }
+    const mode = u.get("pdfMode");
+    if (mode) setPdfMode(mode);
   }, []);
 
   useEffect(() => {
@@ -125,6 +134,18 @@ const InvoicePacketPage: React.FC = () => {
     load();
   }, [selectedId, token]);
 
+  // Signal playwright that the page is ready for PDF capture.
+  // Only fires when pdfMode is "invoice" or "estimate" and packet data is loaded.
+  useEffect(() => {
+    if (pdfMode && packet && sellerProfile) {
+      // Wait for fonts + images to settle before signalling playwright
+      const t = setTimeout(() => {
+        document.documentElement.setAttribute("data-pdf-ready", "true");
+      }, 1200);
+      return () => clearTimeout(t);
+    }
+  }, [pdfMode, packet, sellerProfile]);
+
   const filtered = useMemo(() => {
     if (!search.trim()) return invoices;
     const q = search.toLowerCase();
@@ -148,7 +169,59 @@ const InvoicePacketPage: React.FC = () => {
 
   const doPrint = () => window.print();
 
+  const downloadPdf = async () => {
+    if (!selectedId) return;
+    setGeneratingPdf(true);
+    try {
+      // Server determines order and fetches all files — no client-side page list needed
+      const res = await fetch(`/api/finance/invoice-packet/${selectedId}/pdf`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({}),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ message: "PDF generation failed" }));
+        alert(err.message || "PDF generation failed");
+        return;
+      }
+
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `invoice-packet-${selectedId}.pdf`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      alert(err.message || "PDF generation failed");
+    } finally {
+      setGeneratingPdf(false);
+    }
+  };
+
   const included = pages.filter(p => p.included);
+
+  // pdfMode: playwright renders this route.
+  // "invoice" → render ONLY the Tax Invoice component (InvoiceFrontPage)
+  // "estimate" → render ONLY the Estimate component (EstimateSummary)
+  // Nothing else — no sidebar, no file previews, no DC summaries.
+  if (pdfMode === "invoice" || pdfMode === "estimate") {
+    return (
+      <div style={{ background: "white", padding: "0", margin: "0" }}>
+        {!packet ? (
+          <div style={{ padding: "40px", textAlign: "center", color: "#666" }}>Loading…</div>
+        ) : pdfMode === "invoice" ? (
+          <InvoiceFrontPage packet={packet} sellerProfile={sellerProfile} assetToken={token} />
+        ) : (
+          <EstimateSummary packet={packet} sellerProfile={sellerProfile} assetToken={token} />
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 print:space-y-0">
@@ -161,47 +234,62 @@ const InvoicePacketPage: React.FC = () => {
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 print:block">
         {/* Sidebar: invoice picker + page list (hidden on print) */}
-        <div className="lg:col-span-4 space-y-3 print:hidden">
-          <div className="glass-panel p-3 flex items-center gap-2">
-            <Search className="w-4 h-4 text-slate-400" />
-            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search invoice / party" className="bg-transparent border-0 outline-none text-sm flex-1" />
-          </div>
-
-          <div className="glass-panel overflow-hidden max-h-[40vh] overflow-y-auto">
-            {loading ? (
-              <div className="p-6 text-center text-sm text-slate-500">Loading…</div>
-            ) : filtered.length === 0 ? (
-              <div className="p-6 text-center text-sm text-slate-500">No invoices</div>
-            ) : (
-              <div className="divide-y divide-slate-100">
-                {filtered.map(inv => (
-                  <button
-                    key={inv.id}
-                    onClick={() => {
-                      setSelectedId(inv.id);
-                      const u = new URL(window.location.href);
-                      u.searchParams.set("id", String(inv.id));
-                      window.history.replaceState(null, "", u.toString());
-                    }}
-                    className={`w-full text-left px-3 py-2 hover:bg-slate-50 transition ${selectedId === inv.id ? "bg-orange-50" : ""}`}
-                  >
-                    <p className="font-mono text-xs font-bold">{inv.invoiceNumber}</p>
-                    <p className="text-xs text-slate-600 truncate">{inv.partyName}</p>
-                    <p className="text-xs text-slate-400">{formatCurrency(inv.totalAmount)}</p>
-                  </button>
-                ))}
+        <div className={`${fromUrl ? "lg:col-span-3" : "lg:col-span-4"} space-y-3 print:hidden`}>
+          {!fromUrl && (
+            <>
+              <div className="glass-panel p-3 flex items-center gap-2">
+                <Search className="w-4 h-4 text-slate-400" />
+                <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search invoice / party" className="bg-transparent border-0 outline-none text-sm flex-1" />
               </div>
-            )}
-          </div>
+
+              <div className="glass-panel overflow-hidden max-h-[40vh] overflow-y-auto">
+                {loading ? (
+                  <div className="p-6 text-center text-sm text-slate-500">Loading…</div>
+                ) : filtered.length === 0 ? (
+                  <div className="p-6 text-center text-sm text-slate-500">No invoices</div>
+                ) : (
+                  <div className="divide-y divide-slate-100">
+                    {filtered.map(inv => (
+                      <button
+                        key={inv.id}
+                        onClick={() => {
+                          setSelectedId(inv.id);
+                          const u = new URL(window.location.href);
+                          u.searchParams.set("id", String(inv.id));
+                          window.history.replaceState(null, "", u.toString());
+                        }}
+                        className={`w-full text-left px-3 py-2 hover:bg-slate-50 transition ${selectedId === inv.id ? "bg-orange-50" : ""}`}
+                      >
+                        <p className="font-mono text-xs font-bold">{inv.invoiceNumber}</p>
+                        <p className="text-xs text-slate-600 truncate">{inv.partyName}</p>
+                        <p className="text-xs text-slate-400">{formatCurrency(inv.totalAmount)}</p>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </>
+          )}
 
           {/* Page list with include/reorder */}
           {packet && (
             <div className="glass-panel overflow-hidden">
-              <div className="px-4 py-2 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
-                <h3 className="font-bold text-sm">Packet Pages ({included.length})</h3>
-                <button onClick={doPrint} className="flex items-center gap-1 px-3 py-1.5 rounded-md bg-orange-600 hover:bg-orange-700 text-white text-xs font-semibold">
-                  <Printer className="w-3 h-3" /> Print
-                </button>
+              <div className="px-4 py-2 border-b border-slate-200 bg-slate-50 flex items-center justify-between gap-2">
+                <h3 className="font-bold text-sm shrink-0">Packet Pages ({included.length})</h3>
+                <div className="flex gap-1.5">
+                  <button onClick={doPrint} className="flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold border border-slate-200">
+                    <Printer className="w-3 h-3" /> Print
+                  </button>
+                  <button
+                    onClick={downloadPdf}
+                    disabled={generatingPdf}
+                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-orange-600 hover:bg-orange-700 disabled:opacity-60 text-white text-xs font-semibold"
+                    title="Download full packet as a single PDF (includes all pages and attachments)"
+                  >
+                    {generatingPdf ? <Loader2 className="w-3 h-3 animate-spin" /> : <FileDown className="w-3 h-3" />}
+                    {generatingPdf ? "Building…" : "Download PDF"}
+                  </button>
+                </div>
               </div>
               <div className="divide-y divide-slate-100 max-h-[40vh] overflow-y-auto">
                 {pages.map((p, idx) => (
@@ -220,7 +308,7 @@ const InvoicePacketPage: React.FC = () => {
         </div>
 
         {/* Main: packet preview */}
-        <div className="lg:col-span-8 print:col-span-12">
+        <div className={`${fromUrl ? "lg:col-span-9" : "lg:col-span-8"} print:col-span-12`}>
           {!selectedId ? (
             <div className="glass-panel p-12 text-center text-slate-500 print:hidden">
               <Package className="w-10 h-10 mx-auto mb-3 text-slate-300" />
@@ -254,6 +342,12 @@ const InvoicePacketPage: React.FC = () => {
         @media print {
           body { background: white !important; }
           aside, header, nav, .print\\:hidden { display: none !important; }
+          .doc-preview-frame {
+            height: 100vh !important;
+            width: 100% !important;
+            border: none !important;
+            display: block;
+          }
         }
       `}</style>
     </div>
@@ -352,18 +446,21 @@ const DcSummary: React.FC<{ packet: PacketData; dcId: number; sellerProfile: any
 };
 
 const DocumentPreview: React.FC<{ label: string; filePath?: string | null }> = ({ label, filePath }) => {
-  if (!filePath) return <div className="text-center text-slate-500 text-sm">{label}: no file attached.</div>;
+  if (!filePath) return <div className="text-center text-slate-500 text-sm p-4 border border-dashed border-slate-200 rounded">{label}: no file attached.</div>;
   const isImage = /\.(png|jpe?g|gif|webp)$/i.test(filePath);
   const isPdf = /\.pdf$/i.test(filePath);
   return (
     <div className="text-center">
-      <p className="text-xs font-semibold uppercase text-slate-500 mb-2">{label}</p>
+      <p className="text-xs font-semibold uppercase text-slate-500 mb-2 print:hidden">{label}</p>
       {isImage ? (
-        <img src={filePath} alt={label} className="max-h-[80vh] mx-auto border border-slate-200 rounded" />
+        <img src={filePath} alt={label} className="max-h-[80vh] mx-auto border border-slate-200 rounded print:max-h-none print:w-full" />
       ) : isPdf ? (
-        <object data={filePath} type="application/pdf" className="w-full h-[80vh] border border-slate-200">
-          <p className="text-sm text-slate-500 p-4">PDF preview not supported in browser. <a href={filePath} target="_blank" rel="noreferrer" className="text-blue-600 underline">Open in new tab</a>.</p>
-        </object>
+        <iframe
+          src={filePath}
+          title={label}
+          className="w-full border border-slate-200 rounded doc-preview-frame"
+          style={{ height: "80vh" }}
+        />
       ) : (
         <a href={filePath} target="_blank" rel="noreferrer" className="text-sm text-blue-600 underline">
           Open {filePath.split("/").pop()}
