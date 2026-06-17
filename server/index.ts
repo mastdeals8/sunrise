@@ -152,8 +152,17 @@ app.use((req, res, next) => {
   server.listen({
     port,
     host: "0.0.0.0",
-  }, () => {
+  }, async () => {
     log(`serving on port ${port}`);
-    console.log(`http://localhost:${port}`);
+    // Single DB connection test at startup — keeps logs clean.
+    try {
+      const { pool } = await import("./db");
+      const client = await pool.connect();
+      console.log("✓ Connected to Supabase database successfully");
+      client.release();
+    } catch (err: any) {
+      console.error("✗ Supabase connection failed:", err.message);
+    }
+    console.log(`✓ Server ready at http://localhost:${port}`);
   });
 })();
