@@ -706,7 +706,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
     )
   `);
   // All indexes and heavy backfills run in background — all IF NOT EXISTS / idempotent.
-  void (async () => {
+  // Skipped when SKIP_DB_STARTUP=true (Bolt/WebContainer: pg ArrayBuffer transfers
+  // cause DataCloneError in MessagePort; skip startup DB work to let server boot).
+  if (process.env.SKIP_DB_STARTUP === "true") {
+    console.log("[startup] skipping DB startup checks (SKIP_DB_STARTUP=true)");
+  } else void (async () => {
     try {
       await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_execution_documents_estimate ON execution_documents(estimate_id)`);
       await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_execution_documents_dc ON execution_documents(delivery_challan_id)`);

@@ -5,6 +5,12 @@ process.on("uncaughtException", (err: any) => {
   console.error("UNCAUGHT_EXCEPTION name:", err?.name);
   console.error("UNCAUGHT_EXCEPTION message:", err?.message);
   console.error("UNCAUGHT_EXCEPTION stack:", err?.stack ?? "(no stack)");
+  // DataCloneError is thrown by Bolt/WebContainer's MessagePort when pg transfers
+  // ArrayBuffers to worker threads. It's non-fatal — the server continues normally.
+  if (err?.name === "DataCloneError") {
+    console.warn("[startup] DataCloneError suppressed — WebContainer MessagePort limitation, server continues");
+    return;
+  }
   process.exit(1);
 });
 process.on("unhandledRejection", (reason: any) => {
@@ -180,13 +186,15 @@ app.use((req, res, next) => {
     host: "0.0.0.0",
   }, async () => {
     log(`serving on port ${port}`);
-    try {
-      const { pool } = await import("./db");
-      const client = await pool.connect();
-      console.log("✓ Connected to Supabase database successfully");
-      client.release();
-    } catch (err: any) {
-      console.error("✗ Supabase connection failed:", err.message);
+    if (process.env.SKIP_DB_STARTUP !== "true") {
+      try {
+        const { pool } = await import("./db");
+        const client = await pool.connect();
+        console.log("✓ Connected to Supabase database successfully");
+        client.release();
+      } catch (err: any) {
+        console.error("✗ Supabase connection failed:", err.message);
+      }
     }
     console.log(`✓ Server ready at http://localhost:${port}`);
   });
