@@ -1,4 +1,17 @@
 import "dotenv/config";
+
+// Global error handlers — surface DOMException / uncaught errors with full detail.
+process.on("uncaughtException", (err: any) => {
+  console.error("UNCAUGHT_EXCEPTION name:", err?.name);
+  console.error("UNCAUGHT_EXCEPTION message:", err?.message);
+  console.error("UNCAUGHT_EXCEPTION stack:", err?.stack ?? "(no stack)");
+  process.exit(1);
+});
+process.on("unhandledRejection", (reason: any) => {
+  console.error("UNHANDLED_REJECTION:", reason?.message ?? reason);
+  console.error("UNHANDLED_REJECTION stack:", reason?.stack ?? "(no stack)");
+});
+
 import express, { type Request, Response, NextFunction } from "express";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
@@ -114,8 +127,11 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  console.log("[startup] registering routes...");
   const server = await registerRoutes(app);
+  console.log("[startup] routes registered");
 
+  // Error handling middleware must be added AFTER routes
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
     // Sanitize ENOENT errors: never expose server filesystem paths to the client.
@@ -141,7 +157,16 @@ app.use((req, res, next) => {
   });
 
   if (app.get("env") === "development") {
-    await setupVite(app, server);
+    console.log("[startup] starting Vite...");
+    try {
+      await setupVite(app, server);
+      console.log("[startup] Vite ready");
+    } catch (err: any) {
+      console.error("[startup] Vite failed:", err?.message ?? err);
+      console.error("[startup] Vite stack:", err?.stack ?? "(no stack)");
+      // Fall back to serving the pre-built dist if Vite setup fails in Bolt.
+      try { serveStatic(app); } catch { /* dist may not exist in dev */ }
+    }
   } else {
     serveStatic(app);
   }
@@ -149,12 +174,12 @@ app.use((req, res, next) => {
   // Bolt injects PORT=9091 for its own preview proxy — never bind to that.
   const rawPort = parseInt(process.env.PORT || '5000', 10);
   const port = rawPort === 9091 ? 5000 : rawPort;
+  console.log("[startup] binding port", port);
   server.listen({
     port,
     host: "0.0.0.0",
   }, async () => {
     log(`serving on port ${port}`);
-    // Single DB connection test at startup — keeps logs clean.
     try {
       const { pool } = await import("./db");
       const client = await pool.connect();
