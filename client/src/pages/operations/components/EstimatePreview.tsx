@@ -1,4 +1,6 @@
 import React from "react";
+import { isBoltMode } from "../../../lib/supabase";
+import { fetchExecutionStores, createInvoice } from "../../../lib/api";
 import { AlertTriangle, Briefcase, Camera, CheckCircle2, ChevronRight, Copy, Download, Edit3, Eye, File, FileCheck2, FilePlus, FileSpreadsheet, FileText, FileUp, Image as ImageIcon, Paperclip, Pen, Plus, Printer, ScanLine, Store as StoreIcon, Upload, X } from "lucide-react";
 import { isAblblFormat } from "../../../../../shared/textFormat";
 import { formatProductDetails } from "../../../../../shared/productDetails";
@@ -432,13 +434,19 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
             }
             setExecutionStoresLoading(true);
             try {
-              const res = await fetch(`/api/operations/execution-stores?estimateId=${selectedEstimate.id}`, {
-                headers: { Authorization: `Bearer ${token}` },
-              });
-              if (res.ok) {
-                const rows = await res.json();
-                setExecutionStores(rows);
-                setSelectedExecutionStore(prev => prev ? rows.find((row: ExecutionStoreRow) => row.id === prev.id) || null : null);
+              if (isBoltMode) {
+                const rows = await fetchExecutionStores(token, selectedEstimate.id);
+                setExecutionStores(rows as any[]);
+                setSelectedExecutionStore((prev: any) => prev ? (rows as any[]).find((row: any) => row.id === prev.id) || null : null);
+              } else {
+                const res = await fetch(`/api/operations/execution-stores?estimateId=${selectedEstimate.id}`, {
+                  headers: { Authorization: `Bearer ${token}` },
+                });
+                if (res.ok) {
+                  const rows = await res.json();
+                  setExecutionStores(rows);
+                  setSelectedExecutionStore((prev: any) => prev ? rows.find((row: any) => row.id === prev.id) || null : null);
+                }
               }
             } catch {
               setExecutionStores([]);
@@ -1439,11 +1447,6 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
           }
           setGeneratingInvoice(true);
           try {
-            const numRes = await fetch("/api/numbering/invoice/next", {
-              headers: { Authorization: `Bearer ${token}` },
-            });
-            if (!numRes.ok) throw new Error("Invoice number could not be generated");
-            const { number } = await numRes.json();
             const invoiceDate = new Date();
             const dueDate = new Date(Date.now() + 30 * 86400000);
             const lines = estimateItemsToInvoiceLines(previewItems);
@@ -1451,43 +1454,53 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
             const taxAmount = Number(selectedEstimate.taxAmount || lines.reduce((sum, row) => sum + Number(row.taxAmount || 0), 0));
             const totalAmount = Number(selectedEstimate.totalAmount || amount + taxAmount);
             const primaryChallan = activeSelectedChallans[0] || null;
-            const res = await fetch("/api/finance/invoices", {
-              method: "POST",
-              headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-              body: JSON.stringify({
-                invoiceNumber: number,
-                type: "sales",
-                partyName: selectedEstimate.billingLegalNameSnapshot || selectedEstimate.billingTo || selectedEstimate.title || "Client",
-                amount,
-                taxAmount,
-                totalAmount,
-                date: invoiceDate.toISOString(),
-                dueDate: dueDate.toISOString(),
-                status: "draft",
-                estimateId: selectedEstimate.id,
-                clientId: selectedEstimate.clientId,
-                paidAmount: 0,
-                balanceAmount: totalAmount,
-                packetSettings: {
-                  source: "project_dashboard",
-                  storeCount: dashboardStats.stores,
-                  generatedStoreCount,
-                  signedStoreCount,
-                  photoStoreCount,
-                  readinessChecks,
-                },
-                deliveryChallanId: primaryChallan?.id || null,
-                lineItems: lines,
-                poNumber: selectedEstimate.poNumber || null,
-                poReference: selectedEstimate.poRemarks || null,
-                remarks: `Generated from ${selectedEstimate.estimateNumber}`,
-              }),
-            });
-            if (!res.ok) {
-              const body = await res.json().catch(() => ({}));
-              throw new Error(body.message || "Invoice generation failed");
+            const invoicePayload = {
+              type: "sales",
+              partyName: selectedEstimate.billingLegalNameSnapshot || selectedEstimate.billingTo || selectedEstimate.title || "Client",
+              amount,
+              taxAmount,
+              totalAmount,
+              date: invoiceDate.toISOString(),
+              dueDate: dueDate.toISOString(),
+              status: "draft",
+              estimateId: selectedEstimate.id,
+              clientId: selectedEstimate.clientId,
+              paidAmount: 0,
+              balanceAmount: totalAmount,
+              packetSettings: {
+                source: "project_dashboard",
+                storeCount: dashboardStats.stores,
+                generatedStoreCount,
+                signedStoreCount,
+                photoStoreCount,
+                readinessChecks,
+              },
+              deliveryChallanId: primaryChallan?.id || null,
+              lineItems: lines,
+              poNumber: selectedEstimate.poNumber || null,
+              poReference: selectedEstimate.poRemarks || null,
+              remarks: `Generated from ${selectedEstimate.estimateNumber}`,
+            };
+            let created: any;
+            if (isBoltMode) {
+              created = await createInvoice(token, invoicePayload);
+            } else {
+              const numRes = await fetch("/api/numbering/invoice/next", {
+                headers: { Authorization: `Bearer ${token}` },
+              });
+              if (!numRes.ok) throw new Error("Invoice number could not be generated");
+              const { number } = await numRes.json();
+              const res = await fetch("/api/finance/invoices", {
+                method: "POST",
+                headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+                body: JSON.stringify({ invoiceNumber: number, ...invoicePayload }),
+              });
+              if (!res.ok) {
+                const body = await res.json().catch(() => ({}));
+                throw new Error(body.message || "Invoice generation failed");
+              }
+              created = await res.json();
             }
-            const created = await res.json();
             onInvoiceGenerated && await onInvoiceGenerated(created);
             openInvoiceEditor && openInvoiceEditor({ invoiceId: created.id });
           } catch (err: any) {
@@ -1640,9 +1653,10 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
                 )}
 	                {!isPageWorkspace && isProjectWorkspace && (
                   <a
-                    href={`/api/operations/estimates/${selectedEstimate.id}/export-excel`}
-                    target="_blank"
+                    href={isBoltMode ? "#" : `/api/operations/estimates/${selectedEstimate.id}/export-excel`}
+                    target={isBoltMode ? undefined : "_blank"}
                     rel="noreferrer"
+                    onClick={isBoltMode ? (e) => { e.preventDefault(); alert("Export migration to Edge Function pending."); } : undefined}
                     className="inline-flex items-center gap-1.5 py-1 px-3 bg-green-50 border border-green-200 text-green-700 text-xs font-bold rounded-lg hover:bg-green-100 transition"
                   >
                     <FileSpreadsheet className="w-3.5 h-3.5" />
@@ -1670,9 +1684,10 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
 	                      Export PDF
 	                    </button>
 	                    <a
-	                      href={`/api/operations/estimates/${selectedEstimate.id}/export-excel`}
-	                      target="_blank"
+	                      href={isBoltMode ? "#" : `/api/operations/estimates/${selectedEstimate.id}/export-excel`}
+	                      target={isBoltMode ? undefined : "_blank"}
 	                      rel="noreferrer"
+	                      onClick={isBoltMode ? (e) => { e.preventDefault(); alert("Export migration to Edge Function pending."); } : undefined}
 	                      className="inline-flex items-center gap-1.5 py-1 px-3 bg-green-50 border border-green-200 text-green-700 text-xs font-bold rounded-lg hover:bg-green-100 transition"
 	                    >
 	                      <FileSpreadsheet className="w-3.5 h-3.5" />
@@ -1743,6 +1758,10 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
                   input.onchange = async (ev) => {
                     const files = Array.from((ev.target as HTMLInputElement).files || []);
                     if (!files.length) return;
+                    if (isBoltMode) {
+                      alert("Upload migration to Supabase Storage pending. File uploads are not yet available in Bolt preview mode.");
+                      return;
+                    }
                     for (const file of files) {
                       const fd = new FormData();
                       fd.append("file", file);

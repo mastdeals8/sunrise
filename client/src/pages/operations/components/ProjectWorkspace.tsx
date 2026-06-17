@@ -1,4 +1,6 @@
 import React from "react";
+import { isBoltMode } from "../../../lib/supabase";
+import { fetchEstimateItems, fetchDeliveryChallansForEstimate, fetchExecutionStores, fetchExecutionDocuments, fetchInvoiceForEstimate } from "../../../lib/api";
 import {
   ArrowLeft, Camera, CheckCircle, CheckCircle2, ChevronRight, Clock,
   Download, ExternalLink, Eye, File, FileCheck2, FilePlus, FileText,
@@ -239,14 +241,22 @@ const normalizeProjectData = (payload: any): ProjectData => ({
   })) : [],
 });
 
-const loadProjectDataFallback = async (estimate: Estimate, authHeader: Record<string, string>) => {
-  const [items, challans, stores, docs, invoice] = await Promise.all([
-    fetchJson(`/api/operations/estimates/${estimate.id}/items`, { headers: authHeader }).catch(() => []),
-    fetchJson(`/api/operations/delivery-challans/estimate/${estimate.id}`, { headers: authHeader }).catch(() => []),
-    fetchJson(`/api/operations/execution-stores?estimateId=${estimate.id}`, { headers: authHeader }).catch(() => []),
-    fetchJson(`/api/operations/execution-documents?estimateId=${estimate.id}`, { headers: authHeader }).catch(() => []),
-    fetchJson(`/api/finance/invoices/estimate/${estimate.id}`, { headers: authHeader }).catch(() => null),
-  ]);
+const loadProjectDataFallback = async (estimate: Estimate, authHeader: Record<string, string>, token?: string | null) => {
+  const [items, challans, stores, docs, invoice] = isBoltMode
+    ? await Promise.all([
+        fetchEstimateItems(token ?? null, estimate.id).catch(() => []),
+        fetchDeliveryChallansForEstimate(token ?? null, estimate.id).catch(() => []),
+        fetchExecutionStores(token ?? null, estimate.id).catch(() => []),
+        fetchExecutionDocuments(token ?? null, estimate.id).catch(() => []),
+        fetchInvoiceForEstimate(token ?? null, estimate.id).catch(() => null),
+      ])
+    : await Promise.all([
+        fetchJson(`/api/operations/estimates/${estimate.id}/items`, { headers: authHeader }).catch(() => []),
+        fetchJson(`/api/operations/delivery-challans/estimate/${estimate.id}`, { headers: authHeader }).catch(() => []),
+        fetchJson(`/api/operations/execution-stores?estimateId=${estimate.id}`, { headers: authHeader }).catch(() => []),
+        fetchJson(`/api/operations/execution-documents?estimateId=${estimate.id}`, { headers: authHeader }).catch(() => []),
+        fetchJson(`/api/finance/invoices/estimate/${estimate.id}`, { headers: authHeader }).catch(() => null),
+      ]);
   const projectDocuments = Array.isArray(docs)
     ? docs.filter((doc: any) => !doc?.storeCode || ["po", "transport_receipt", "extra"].includes(doc?.documentType))
     : [];
@@ -369,6 +379,7 @@ const StoreDrawer: React.FC<{
   const authHeader = { Authorization: `Bearer ${token}` };
 
   const saveNotes = async () => {
+    if (isBoltMode) { alert("Store notes update migration pending."); return; }
     setSavingNotes(true);
     try {
       await fetch(`/api/operations/execution-stores/${row.id}`, {
@@ -383,6 +394,7 @@ const StoreDrawer: React.FC<{
   };
 
   const toggleBilling = async () => {
+    if (isBoltMode) { alert("Billing status update migration pending."); return; }
     setTogglingBilling(true);
     try {
       await fetch(`/api/operations/execution-stores/${row.id}`, {
@@ -397,6 +409,10 @@ const StoreDrawer: React.FC<{
   };
 
   const uploadDoc = async (file: File, docType: "photo" | "signed_wcc") => {
+    if (isBoltMode) {
+      alert("Upload migration to Supabase Storage pending. File uploads are not yet available in Bolt preview mode.");
+      return;
+    }
     setUploading(true);
     try {
       const fd = new FormData();
@@ -431,6 +447,7 @@ const StoreDrawer: React.FC<{
   };
 
   const deleteDoc = async (doc: ExecDoc) => {
+    if (isBoltMode) { alert("Delete migration pending."); return; }
     if (!confirm(`Delete ${doc.originalFileName || "this file"}?`)) return;
     await fetch(`/api/operations/execution-documents/${doc.id}`, { method: "DELETE", headers: authHeader });
     onRefresh();
@@ -797,6 +814,7 @@ const PhotosTab: React.FC<{
   const authHeader = { Authorization: `Bearer ${token}` };
 
   const deleteDoc = async (doc: ExecDoc) => {
+    if (isBoltMode) { alert("Delete migration pending."); return; }
     if (!confirm(`Delete ${doc.originalFileName || "this photo"}?`)) return;
     await fetch(`/api/operations/execution-documents/${doc.id}`, { method: "DELETE", headers: authHeader });
     onRefresh();
@@ -924,6 +942,7 @@ const WccTab: React.FC<{
   const totalSigned = stores.reduce((s, r) => s + r.stats.signedWccCount + r.stats.signedDcCount, 0);
 
   const deleteDoc = async (doc: ExecDoc) => {
+    if (isBoltMode) { alert("Delete migration pending."); return; }
     if (!confirm(`Delete ${doc.originalFileName || "this file"}?`)) return;
     await fetch(`/api/operations/execution-documents/${doc.id}`, { method: "DELETE", headers: authHeader });
     onRefresh();
@@ -1238,12 +1257,17 @@ const DocumentsTab: React.FC<{
   const extraDocs = byType("extra");
 
   const deleteDoc = async (doc: ExecDoc) => {
+    if (isBoltMode) { alert("Delete migration pending."); return; }
     if (!confirm(`Delete ${doc.originalFileName || "this file"}?`)) return;
     await fetch(`/api/operations/execution-documents/${doc.id}`, { method: "DELETE", headers: authHeader });
     onRefresh();
   };
 
   const uploadTransport = async (file: File) => {
+    if (isBoltMode) {
+      alert("Upload migration to Supabase Storage pending. File uploads are not yet available in Bolt preview mode.");
+      return;
+    }
     setUploading(true);
     try {
       const fd = new FormData();
@@ -1263,6 +1287,10 @@ const DocumentsTab: React.FC<{
   };
 
   const uploadExtra = async (file: File) => {
+    if (isBoltMode) {
+      alert("Upload migration to Supabase Storage pending. File uploads are not yet available in Bolt preview mode.");
+      return;
+    }
     setUploading(true);
     try {
       const fd = new FormData();
@@ -1306,15 +1334,17 @@ const DocumentsTab: React.FC<{
           <span className="text-sm font-bold text-slate-700">{estimate.estimateNumber} — {estimate.title}</span>
           <div className="ml-auto flex items-center gap-1.5">
             <a
-              href={`/api/operations/estimates/export/pdf/${estimate.id}`}
-              target="_blank"
+              href={isBoltMode ? "#" : `/api/operations/estimates/export/pdf/${estimate.id}`}
+              target={isBoltMode ? undefined : "_blank"}
               rel="noreferrer"
+              onClick={isBoltMode ? (e) => { e.preventDefault(); alert("Export migration to Edge Function pending."); } : undefined}
               className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded border text-xs font-bold bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100"
             >
               <Eye className="w-3.5 h-3.5" /> View PDF
             </a>
             <a
-              href={`/api/operations/estimates/export/xlsx/${estimate.id}`}
+              href={isBoltMode ? "#" : `/api/operations/estimates/export/xlsx/${estimate.id}`}
+              onClick={isBoltMode ? (e) => { e.preventDefault(); alert("Export migration to Edge Function pending."); } : undefined}
               className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded border text-xs font-bold bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100"
             >
               <Download className="w-3.5 h-3.5" /> Excel
@@ -1700,9 +1730,10 @@ const QuickActionBar: React.FC<{
       </div>
 
       <a
-        href={`/api/operations/estimates/export/pdf/${estimate.id}`}
-        target="_blank"
+        href={isBoltMode ? "#" : `/api/operations/estimates/export/pdf/${estimate.id}`}
+        target={isBoltMode ? undefined : "_blank"}
         rel="noreferrer"
+        onClick={isBoltMode ? (e) => { e.preventDefault(); alert("Export migration to Edge Function pending."); } : undefined}
         className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-bold bg-white border-slate-200 text-slate-700 hover:bg-slate-50 transition"
       >
         <FileText className="w-3.5 h-3.5 text-slate-400" /> View Estimate
@@ -1751,12 +1782,17 @@ const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({
     setLoading(true);
     setError(null);
     try {
-      try {
-        const payload = await fetchJson(`/api/projects/${estimate.id}`, { headers: authHeader });
-        setData(normalizeProjectData(payload));
-      } catch (err: any) {
-        if (!String(err?.message || "").includes("instead of JSON")) throw err;
-        setData(await loadProjectDataFallback(estimate, authHeader));
+      if (isBoltMode) {
+        // In Bolt mode the /api/projects/:id route doesn't exist — go straight to fallback.
+        setData(await loadProjectDataFallback(estimate, authHeader, token));
+      } else {
+        try {
+          const payload = await fetchJson(`/api/projects/${estimate.id}`, { headers: authHeader });
+          setData(normalizeProjectData(payload));
+        } catch (err: any) {
+          if (!String(err?.message || "").includes("instead of JSON")) throw err;
+          setData(await loadProjectDataFallback(estimate, authHeader, token));
+        }
       }
     } catch (e: any) {
       setError(e?.message || "Failed to load project");

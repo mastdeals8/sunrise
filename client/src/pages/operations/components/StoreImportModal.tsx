@@ -7,6 +7,7 @@ import { getStateCode, normalizeStateName } from "@/utils/indiaLocations";
 import type { Brand, Client, Store } from "../types";
 import { importFieldsMap } from "../utils/importFieldsMap";
 import { buildPreview, type ImportPreviewSummary } from "../utils/importMatching";
+import { isBoltMode } from "../../../lib/supabase";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -124,6 +125,7 @@ const StoreImportModal: React.FC<Props> = ({ token, clients, brands, stores, onC
   const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    if (isBoltMode) { alert("Store import migration pending. Bulk import is not yet available in Bolt preview mode."); return; }
     setFileName(file.name);
     setIsParsing(true);
     setStats(null);
@@ -151,6 +153,7 @@ const StoreImportModal: React.FC<Props> = ({ token, clients, brands, stores, onC
 
   const handleCommit = async () => {
     if (!allRows.length) return;
+    if (isBoltMode) { alert("Store import migration pending."); return; }
     setIsCommitting(true);
     const items = mappedRows;
     try {

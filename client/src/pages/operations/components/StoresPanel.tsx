@@ -4,6 +4,7 @@ import type { Client, Brand, Store } from "../types";
 import { normalizeDisplayName } from "../../../../../shared/textFormat";
 import StoreImportModal from "./StoreImportModal";
 import { CityCombobox, StateSelect } from "@/components/IndiaLocationFields";
+import { isBoltMode } from "../../../lib/supabase";
 
 // Subsequence "fuzzy" match: every char in `needle` appears in `haystack` in
 // order (case-insensitive). "aun" matches "Launch" / "auntie" / "Aurangabad".
@@ -160,6 +161,7 @@ const StoresPanel: React.FC<StoresPanelProps> = ({
 
   const patch = async (id: number, body: any) => {
     if (!token) return;
+    if (isBoltMode) { alert("Store update migration pending."); return; }
     const r = await fetch(`/api/operations/stores/${id}`, {
       method: "PATCH",
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
@@ -170,6 +172,7 @@ const StoresPanel: React.FC<StoresPanelProps> = ({
   };
   const hardDelete = async (s: Store) => {
     if (!token) return;
+    if (isBoltMode) { alert("Store delete migration pending."); return; }
     if (!confirm(`Delete store "${s.name}"? Falls back to deactivation if linked to estimates.`)) return;
     const r = await fetch(`/api/operations/stores/${s.id}`, {
       method: "DELETE",
@@ -182,6 +185,7 @@ const StoresPanel: React.FC<StoresPanelProps> = ({
   };
   const duplicate = async (s: Store) => {
     if (!token) return;
+    if (isBoltMode) { alert("Store duplicate migration pending."); return; }
     const newName = prompt(`Duplicate store "${s.name}" — new name?`, `${s.name} (copy)`);
     if (!newName) return;
     const r = await fetch(`/api/operations/stores`, {

@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useAuth } from "../../../contexts/AuthContext";
+import { isBoltMode } from "../../../lib/supabase";
+import { fetchEstimates, fetchEstimateItems, fetchDeliveryChallans, fetchInvoiceById, createInvoice } from "../../../lib/api";
 import { Link } from "wouter";
 import { X, Plus, Trash2, Save, Send, Printer, ChevronLeft } from "lucide-react";
 import { normalizeDisplayName } from "../../../../../shared/textFormat";
@@ -56,74 +58,126 @@ const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ open, invoiceId, estimate
     (async () => {
       try {
         if (invoiceId) {
-          const r = await fetch(`/api/finance/invoices/${invoiceId}`, { headers: { Authorization: `Bearer ${token}` } });
-          if (r.ok) {
-            const data = await r.json();
-            setOrigInvoice(data.invoice);
-            setInvoiceNumber(data.invoice.invoiceNumber);
-            setDate(data.invoice.date?.slice(0, 10) || new Date().toISOString().slice(0, 10));
-            setDueDate(data.invoice.dueDate?.slice(0, 10) || new Date().toISOString().slice(0, 10));
-            setPartyName(data.invoice.partyName || "");
-            setClientId(data.invoice.clientId ?? null);
-            setPoNumber(data.invoice.poNumber || "");
-            setPoReference(data.invoice.poReference || "");
-            setRemarks(data.invoice.remarks || "");
-            setStatus(data.invoice.status || "draft");
-            setLinkedEstimate(data.estimate || null);
-            setLinkedDc(data.deliveryChallan || null);
-            const lines = Array.isArray(data.invoice.lineItems) ? data.invoice.lineItems : [];
-            if (lines.length > 0) {
-              setItems(lines.map((l: any) => ({
-                itemName: l.itemName || "",
+          let inv: any = null;
+          if (isBoltMode) {
+            inv = await fetchInvoiceById(token, invoiceId);
+            if (inv) {
+              setOrigInvoice(inv);
+              setInvoiceNumber(inv.invoiceNumber || inv.invoice_number || "");
+              setDate((inv.date || inv.invoice_date || "").slice(0, 10) || new Date().toISOString().slice(0, 10));
+              setDueDate((inv.dueDate || inv.due_date || "").slice(0, 10) || new Date().toISOString().slice(0, 10));
+              setPartyName(inv.partyName || inv.party_name || "");
+              setClientId(inv.clientId ?? inv.client_id ?? null);
+              setPoNumber(inv.poNumber || inv.po_number || "");
+              setPoReference(inv.poReference || inv.po_reference || "");
+              setRemarks(inv.remarks || "");
+              setStatus(inv.status || "draft");
+              const lines = Array.isArray(inv.lineItems || inv.line_items) ? (inv.lineItems || inv.line_items) : [];
+              setItems(lines.length > 0 ? lines.map((l: any) => ({
+                itemName: l.itemName || l.item_name || "",
                 description: l.description || "",
                 hsn: l.hsn || "",
                 quantity: Number(l.quantity || 0),
                 unit: l.unit || "nos",
                 rate: Number(l.rate || 0),
-                taxPercent: Number(l.taxPercent ?? 18),
+                taxPercent: Number(l.taxPercent ?? l.tax_percent ?? 18),
                 amount: Number(l.amount || 0),
-                taxAmount: Number(l.taxAmount || 0),
-                totalAmount: Number(l.totalAmount || 0),
-              })));
-            } else if (data.estimateItems && data.estimateItems.length > 0) {
-              setItems(estimateItemsToLines(data.estimateItems));
-            } else {
-              setItems([blankRow()]);
+                taxAmount: Number(l.taxAmount || l.tax_amount || 0),
+                totalAmount: Number(l.totalAmount || l.total_amount || 0),
+              })) : [blankRow()]);
+            }
+          } else {
+            const r = await fetch(`/api/finance/invoices/${invoiceId}`, { headers: { Authorization: `Bearer ${token}` } });
+            if (r.ok) {
+              const data = await r.json();
+              setOrigInvoice(data.invoice);
+              setInvoiceNumber(data.invoice.invoiceNumber);
+              setDate(data.invoice.date?.slice(0, 10) || new Date().toISOString().slice(0, 10));
+              setDueDate(data.invoice.dueDate?.slice(0, 10) || new Date().toISOString().slice(0, 10));
+              setPartyName(data.invoice.partyName || "");
+              setClientId(data.invoice.clientId ?? null);
+              setPoNumber(data.invoice.poNumber || "");
+              setPoReference(data.invoice.poReference || "");
+              setRemarks(data.invoice.remarks || "");
+              setStatus(data.invoice.status || "draft");
+              setLinkedEstimate(data.estimate || null);
+              setLinkedDc(data.deliveryChallan || null);
+              const lines = Array.isArray(data.invoice.lineItems) ? data.invoice.lineItems : [];
+              if (lines.length > 0) {
+                setItems(lines.map((l: any) => ({
+                  itemName: l.itemName || "",
+                  description: l.description || "",
+                  hsn: l.hsn || "",
+                  quantity: Number(l.quantity || 0),
+                  unit: l.unit || "nos",
+                  rate: Number(l.rate || 0),
+                  taxPercent: Number(l.taxPercent ?? 18),
+                  amount: Number(l.amount || 0),
+                  taxAmount: Number(l.taxAmount || 0),
+                  totalAmount: Number(l.totalAmount || 0),
+                })));
+              } else if (data.estimateItems && data.estimateItems.length > 0) {
+                setItems(estimateItemsToLines(data.estimateItems));
+              } else {
+                setItems([blankRow()]);
+              }
             }
           }
         } else if (estimateId) {
           // Build new invoice from estimate items
-          const [eRes, iRes, dRes, numRes] = await Promise.all([
-            fetch(`/api/operations/estimates`, { headers: { Authorization: `Bearer ${token}` } }),
-            fetch(`/api/operations/estimates/${estimateId}/items`, { headers: { Authorization: `Bearer ${token}` } }),
-            deliveryChallanId
-              ? fetch(`/api/operations/delivery-challans/${deliveryChallanId}`, { headers: { Authorization: `Bearer ${token}` } })
-              : Promise.resolve(null),
-            fetch(`/api/numbering/invoice/next`, { headers: { Authorization: `Bearer ${token}` } }),
-          ]);
-          if (eRes.ok) {
-            const list = await eRes.json();
-            const est = list.find((e: any) => e.id === estimateId);
+          if (isBoltMode) {
+            const [allEstimates, its, allDcs] = await Promise.all([
+              fetchEstimates(token),
+              fetchEstimateItems(token, estimateId),
+              deliveryChallanId ? fetchDeliveryChallans(token) : Promise.resolve([]),
+            ]);
+            const est = (allEstimates as any[]).find((e: any) => e.id === estimateId);
             setLinkedEstimate(est || null);
             if (est) {
               setPartyName(est.billingLegalNameSnapshot || "");
               setClientId(est.clientId ?? null);
               setPoNumber(est.poNumber || "");
             }
-          }
-          if (iRes.ok) {
-            const its = await iRes.json();
-            setItems(estimateItemsToLines(its));
+            const its_ = its as any[];
+            setItems(its_.length > 0 ? estimateItemsToLines(its_) : [blankRow()]);
+            if (deliveryChallanId) {
+              const dc = (allDcs as any[]).find((d: any) => d.id === deliveryChallanId);
+              if (dc) setLinkedDc(dc);
+            }
+            setInvoiceNumber(`INV-${Date.now().toString().slice(-6)}`);
           } else {
-            setItems([blankRow()]);
-          }
-          if (dRes && dRes.ok) {
-            const dc = await dRes.json();
-            setLinkedDc(dc);
-          }
-          if (numRes.ok) {
-            const { number } = await numRes.json();
-            setInvoiceNumber(number);
+            const [eRes, iRes, dRes, numRes] = await Promise.all([
+              fetch(`/api/operations/estimates`, { headers: { Authorization: `Bearer ${token}` } }),
+              fetch(`/api/operations/estimates/${estimateId}/items`, { headers: { Authorization: `Bearer ${token}` } }),
+              deliveryChallanId
+                ? fetch(`/api/operations/delivery-challans/${deliveryChallanId}`, { headers: { Authorization: `Bearer ${token}` } })
+                : Promise.resolve(null),
+              fetch(`/api/numbering/invoice/next`, { headers: { Authorization: `Bearer ${token}` } }),
+            ]);
+            if (eRes.ok) {
+              const list = await eRes.json();
+              const est = list.find((e: any) => e.id === estimateId);
+              setLinkedEstimate(est || null);
+              if (est) {
+                setPartyName(est.billingLegalNameSnapshot || "");
+                setClientId(est.clientId ?? null);
+                setPoNumber(est.poNumber || "");
+              }
+            }
+            if (iRes.ok) {
+              const its = await iRes.json();
+              setItems(estimateItemsToLines(its));
+            } else {
+              setItems([blankRow()]);
+            }
+            if (dRes && dRes.ok) {
+              const dc = await dRes.json();
+              setLinkedDc(dc);
+            }
+            if (numRes.ok) {
+              const { number } = await numRes.json();
+              setInvoiceNumber(number);
+            }
           }
           setStatus("draft");
         }
@@ -180,25 +234,34 @@ const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ open, invoiceId, estimate
         poReference: poReference || null,
         remarks: remarks || null,
       };
-      let r: Response;
-      if (invoiceId || origInvoice?.id) {
-        const id = invoiceId || origInvoice.id;
-        r = await fetch(`/api/finance/invoices/${id}`, {
-          method: "PATCH",
-          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
+      if (isBoltMode) {
+        if (invoiceId || origInvoice?.id) {
+          // Invoice update not yet migrated to Edge Function — warn but don't crash
+          alert("Invoice update migration to Edge Function pending.");
+          return;
+        }
+        await createInvoice(token, payload);
       } else {
-        r = await fetch(`/api/finance/invoices`, {
-          method: "POST",
-          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-      }
-      if (!r.ok) {
-        const j = await r.json().catch(() => ({}));
-        alert(j.message || "Save failed");
-        return;
+        let r: Response;
+        if (invoiceId || origInvoice?.id) {
+          const id = invoiceId || origInvoice.id;
+          r = await fetch(`/api/finance/invoices/${id}`, {
+            method: "PATCH",
+            headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+        } else {
+          r = await fetch(`/api/finance/invoices`, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+        }
+        if (!r.ok) {
+          const j = await r.json().catch(() => ({}));
+          alert(j.message || "Save failed");
+          return;
+        }
       }
       onSaved();
       onClose();

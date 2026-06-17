@@ -3,6 +3,7 @@ import { Plus, Pencil, Archive, ArchiveRestore, Eye, Save, X, Search, Copy, Tras
 import type { Client } from "../types";
 import { displayFormatLabel, isAblblFormat, normalizeDisplayName, normalizeFormatMode, normalizeGstinPan } from "../../../../../shared/textFormat";
 import ClientForm, { type ClientFormValue } from "./ClientForm";
+import { isBoltMode } from "../../../lib/supabase";
 
 interface ClientsPanelProps {
   clients: Client[];
@@ -87,6 +88,7 @@ const ClientsPanel: React.FC<ClientsPanelProps> = ({
 
   const patchClient = async (id: number, body: any) => {
     if (!token) return;
+    if (isBoltMode) { alert("Client update migration pending."); return; }
     const r = await fetch(`/api/operations/clients/${id}`, {
       method: "PATCH",
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
@@ -102,6 +104,7 @@ const ClientsPanel: React.FC<ClientsPanelProps> = ({
   const restore = (c: Client) => patchClient(c.id, { isActive: true });
   const hardDelete = async (c: Client) => {
     if (!token) return;
+    if (isBoltMode) { alert("Client delete migration pending."); return; }
     if (!confirm(`Delete client "${c.name}" permanently? Falls back to deactivation if estimates exist.`)) return;
     const r = await fetch(`/api/operations/clients/${c.id}`, {
       method: "DELETE",
@@ -114,6 +117,7 @@ const ClientsPanel: React.FC<ClientsPanelProps> = ({
   };
   const duplicate = async (c: Client) => {
     if (!token) return;
+    if (isBoltMode) { alert("Client duplicate migration pending."); return; }
     const newName = prompt(`Duplicate client "${c.name}" — new name?`, `${c.name} (copy)`);
     if (!newName) return;
     const r = await fetch(`/api/operations/clients`, {

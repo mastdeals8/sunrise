@@ -487,6 +487,67 @@ export async function fetchCompanySettings(token: string | null) {
   return Object.fromEntries(rows.map((r: any) => [r.key, r.value]));
 }
 
+// ─── Client Ledger Statement ──────────────────────────────────────────────────
+
+export async function fetchClientLedger(token: string | null, clientId: number) {
+  if (!isBoltMode) {
+    const res = await apiFetch(`/api/finance/ledgers/client/${clientId}`, token);
+    return res.ok ? res.json() : { statement: [] };
+  }
+  // Compute statement from raw tables in Bolt mode.
+  const [invRows, payRows] = await Promise.all([
+    sbSelect<any>("invoices", (q) =>
+      q.select("*").eq("client_id", clientId).order("date", { ascending: true })
+    ),
+    sbSelect<any>("payments", (q) =>
+      q.select("*").eq("client_id", clientId).order("date", { ascending: true })
+    ),
+  ]);
+  const statement = [
+    ...invRows.map((i: any) => ({ type: "invoice", date: i.date || i.createdAt, description: `Invoice ${i.invoiceNumber}`, debit: i.totalAmount, credit: 0, balance: 0 })),
+    ...payRows.map((p: any) => ({ type: "payment", date: p.date || p.createdAt, description: `Payment ${p.voucherNumber || p.id}`, debit: 0, credit: p.amount, balance: 0 })),
+  ].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+  let running = 0;
+  statement.forEach(row => { running += row.debit - row.credit; row.balance = running; });
+  return { statement };
+}
+
+// ─── Billing Profiles ─────────────────────────────────────────────────────────
+
+export async function fetchBillingProfiles(token: string | null, clientId: number) {
+  if (!isBoltMode) {
+    const res = await apiFetch(`/api/operations/clients/${clientId}/billing-profiles`, token);
+    return res.ok ? res.json() : [];
+  }
+  return sbSelect("billing_profiles", (q) =>
+    q.select("*").eq("client_id", clientId).order("legal_company_name")
+  );
+}
+
+// ─── Invoice for a single estimate ───────────────────────────────────────────
+
+export async function fetchInvoiceById(token: string | null, invoiceId: number) {
+  if (!isBoltMode) {
+    const res = await apiFetch(`/api/finance/invoices/${invoiceId}`, token);
+    return res.ok ? res.json() : null;
+  }
+  const rows = await sbSelect<any>("invoices", (q) =>
+    q.select("*").eq("id", invoiceId).limit(1)
+  );
+  return rows[0] ?? null;
+}
+
+export async function fetchInvoiceForEstimate(token: string | null, estimateId: number) {
+  if (!isBoltMode) {
+    const res = await apiFetch(`/api/finance/invoices/estimate/${estimateId}`, token);
+    return res.ok ? res.json() : null;
+  }
+  const rows = await sbSelect<any>("invoices", (q) =>
+    q.select("*").eq("estimate_id", estimateId).limit(1)
+  );
+  return rows[0] ?? null;
+}
+
 // ─── Customer Rate Cards ──────────────────────────────────────────────────────
 
 export async function fetchCustomerRateCards(token: string | null) {

@@ -46,7 +46,7 @@ import ProjectWorkspace from "./components/ProjectWorkspace";
 import WccDcEditor from "./components/WccDcEditor";
 import { useOperationsData, type Invoice } from "./hooks/useOperationsData";
 import { isBoltMode } from "../../lib/supabase";
-import { createEstimate, updateEstimate, createDeliveryChallan, updateDeliveryChallan } from "../../lib/api";
+import { createEstimate, updateEstimate, createDeliveryChallan, updateDeliveryChallan, fetchEstimateItems, fetchDeliveryChallansForEstimate, fetchBillingProfiles as apiFetchBillingProfiles, fetchCompanySettings, createInvoice, createPayment, fetchClientLedger } from "../../lib/api";
 import { useEstimateBuilder } from "./hooks/useEstimateBuilder";
 import { useInvoiceWorkflow } from "./hooks/useInvoiceWorkflow";
 import { useWccDcEditor } from "./hooks/useWccDcEditor";
@@ -301,10 +301,14 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     if (typeof window === "undefined") return;
     const params = new URLSearchParams(window.location.search);
     if (params.get("new") === "1") {
-      void fetch(`/api/numbering/estimate/next`, { headers: { Authorization: `Bearer ${token}` } })
-        .then(r => r.ok ? r.json() : null)
-        .then(j => setEstNumber(j?.number || fallbackEstimateNumber()))
-        .catch(() => setEstNumber(fallbackEstimateNumber()));
+      if (!isBoltMode) {
+        void fetch(`/api/numbering/estimate/next`, { headers: { Authorization: `Bearer ${token}` } })
+          .then(r => r.ok ? r.json() : null)
+          .then(j => setEstNumber(j?.number || fallbackEstimateNumber()))
+          .catch(() => setEstNumber(fallbackEstimateNumber()));
+      } else {
+        setEstNumber(fallbackEstimateNumber());
+      }
       setEstDate(todayYmd);
       setEditingEstimateId(null);
       setShowEstimateForm(true);
@@ -634,8 +638,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
   // state code changes. Failing silently is fine — defaults stay.
   useEffect(() => {
     if (!token) return;
-    fetch("/api/company-settings", { headers: { Authorization: `Bearer ${token}` } })
-      .then(r => r.ok ? r.json() : null)
+    (isBoltMode ? fetchCompanySettings(token) : fetch("/api/company-settings", { headers: { Authorization: `Bearer ${token}` } }).then(r => r.ok ? r.json() : null))
       .then(j => {
         if (!j) return;
         setSellerProfile(j);
@@ -1734,11 +1737,12 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
 
       // Load billing profiles for the client
       try {
-        const res = await fetch(`/api/operations/clients/${clientIdVal}/billing-profiles`, {
-          headers: { Authorization: `Bearer ${token}` }
-        });
-        if (res.ok) {
-          const list = await res.json();
+        const list = isBoltMode
+          ? await apiFetchBillingProfiles(token, Number(clientIdVal))
+          : await fetch(`/api/operations/clients/${clientIdVal}/billing-profiles`, {
+              headers: { Authorization: `Bearer ${token}` }
+            }).then(res => res.ok ? res.json() : []);
+        if (list) {
           setClientBillingProfilesList(list);
           const pickBp = (bp: any) => {
             setEstBillingProfileId(String(bp.id));
@@ -2097,7 +2101,9 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     // (e.g. the new structured multi-line address). The DB row keeps its
     // historical snapshot fields untouched.
     let liveEst: Estimate = est;
-    if ((est as any).billingProfileId && (est as any).clientId) {
+    // In Bolt mode skip the live GST profile overlay — the saved snapshot fields
+    // on the estimate are used directly, which is always the safe fallback.
+    if (!isBoltMode && (est as any).billingProfileId && (est as any).clientId) {
       try {
         const bpRes = await fetch(`/api/operations/clients/${(est as any).clientId}/billing-profiles`, {
           headers: { Authorization: `Bearer ${token}` },
@@ -2130,15 +2136,24 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     setSelectedChallans([]);
     setSelectedEstimateItemsLoading(true);
     try {
-      const res = await fetch(`/api/operations/estimates/${est.id}/items`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      if (res.ok) setSelectedEstimateItems(await res.json());
+      if (isBoltMode) {
+        const [items, challans] = await Promise.all([
+          fetchEstimateItems(token, est.id),
+          fetchDeliveryChallansForEstimate(token, est.id),
+        ]);
+        setSelectedEstimateItems(items as any[]);
+        setSelectedChallans(challans as any[]);
+      } else {
+        const res = await fetch(`/api/operations/estimates/${est.id}/items`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        if (res.ok) setSelectedEstimateItems(await res.json());
 
-      const dRes = await fetch(`/api/operations/delivery-challans/estimate/${est.id}`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      if (dRes.ok) setSelectedChallans(await dRes.json());
+        const dRes = await fetch(`/api/operations/delivery-challans/estimate/${est.id}`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        if (dRes.ok) setSelectedChallans(await dRes.json());
+      }
     } catch (err) {
       console.error("Failed to load details:", err);
     } finally {
@@ -2157,16 +2172,27 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
 
   const handleEditEstimate = async (est: Estimate) => {
     try {
-      const [itemsRes, profilesRes] = await Promise.all([
-        fetch(`/api/operations/estimates/${est.id}/items`, {
-          headers: { Authorization: `Bearer ${token}` }
-        }),
-        fetch(`/api/operations/clients/${est.clientId}/billing-profiles`, {
-          headers: { Authorization: `Bearer ${token}` }
-        }),
-      ]);
-      const items: any[] = itemsRes.ok ? await itemsRes.json() : [];
-      const profiles = profilesRes.ok ? await profilesRes.json() : [];
+      let items: any[] = [];
+      let profiles: any[] = [];
+      if (isBoltMode) {
+        const [rawItems, rawProfiles] = await Promise.all([
+          fetchEstimateItems(token, est.id),
+          est.clientId ? apiFetchBillingProfiles(token, est.clientId) : Promise.resolve([]),
+        ]);
+        items = (rawItems as any[]) || [];
+        profiles = (rawProfiles as any[]) || [];
+      } else {
+        const [itemsRes, profilesRes] = await Promise.all([
+          fetch(`/api/operations/estimates/${est.id}/items`, {
+            headers: { Authorization: `Bearer ${token}` }
+          }),
+          fetch(`/api/operations/clients/${est.clientId}/billing-profiles`, {
+            headers: { Authorization: `Bearer ${token}` }
+          }),
+        ]);
+        items = itemsRes.ok ? await itemsRes.json() : [];
+        profiles = profilesRes.ok ? await profilesRes.json() : [];
+      }
       setClientBillingProfilesList(profiles);
 
       const grouping = (est.storeGrouping as Record<string, any>) || {};
@@ -2725,16 +2751,20 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     setWccAuthPerson("");
     // Pre-select the store in the WCC modal
     setDcWccStoreScope(storeId ? String(storeId) : "");
-    try {
-      const r = await fetch("/api/numbering/wcc/next", { headers: { Authorization: `Bearer ${token}` } });
-      if (r.ok) {
-        const { number } = await r.json();
-        setDcNumberVal(number);
-      } else {
+    if (isBoltMode) {
+      setDcNumberVal(`WCC-${Date.now().toString().slice(-6)}`);
+    } else {
+      try {
+        const r = await fetch("/api/numbering/wcc/next", { headers: { Authorization: `Bearer ${token}` } });
+        if (r.ok) {
+          const { number } = await r.json();
+          setDcNumberVal(number);
+        } else {
+          setDcNumberVal(`WCC-${Date.now().toString().slice(-6)}`);
+        }
+      } catch {
         setDcNumberVal(`WCC-${Date.now().toString().slice(-6)}`);
       }
-    } catch {
-      setDcNumberVal(`WCC-${Date.now().toString().slice(-6)}`);
     }
     setShowDcModal(true);
   };
@@ -2745,16 +2775,20 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     setShowPoModal(false);
     setShowDcPreviewModal(false);
     setSelectedDcForPreview(null);
-    try {
-      const r = await fetch(`/api/numbering/dc/next`, { headers: { Authorization: `Bearer ${token}` } });
-      if (r.ok) {
-        const { number } = await r.json();
-        setDcNumberVal(number);
-      } else {
+    if (isBoltMode) {
+      setDcNumberVal(`DC-${Date.now().toString().slice(-6)}`);
+    } else {
+      try {
+        const r = await fetch(`/api/numbering/dc/next`, { headers: { Authorization: `Bearer ${token}` } });
+        if (r.ok) {
+          const { number } = await r.json();
+          setDcNumberVal(number);
+        } else {
+          setDcNumberVal(`DC-${Date.now().toString().slice(-6)}`);
+        }
+      } catch {
         setDcNumberVal(`DC-${Date.now().toString().slice(-6)}`);
       }
-    } catch {
-      setDcNumberVal(`DC-${Date.now().toString().slice(-6)}`);
     }
     setEditingDcId(null);
     setStandaloneDcEditor(true);
@@ -2790,10 +2824,12 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
 
     // Find next sequential dc number once, then increment per loop
     let seqBase: string | null = null;
-    try {
-      const r = await fetch(`/api/numbering/dc/next`, { headers: { Authorization: `Bearer ${token}` } });
-      if (r.ok) seqBase = (await r.json()).number;
-    } catch {/* fall through to timestamp scheme */}
+    if (!isBoltMode) {
+      try {
+        const r = await fetch(`/api/numbering/dc/next`, { headers: { Authorization: `Bearer ${token}` } });
+        if (r.ok) seqBase = (await r.json()).number;
+      } catch {/* fall through to timestamp scheme */}
+    }
 
     let createdCount = 0;
     for (let i = 0; i < sids.length; i++) {
@@ -3196,12 +3232,24 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
       remarks: invoiceRemarksInput || null,
     };
     try {
-      const res = await fetch("/api/finance/invoices", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify(payload),
-      });
-      if (res.ok) {
+      let ok = false;
+      if (isBoltMode) {
+        await createInvoice(token, payload);
+        ok = true;
+      } else {
+        const res = await fetch("/api/finance/invoices", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) {
+          const err = await res.json();
+          setMessage("Error: " + (err.message || "Invoice creation failed"));
+        } else {
+          ok = true;
+        }
+      }
+      if (ok) {
         setShowPacketBuilder(false);
         setSelectedEstForPacket(null);
         setInvoiceNumberInput("");
@@ -3209,11 +3257,9 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
         await fetchLedgerData();
         setActiveTab("invoices_ledger");
         setInvoiceSubTab("ledger");
-      } else {
-        const err = await res.json();
-        setMessage("Error: " + (err.message || "Invoice creation failed"));
       }
-    } catch (err) {
+    } catch (err: any) {
+      setMessage("Error: " + (err.message || "Invoice creation failed"));
       console.error(err);
     }
   };
@@ -3241,19 +3287,31 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
       allocatedInvoices: allocatedList,
     };
     try {
-      const res = await fetch("/api/finance/payments", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify(payload),
-      });
-      if (res.ok && allocatedList.length > 0) {
-        await fetch("/api/finance/payments/allocate", {
+      let ok = false;
+      let paymentErrMsg = "Payment recording failed";
+      if (isBoltMode) {
+        await createPayment(token, payload);
+        ok = true;
+      } else {
+        const res = await fetch("/api/finance/payments", {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-          body: JSON.stringify({ allocations: allocatedList }),
+          body: JSON.stringify(payload),
         });
+        if (res.ok && allocatedList.length > 0) {
+          await fetch("/api/finance/payments/allocate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+            body: JSON.stringify({ allocations: allocatedList }),
+          });
+        }
+        ok = res.ok;
+        if (!ok) {
+          const errBody = await res.json().catch(() => ({}));
+          paymentErrMsg = errBody.message || "Payment recording failed";
+        }
       }
-      if (res.ok) {
+      if (ok) {
         setShowRecordPayment(false);
         setPaymentClientId("");
         setPaymentAmount("");
@@ -3261,8 +3319,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
         setPaymentAllocations({});
         await fetchLedgerData();
       } else {
-        const err = await res.json();
-        setMessage("Error: " + (err.message || "Payment recording failed"));
+        setMessage("Error: " + paymentErrMsg);
       }
     } catch (err) {
       console.error(err);
@@ -3273,13 +3330,8 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     setStatementLoading(true);
     setActiveLedgerClientId(clientId);
     try {
-      const res = await fetch(`/api/finance/ledgers/client/${clientId}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setClientStatement(data.statement || []);
-      }
+      const data = await fetchClientLedger(token, clientId);
+      setClientStatement((data as any)?.statement || []);
     } catch (err) {
       console.error(err);
     } finally {

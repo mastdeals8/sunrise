@@ -2,6 +2,8 @@ import React, { useEffect, useState } from "react";
 import { useAuth } from "../contexts/AuthContext";
 import { Settings as SettingsIcon, Save, Building2, FileText, CreditCard, Image as ImageIcon, Upload } from "lucide-react";
 import { INDIA_STATES, getStateCode } from "@/utils/indiaLocations";
+import { isBoltMode } from "../lib/supabase";
+import { fetchCompanySettings } from "../lib/api";
 
 interface SettingsState {
   companyName: string;
@@ -65,10 +67,14 @@ const SettingsPage: React.FC = () => {
   useEffect(() => {
     const load = async () => {
       try {
-        console.log("[settings-debug] Settings page loading /api/company-settings (app_settings canonical keys)");
-        const res = await fetch("/api/company-settings", { headers: { Authorization: `Bearer ${token}` } });
-        if (res.ok) {
-          const data = await res.json();
+        let data: any = null;
+        if (isBoltMode) {
+          data = await fetchCompanySettings(token).catch(() => null);
+        } else {
+          const res = await fetch("/api/company-settings", { headers: { Authorization: `Bearer ${token}` } });
+          if (res.ok) data = await res.json();
+        }
+        if (data) {
           setForm({
             companyName: String(data.name ?? empty.companyName),
             companyAddress: String(data.address ?? empty.companyAddress),
@@ -105,9 +111,9 @@ const SettingsPage: React.FC = () => {
 
   const save = async () => {
     if (!isAdmin) return;
+    if (isBoltMode) { setMsg({ kind: "err", text: "Settings save migration pending." }); setTimeout(() => setMsg(null), 4000); return; }
     setSaving(true);
     try {
-      console.log("[settings-debug] Settings page saving /api/company-settings (app_settings canonical keys)");
       const res = await fetch("/api/company-settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
@@ -178,6 +184,7 @@ const SettingsPage: React.FC = () => {
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
+    if (isBoltMode) { setMsg({ kind: "err", text: "Upload migration to Supabase Storage pending." }); setTimeout(() => setMsg(null), 4000); return; }
     setMsg(null);
     try {
       const body = new FormData();

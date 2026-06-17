@@ -158,6 +158,7 @@ const FinancePage: React.FC = () => {
   useEffect(() => {
     const fetchLedger = async () => {
       if (!selectedAccountId) return;
+      if (isBoltMode) return; // ledger drill-down not yet migrated
       try {
         const res = await fetch(`/api/finance/ledger/${selectedAccountId}`, {
           headers: { Authorization: `Bearer ${token}` }

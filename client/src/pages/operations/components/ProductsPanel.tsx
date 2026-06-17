@@ -5,6 +5,7 @@ import { normalizeDisplayName } from "../../../../../shared/textFormat";
 import { isSystemServiceProduct } from "../../../../../shared/systemServices";
 import CategoryAutocomplete, { categoryKey, normalizeCategoryLabel } from "./CategoryAutocomplete";
 import ProductForm, { type ProductFormValue } from "./ProductForm";
+import { isBoltMode } from "../../../lib/supabase";
 
 interface ProductsPanelProps {
   products: Product[];
@@ -117,6 +118,7 @@ const ProductsPanel: React.FC<ProductsPanelProps> = ({
 
   const patch = async (id: number, body: any) => {
     if (!token) return;
+    if (isBoltMode) { alert("Product update migration pending."); return; }
     const r = await fetch(`/api/operations/products/${id}`, {
       method: "PATCH",
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
@@ -127,6 +129,7 @@ const ProductsPanel: React.FC<ProductsPanelProps> = ({
   };
   const hardDelete = async (p: Product) => {
     if (!token) return;
+    if (isBoltMode) { alert("Product delete migration pending."); return; }
     if (!confirm(`Delete product "${p.name}"? If used in an estimate it will be deactivated instead.`)) return;
     const r = await fetch(`/api/operations/products/${p.id}`, {
       method: "DELETE",
@@ -139,6 +142,7 @@ const ProductsPanel: React.FC<ProductsPanelProps> = ({
   };
   const duplicate = async (p: Product) => {
     if (!token) return;
+    if (isBoltMode) { alert("Product duplicate migration pending."); return; }
     const newName = prompt(`Duplicate product "${p.name}" — new name?`, `${p.name} (copy)`);
     if (!newName) return;
     const r = await fetch(`/api/operations/products`, {

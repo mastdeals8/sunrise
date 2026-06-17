@@ -9,6 +9,7 @@ import { formatCurrency } from "../utils/formatters";
 import ProductForm, { type ProductFormValue, emptyProductFormValue } from "./ProductForm";
 import { categoryKey, normalizeCategoryLabel } from "./CategoryAutocomplete";
 import ClientForm, { type ClientFormValue, emptyClientFormValue } from "./ClientForm";
+import { isBoltMode } from "../../../lib/supabase";
 
 // ─── Create Product Drawer ───────────────────────────────────────────────────
 // Renders as a fixed right-side panel (pointer-events passthrough backdrop so
@@ -49,6 +50,7 @@ const CreateProductDrawer: React.FC<CreateProductDrawerProps> = ({ initialName, 
   const handleSave = async () => {
     const trimmedName = value.name.trim();
     if (!trimmedName) { setError("Product name is required."); return; }
+    if (isBoltMode) { setError("Product create migration pending."); return; }
     setSaving(true);
     setError("");
     try {
@@ -167,6 +169,7 @@ const CreateClientDrawer: React.FC<CreateClientDrawerProps> = ({ initialName, to
   const handleSave = async () => {
     const trimmedName = value.name.trim();
     if (!trimmedName) { setError("Company name is required."); return; }
+    if (isBoltMode) { setError("Client create migration pending."); return; }
     setSaving(true);
     setError("");
     try {
@@ -1452,10 +1455,14 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                   <button
                     onClick={async () => {
                       try {
-                        const r = await fetch(`/api/numbering/estimate/next`, { headers: { Authorization: `Bearer ${token}` } });
-                        if (r.ok) {
-                          const { number } = await r.json();
-                          setEstNumber(number);
+                        if (!isBoltMode) {
+                          const r = await fetch(`/api/numbering/estimate/next`, { headers: { Authorization: `Bearer ${token}` } });
+                          if (r.ok) {
+                            const { number } = await r.json();
+                            setEstNumber(number);
+                          } else {
+                            setEstNumber("");
+                          }
                         } else {
                           setEstNumber("");
                         }
@@ -1631,8 +1638,9 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
 	                                  <Edit3 className="w-3.5 h-3.5" />
 	                                </button>
 	                                <a
-	                                  href={`/api/operations/estimates/${e.id}/export-excel`}
+	                                  href={isBoltMode ? "#" : `/api/operations/estimates/${e.id}/export-excel`}
 	                                  title="Download as Excel"
+	                                  onClick={isBoltMode ? (ev) => { ev.preventDefault(); alert("Export migration to Edge Function pending."); } : undefined}
 	                                  className="inline-flex h-7 w-7 items-center justify-center rounded border border-slate-200 bg-white text-emerald-700 hover:bg-emerald-50 transition"
 	                                  aria-label="Export Excel"
 	                                >

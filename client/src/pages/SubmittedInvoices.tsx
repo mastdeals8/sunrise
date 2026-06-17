@@ -4,6 +4,8 @@ import { useAuth } from "../contexts/AuthContext";
 import { useGlobalDate } from "../contexts/GlobalDateContext";
 import { Link } from "wouter";
 import { Receipt, Search, ExternalLink, FileText, FileCode2, Settings as SettingsIcon } from "lucide-react";
+import { isBoltMode } from "../lib/supabase";
+import { fetchInvoices } from "../lib/api";
 
 interface Invoice {
   id: number;
@@ -53,11 +55,14 @@ const SubmittedInvoicesPage: React.FC = () => {
   useEffect(() => {
     const load = async () => {
       try {
-        const res = await fetch("/api/finance/invoices", { headers: { Authorization: `Bearer ${token}` } });
-        if (res.ok) {
-          const data = await res.json();
-          setInvoices(data.filter((row: Invoice) => globalDate.isInRange(row.date || row.createdAt)));
+        let data: any[] = [];
+        if (isBoltMode) {
+          data = (await fetchInvoices(token)) as any[];
+        } else {
+          const res = await fetch("/api/finance/invoices", { headers: { Authorization: `Bearer ${token}` } });
+          if (res.ok) data = await res.json();
         }
+        setInvoices(data.filter((row: Invoice) => globalDate.isInRange(row.date || row.createdAt)));
       } catch (err) {
         console.error(err);
       } finally {

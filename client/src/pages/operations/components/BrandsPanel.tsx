@@ -2,6 +2,7 @@ import React, { useMemo, useState } from "react";
 import { Plus, Pencil, Archive, ArchiveRestore, Save, X, Search, Trash2, Copy } from "lucide-react";
 import type { Brand, Client } from "../types";
 import { normalizeDisplayName } from "../../../../../shared/textFormat";
+import { isBoltMode } from "../../../lib/supabase";
 
 interface BrandsPanelProps {
   brands: Brand[];
@@ -65,6 +66,7 @@ const BrandsPanel: React.FC<BrandsPanelProps> = ({
   };
   const patch = async (id: number, body: any) => {
     if (!token) return;
+    if (isBoltMode) { alert("Brand update migration pending."); return; }
     const r = await fetch(`/api/operations/brands/${id}`, {
       method: "PATCH",
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
@@ -74,6 +76,7 @@ const BrandsPanel: React.FC<BrandsPanelProps> = ({
   };
   const hardDelete = async (b: Brand) => {
     if (!token) return;
+    if (isBoltMode) { alert("Brand delete migration pending."); return; }
     if (!confirm(`Delete brand "${b.name}" permanently? This cannot be undone.`)) return;
     const r = await fetch(`/api/operations/brands/${b.id}`, {
       method: "DELETE",
@@ -87,6 +90,7 @@ const BrandsPanel: React.FC<BrandsPanelProps> = ({
   };
   const duplicate = async (b: Brand) => {
     if (!token) return;
+    if (isBoltMode) { alert("Brand duplicate migration pending."); return; }
     const newName = prompt(`Duplicate "${b.name}" — new name?`, `${b.name} (copy)`);
     if (!newName) return;
     const r = await fetch(`/api/operations/brands`, {

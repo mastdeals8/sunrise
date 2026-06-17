@@ -3,6 +3,7 @@ import { Pager, usePagedList } from "@/components/Pager";
 import { Edit3, Eye, Plus, Printer, Search, Trash2 } from "lucide-react";
 import type { Client, DeliveryChallan, Estimate, Store } from "../types";
 import { displayFormatLabel, isAblblFormat } from "../../../../../shared/textFormat";
+import { isBoltMode } from "../../../lib/supabase";
 
 interface DeliveryChallanPanelProps {
   challans: DeliveryChallan[];
@@ -116,6 +117,7 @@ const DeliveryChallanPanel: React.FC<DeliveryChallanPanelProps> = ({
 
   const hardDelete = async (d: DeliveryChallan) => {
     if (!token) return;
+    if (isBoltMode) { alert("WCC delete migration pending."); return; }
     if (!confirm("Delete this WCC?")) return;
     const r = await fetch(`/api/operations/delivery-challans/${d.id}`, {
       method: "PATCH",
@@ -135,6 +137,7 @@ const DeliveryChallanPanel: React.FC<DeliveryChallanPanelProps> = ({
 
   const deleteDuplicateWccs = async () => {
     if (!token || duplicateWccRows.length === 0) return;
+    if (isBoltMode) { alert("WCC duplicate cleanup migration pending."); return; }
     if (!confirm(`Delete ${duplicateWccRows.length} duplicate WCC record${duplicateWccRows.length === 1 ? "" : "s"}? Latest WCC per estimate/store will remain active.`)) return;
     for (const d of duplicateWccRows) {
       const r = await fetch(`/api/operations/delivery-challans/${d.id}`, {
