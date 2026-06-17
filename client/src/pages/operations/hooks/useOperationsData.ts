@@ -1,6 +1,18 @@
 import { useCallback, useEffect, useState } from "react";
 import { isDateInRange, type DateRange } from "../../../contexts/GlobalDateContext";
 import type { Brand, Client, DeliveryChallan, Estimate, MaterialCodeRow, Product, Store } from "../types";
+import { isBoltMode } from "../../../lib/supabase";
+import {
+  fetchClients,
+  fetchBrands,
+  fetchStores,
+  fetchProducts,
+  fetchMaterialCodes,
+  fetchEstimates,
+  fetchDeliveryChallans,
+  fetchInvoices,
+  fetchLedgerSummary,
+} from "../../../lib/api";
 
 export interface Invoice {
   id: number;
@@ -45,15 +57,34 @@ export const useOperationsData = (token?: string | null, globalRange?: DateRange
 
   const headers = { Authorization: `Bearer ${token}` };
 
+  const applyRange = <T,>(rows: T[], dateKey: (r: T) => string | undefined) =>
+    globalRange
+      ? rows.filter((r) => isDateInRange(dateKey(r), globalRange))
+      : rows;
+
   const fetchLedgerData = useCallback(async () => {
     try {
+      if (isBoltMode) {
+        const [inv, summary] = await Promise.all([
+          fetchInvoices(token ?? null),
+          fetchLedgerSummary(token ?? null),
+        ]);
+        setInvoices(
+          applyRange(inv as Invoice[], (r) => (r as any).date || (r as any).createdAt)
+        );
+        setLedgerSummary(summary as LedgerSummary[]);
+        return;
+      }
+
       const [invRes, sumRes] = await Promise.all([
         fetch("/api/finance/invoices", { headers }),
         fetch("/api/finance/ledgers/summary", { headers }),
       ]);
       if (invRes.ok) {
         const rows = await invRes.json();
-        setInvoices(globalRange ? rows.filter((row: Invoice) => isDateInRange(row.date || row.createdAt, globalRange)) : rows);
+        setInvoices(
+          applyRange(rows, (r: Invoice) => r.date || r.createdAt)
+        );
       }
       if (sumRes.ok) setLedgerSummary(await sumRes.json());
     } catch (err) {
@@ -61,28 +92,55 @@ export const useOperationsData = (token?: string | null, globalRange?: DateRange
     }
   }, [token]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Targeted: only refresh the estimates list. Used after estimate save/update
-  // so the register shows updated amounts without waiting for all other data.
-  const fetchEstimates = useCallback(async () => {
+  const fetchEstimatesOnly = useCallback(async () => {
     try {
       const t0 = performance.now();
-      const res = await fetch("/api/operations/estimates", { headers });
-      if (res.ok) {
-        const rows = await res.json();
-        setEstimates(globalRange ? rows.filter((row: Estimate) => isDateInRange(row.estimateDate || row.createdAt, globalRange)) : rows);
-      }
-      console.log(`[fetchEstimates] completed in ${Math.round(performance.now() - t0)}ms`);
+      const rows = await fetchEstimates(token ?? null);
+      setEstimates(
+        applyRange(rows as Estimate[], (r) =>
+          (r as any).estimateDate || (r as any).createdAt
+        )
+      );
+      console.log(`[fetchEstimates] ${Math.round(performance.now() - t0)}ms`);
     } catch (err) {
       console.error("Error loading estimates:", err);
     }
   }, [token, globalRange]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Full refresh — runs all requests in parallel so total time ≈ slowest single
-  // request, not the sum of all requests.
   const fetchData = useCallback(async () => {
     try {
       setLoading(true);
       const t0 = performance.now();
+
+      if (isBoltMode) {
+        const [c, b, s, p, mc, e, dc] = await Promise.all([
+          fetchClients(token ?? null),
+          fetchBrands(token ?? null),
+          fetchStores(token ?? null),
+          fetchProducts(token ?? null),
+          fetchMaterialCodes(token ?? null),
+          fetchEstimates(token ?? null),
+          fetchDeliveryChallans(token ?? null),
+        ]);
+        setClients(c as Client[]);
+        setBrands(b as Brand[]);
+        setStores(s as Store[]);
+        setProducts(p as Product[]);
+        setMaterialCodes(mc as MaterialCodeRow[]);
+        setEstimates(
+          applyRange(e as Estimate[], (r) =>
+            (r as any).estimateDate || (r as any).createdAt
+          )
+        );
+        setChallans(
+          applyRange(dc as DeliveryChallan[], (r) =>
+            (r as any).createdAt || (r as any).deliveryDate
+          )
+        );
+        await fetchLedgerData();
+        console.log(`[fetchData bolt] ${Math.round(performance.now() - t0)}ms`);
+        return;
+      }
 
       const [cRes, bRes, sRes, pRes, mcRes, eRes, dRes] = await Promise.all([
         fetch("/api/operations/clients", { headers }),
@@ -99,18 +157,22 @@ export const useOperationsData = (token?: string | null, globalRange?: DateRange
       if (sRes.ok) setStores(await sRes.json());
       if (pRes.ok) setProducts(await pRes.json());
       if (mcRes?.ok) setMaterialCodes(await mcRes.json());
-
       if (eRes.ok) {
         const rows = await eRes.json();
-        setEstimates(globalRange ? rows.filter((row: Estimate) => isDateInRange(row.estimateDate || row.createdAt, globalRange)) : rows);
+        setEstimates(
+          applyRange(rows, (r: Estimate) => (r as any).estimateDate || (r as any).createdAt)
+        );
       }
       if (dRes.ok) {
         const rows = await dRes.json();
-        setChallans(globalRange ? rows.filter((row: DeliveryChallan) => isDateInRange((row as any).createdAt || row.deliveryDate, globalRange)) : rows);
+        setChallans(
+          applyRange(rows, (r: DeliveryChallan) =>
+            (r as any).createdAt || r.deliveryDate
+          )
+        );
       }
-
       await fetchLedgerData();
-      console.log(`[fetchData] all data loaded in ${Math.round(performance.now() - t0)}ms`);
+      console.log(`[fetchData] ${Math.round(performance.now() - t0)}ms`);
     } catch (err) {
       console.error("Error loading operations data:", err);
     } finally {
@@ -143,7 +205,7 @@ export const useOperationsData = (token?: string | null, globalRange?: DateRange
     ledgerSummary,
     setLedgerSummary,
     fetchLedgerData,
-    fetchEstimates,
+    fetchEstimates: fetchEstimatesOnly,
     fetchData,
   };
 };

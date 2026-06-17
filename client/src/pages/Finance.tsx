@@ -2,6 +2,8 @@ import React, { useEffect, useState } from "react";
 import { formatCurrency } from "@/utils/format";
 import { useAuth } from "../contexts/AuthContext";
 import { useGlobalDate } from "../contexts/GlobalDateContext";
+import { isBoltMode } from "../lib/supabase";
+import { fetchAccounts, fetchInvoices, fetchPayments } from "../lib/api";
 import { 
   Wallet, 
   FileText, 
@@ -99,7 +101,22 @@ const FinancePage: React.FC = () => {
   const fetchFinanceData = async () => {
     try {
       setLoading(true);
-      
+
+      if (isBoltMode) {
+        const [accs, invs, pays] = await Promise.all([
+          fetchAccounts(token),
+          fetchInvoices(token),
+          fetchPayments(token),
+        ]);
+        setAccounts(accs as any[]);
+        if ((accs as any[]).length > 0 && !selectedAccountId) {
+          setSelectedAccountId((accs as any[])[0].id);
+        }
+        setInvoicesList((invs as any[]).filter((r: any) => globalDate.isInRange(r.date)));
+        setPaymentsList((pays as any[]).filter((r: any) => globalDate.isInRange(r.date)));
+        return;
+      }
+
       const resAcc = await fetch("/api/finance/accounts", {
         headers: { Authorization: `Bearer ${token}` }
       });

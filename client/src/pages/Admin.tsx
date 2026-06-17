@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useAuth } from "../contexts/AuthContext";
+import { isBoltMode } from "../lib/supabase";
+import { fetchUsers as fetchUsersApi } from "../lib/api";
 import {
   Users as UsersIcon,
   Plus,
@@ -95,13 +97,15 @@ const AdminPage: React.FC = () => {
   const fetchUsers = async () => {
     setLoading(true);
     try {
+      if (isBoltMode) {
+        const data = await fetchUsersApi(token);
+        setUsers(data as any[]);
+        return;
+      }
       const res = await fetch("/api/users", {
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (res.ok) {
-        const data = await res.json();
-        setUsers(data);
-      }
+      if (res.ok) setUsers(await res.json());
     } catch (err) {
       console.error("fetch users", err);
     } finally {

@@ -5,16 +5,33 @@
  * EXPRESS mode (npm run dev:full):      reads go to existing /api/* endpoints.
  *
  * Write operations always go through Express (or will become Edge Functions).
- * In Bolt mode all writes currently return a "not available" placeholder.
+ * In Bolt mode, writes gracefully fail — the app stays in read-only mode.
  */
 import { supabase, isBoltMode } from "./supabase";
 
-// ─── helpers ────────────────────────────────────────────────────────────────
+// ─── camelCase transformer ────────────────────────────────────────────────────
+// Supabase returns snake_case; the Express/Drizzle backend returns camelCase.
+// Apply this to all Supabase results so existing component code is unchanged.
+function toCamel(o: any): any {
+  if (Array.isArray(o)) return o.map(toCamel);
+  if (o !== null && typeof o === "object") {
+    return Object.fromEntries(
+      Object.entries(o).map(([k, v]) => [
+        k.replace(/_([a-z])/g, (_, c) => c.toUpperCase()),
+        toCamel(v),
+      ])
+    );
+  }
+  return o;
+}
 
+// ─── helpers ──────────────────────────────────────────────────────────────────
+
+/** Show in-app toast or console message for blocked write actions in Bolt mode. */
 export function notAvailableInBolt(action: string): never {
   throw new Error(
     `"${action}" requires the Express backend (npm run dev:full) or a Supabase Edge Function. ` +
-    `This action is not yet available in Bolt preview mode.`
+      `This action is not yet available in Bolt preview mode.`
   );
 }
 
@@ -36,27 +53,25 @@ export async function apiFetch(
   });
 }
 
-// ─── read helpers (Supabase) ─────────────────────────────────────────────────
-
-/** Fetch all rows from a Supabase table. Returns [] on error with console warn. */
+/** Read from a Supabase table. Returns camelCase [] on error. */
 async function sbSelect<T>(
   table: string,
-  query: (q: ReturnType<typeof supabase.from>) => any = (q) => q.select("*")
+  build: (q: ReturnType<typeof supabase.from>) => any = (q) => q.select("*")
 ): Promise<T[]> {
   try {
-    const { data, error } = await query(supabase.from(table));
+    const { data, error } = await build(supabase.from(table));
     if (error) {
       console.warn(`[api] Supabase ${table}:`, error.message);
       return [];
     }
-    return (data ?? []) as T[];
+    return toCamel(data ?? []) as T[];
   } catch (err) {
     console.warn(`[api] Supabase ${table} fetch failed:`, err);
     return [];
   }
 }
 
-// ─── Dashboard ───────────────────────────────────────────────────────────────
+// ─── Dashboard ────────────────────────────────────────────────────────────────
 
 export interface DashboardStats {
   totalRevenue: number;
@@ -103,7 +118,6 @@ export async function fetchDashboard(
     return { totalRevenue: 0, totalReceivables: 0 };
   }
 
-  // Bolt mode: compute from raw Supabase reads
   const [invoices, estimates, deliveryChallans, executionStores] =
     await Promise.all([
       sbSelect<any>("invoices"),
@@ -113,51 +127,52 @@ export async function fetchDashboard(
     ]);
 
   const inRange = (v: string | null) => {
-    if (!v) return true; // no filter if no date
+    if (!v || (!startDate && !endDate)) return true;
     const t = new Date(v).getTime();
     const s = startDate ? new Date(startDate).setHours(0, 0, 0, 0) : 0;
-    const e = endDate ? new Date(endDate).setHours(23, 59, 59, 999) : Infinity;
+    const e = endDate
+      ? new Date(endDate).setHours(23, 59, 59, 999)
+      : Infinity;
     return Number.isFinite(t) && t >= s && t <= (e as number);
   };
 
   const salesInvoices = invoices.filter(
-    (inv: any) => inv.type === "sales" && inRange(inv.date || inv.created_at)
+    (inv: any) => inv.type === "sales" && inRange(inv.date || inv.createdAt)
   );
-
   const totalRevenue = salesInvoices.reduce(
-    (s: number, inv: any) => s + (inv.total_amount || 0),
+    (s: number, inv: any) => s + (inv.totalAmount || 0),
     0
   );
   const totalReceivables = salesInvoices
     .filter((inv: any) => inv.status !== "paid")
-    .reduce((s: number, inv: any) => s + (inv.total_amount || 0), 0);
+    .reduce((s: number, inv: any) => s + (inv.totalAmount || 0), 0);
 
-  const filteredEstimates = estimates.filter((e: any) =>
-    inRange(e.estimate_date || e.created_at)
+  const filteredEst = estimates.filter((e: any) =>
+    inRange(e.estimateDate || e.createdAt)
   );
   const filteredDc = deliveryChallans.filter((dc: any) =>
-    inRange(dc.created_at || dc.delivery_date)
+    inRange(dc.createdAt || dc.deliveryDate)
   );
 
-  // Build recent activity from estimates + delivery_challans (most recent 10)
   const recentItems = [
-    ...filteredEstimates.slice(-5).map((e: any) => ({
+    ...filteredEst.slice(-5).map((e: any) => ({
       type: "estimate",
-      label: e.estimate_number ?? `Estimate #${e.id}`,
+      label: e.estimateNumber ?? `Est #${e.id}`,
       meta: e.title ?? "",
-      date: e.created_at ?? null,
+      date: e.createdAt ?? null,
       href: "/operations",
     })),
     ...filteredDc.slice(-5).map((dc: any) => ({
-      type: dc.document_type === "wcc" ? "wcc" : "wcc",
-      label: dc.dc_number ?? `DC #${dc.id}`,
+      type: "wcc",
+      label: dc.dcNumber ?? `DC #${dc.id}`,
       meta: dc.status ?? "",
-      date: dc.created_at ?? null,
+      date: dc.createdAt ?? null,
       href: "/operations",
     })),
   ]
-    .sort((a, b) =>
-      new Date(b.date ?? 0).getTime() - new Date(a.date ?? 0).getTime()
+    .sort(
+      (a, b) =>
+        new Date(b.date ?? 0).getTime() - new Date(a.date ?? 0).getTime()
     )
     .slice(0, 10);
 
@@ -165,12 +180,14 @@ export async function fetchDashboard(
     totalRevenue,
     totalReceivables,
     erpCounters: {
-      estimatesDraft: filteredEstimates.filter((e: any) => e.status === "draft").length,
-      estimatesAwaitingPo: filteredEstimates.filter((e: any) => e.status === "awaiting_po").length,
-      estimatesApproved: filteredEstimates.filter((e: any) => e.status === "approved").length,
-      poReceived: filteredEstimates.filter((e: any) => e.status === "po_received").length,
+      estimatesDraft: filteredEst.filter((e: any) => e.status === "draft").length,
+      estimatesAwaitingPo: filteredEst.filter((e: any) => e.status === "awaiting_po").length,
+      estimatesApproved: filteredEst.filter((e: any) => e.status === "approved").length,
+      poReceived: filteredEst.filter((e: any) => e.status === "po_received").length,
       dcPending: filteredDc.filter((dc: any) => dc.status === "pending").length,
-      dcDelivered: filteredDc.filter((dc: any) => dc.status === "delivered" || dc.status === "completed").length,
+      dcDelivered: filteredDc.filter(
+        (dc: any) => dc.status === "delivered" || dc.status === "completed"
+      ).length,
       invoicePending: invoices.filter((inv: any) => inv.status === "unpaid").length,
       invoicePaid: invoices.filter((inv: any) => inv.status === "paid").length,
       invoiceOverdue: invoices.filter((inv: any) => inv.status === "overdue").length,
@@ -220,23 +237,31 @@ export async function fetchProducts(token: string | null) {
   return sbSelect("products", (q) => q.select("*").order("name"));
 }
 
+export async function fetchMaterialCodes(token: string | null) {
+  if (!isBoltMode) {
+    const res = await apiFetch("/api/operations/material-codes", token);
+    return res.ok ? res.json() : [];
+  }
+  return sbSelect("material_codes", (q) => q.select("*").order("code"));
+}
+
 export async function fetchEstimates(token: string | null) {
   if (!isBoltMode) {
     const res = await apiFetch("/api/operations/estimates", token);
     return res.ok ? res.json() : [];
   }
   return sbSelect("estimates", (q) =>
-    q.select("*, clients(name), brands(name), stores(name)").order("created_at", { ascending: false })
+    q.select("*").order("created_at", { ascending: false })
   );
 }
 
-export async function fetchInvoices(token: string | null) {
+export async function fetchEstimateItems(token: string | null, estimateId: number) {
   if (!isBoltMode) {
-    const res = await apiFetch("/api/finance/invoices", token);
+    const res = await apiFetch(`/api/operations/estimates/${estimateId}/items`, token);
     return res.ok ? res.json() : [];
   }
-  return sbSelect("invoices", (q) =>
-    q.select("*").order("created_at", { ascending: false })
+  return sbSelect("estimate_items", (q) =>
+    q.select("*").eq("estimate_id", estimateId).order("position")
   );
 }
 
@@ -250,7 +275,29 @@ export async function fetchDeliveryChallans(token: string | null) {
   );
 }
 
-export async function fetchExecutionDocuments(token: string | null, estimateId?: number) {
+export async function fetchDeliveryChallansForEstimate(
+  token: string | null,
+  estimateId: number
+) {
+  if (!isBoltMode) {
+    const res = await apiFetch(
+      `/api/operations/delivery-challans/estimate/${estimateId}`,
+      token
+    );
+    return res.ok ? res.json() : [];
+  }
+  return sbSelect("delivery_challans", (q) =>
+    q
+      .select("*")
+      .eq("estimate_id", estimateId)
+      .order("created_at", { ascending: false })
+  );
+}
+
+export async function fetchExecutionDocuments(
+  token: string | null,
+  estimateId?: number
+) {
   if (!isBoltMode) {
     const url = estimateId
       ? `/api/operations/execution-documents?estimateId=${estimateId}`
@@ -264,7 +311,10 @@ export async function fetchExecutionDocuments(token: string | null, estimateId?:
   });
 }
 
-export async function fetchExecutionStores(token: string | null, estimateId?: number) {
+export async function fetchExecutionStores(
+  token: string | null,
+  estimateId?: number
+) {
   if (!isBoltMode) {
     const url = estimateId
       ? `/api/operations/execution-stores?estimateId=${estimateId}`
@@ -278,22 +328,16 @@ export async function fetchExecutionStores(token: string | null, estimateId?: nu
   });
 }
 
-export async function fetchNotifications(token: string | null) {
-  if (!isBoltMode) {
-    const res = await apiFetch("/api/notifications", token);
-    return res.ok ? res.json() : [];
-  }
-  return sbSelect("notifications", (q) =>
-    q.select("*").order("created_at", { ascending: false }).limit(50)
-  );
-}
+// ─── Finance ──────────────────────────────────────────────────────────────────
 
-export async function fetchMaterialCodes(token: string | null) {
+export async function fetchInvoices(token: string | null) {
   if (!isBoltMode) {
-    const res = await apiFetch("/api/operations/material-codes", token);
+    const res = await apiFetch("/api/finance/invoices", token);
     return res.ok ? res.json() : [];
   }
-  return sbSelect("material_codes", (q) => q.select("*").order("code"));
+  return sbSelect("invoices", (q) =>
+    q.select("*").order("created_at", { ascending: false })
+  );
 }
 
 export async function fetchPayments(token: string | null) {
@@ -304,4 +348,151 @@ export async function fetchPayments(token: string | null) {
   return sbSelect("payments", (q) =>
     q.select("*").order("created_at", { ascending: false })
   );
+}
+
+export async function fetchAccounts(token: string | null) {
+  if (!isBoltMode) {
+    const res = await apiFetch("/api/finance/accounts", token);
+    return res.ok ? res.json() : [];
+  }
+  return sbSelect("chart_of_accounts", (q) => q.select("*").order("name"));
+}
+
+export async function fetchLedgerSummary(token: string | null) {
+  if (!isBoltMode) {
+    const res = await apiFetch("/api/finance/ledgers/summary", token);
+    return res.ok ? res.json() : [];
+  }
+  // Compute client-level summary from raw reads
+  const [clients, invoices, payments] = await Promise.all([
+    sbSelect<any>("clients", (q) => q.select("id, name")),
+    sbSelect<any>("invoices", (q) =>
+      q.select("client_id, total_amount, paid_amount, status, type")
+    ),
+    sbSelect<any>("payments", (q) => q.select("client_id, amount")),
+  ]);
+
+  return clients
+    .map((c: any) => {
+      const cInv = invoices.filter(
+        (i: any) => i.clientId === c.id && i.type === "sales"
+      );
+      const totalBilled = cInv.reduce(
+        (s: number, i: any) => s + (i.totalAmount || 0),
+        0
+      );
+      const cPay = payments.filter((p: any) => p.clientId === c.id);
+      const totalPaid = cPay.reduce(
+        (s: number, p: any) => s + (p.amount || 0),
+        0
+      );
+      return {
+        clientId: c.id,
+        clientName: c.name,
+        totalBilled,
+        totalPaid,
+        totalOutstanding: totalBilled - totalPaid,
+        status: totalBilled - totalPaid > 0 ? "outstanding" : "settled",
+      };
+    })
+    .filter((l: any) => l.totalBilled > 0);
+}
+
+// ─── Staff / HR ───────────────────────────────────────────────────────────────
+
+export async function fetchUsers(token: string | null) {
+  if (!isBoltMode) {
+    const res = await apiFetch("/api/users", token);
+    return res.ok ? res.json() : [];
+  }
+  return sbSelect("users", (q) =>
+    q.select("id, username, name, email, role, department, designation, phone, telegram_chat_id, joining_date, basic_salary, daily_wage, is_active, created_at")
+      .eq("is_active", true)
+      .order("name")
+  );
+}
+
+export async function fetchAttendance(token: string | null) {
+  if (!isBoltMode) {
+    const res = await apiFetch("/api/attendance", token);
+    return res.ok ? res.json() : [];
+  }
+  return sbSelect("attendance", (q) =>
+    q.select("*").order("date", { ascending: false }).limit(500)
+  );
+}
+
+export async function fetchAdvances(token: string | null) {
+  if (!isBoltMode) {
+    const res = await apiFetch("/api/advances", token);
+    return res.ok ? res.json() : [];
+  }
+  return sbSelect("staff_advances", (q) =>
+    q.select("*").order("created_at", { ascending: false })
+  );
+}
+
+export async function fetchPayroll(
+  token: string | null,
+  month: number,
+  year: number
+) {
+  if (!isBoltMode) {
+    const res = await apiFetch(
+      `/api/payroll?month=${month}&year=${year}`,
+      token
+    );
+    return res.ok ? res.json() : [];
+  }
+  return sbSelect("payroll", (q) =>
+    q.select("*").eq("month", month).eq("year", year)
+  );
+}
+
+// ─── Tasks ────────────────────────────────────────────────────────────────────
+
+export async function fetchTasks(token: string | null) {
+  if (!isBoltMode) {
+    const res = await apiFetch("/api/tasks", token);
+    return res.ok ? res.json() : [];
+  }
+  return sbSelect("tasks", (q) =>
+    q.select("*").order("created_at", { ascending: false })
+  );
+}
+
+// ─── Notifications ────────────────────────────────────────────────────────────
+
+export async function fetchNotifications(token: string | null) {
+  if (!isBoltMode) {
+    const res = await apiFetch("/api/notifications", token);
+    return res.ok ? res.json() : [];
+  }
+  return sbSelect("notifications", (q) =>
+    q.select("*").order("created_at", { ascending: false }).limit(50)
+  );
+}
+
+// ─── Company Settings ─────────────────────────────────────────────────────────
+
+export async function fetchCompanySettings(token: string | null) {
+  if (!isBoltMode) {
+    const res = await apiFetch("/api/company-settings", token);
+    return res.ok ? res.json() : null;
+  }
+  const rows = await sbSelect<any>("app_settings", (q) =>
+    q.select("key, value")
+  );
+  // Convert [{key, value}] to an object
+  return Object.fromEntries(rows.map((r: any) => [r.key, r.value]));
+}
+
+// ─── Customer Rate Cards ──────────────────────────────────────────────────────
+
+export async function fetchCustomerRateCards(token: string | null) {
+  if (!isBoltMode) {
+    const res = await apiFetch("/api/customer-rate-cards", token);
+    return res.ok ? res.json() : [];
+  }
+  return sbSelect("customer_rate_cards", (q) => q.select("*").order("name"));
 }

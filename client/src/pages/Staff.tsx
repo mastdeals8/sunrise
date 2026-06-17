@@ -1,4 +1,6 @@
 import React, { useEffect, useState } from "react";
+import { isBoltMode } from "../lib/supabase";
+import { fetchUsers, fetchAttendance, fetchAdvances, fetchPayroll } from "../lib/api";
 import { useAuth } from "../contexts/AuthContext";
 import { useGlobalDate } from "../contexts/GlobalDateContext";
 import { normalizeDisplayName } from "../../../shared/textFormat";
@@ -170,27 +172,36 @@ const StaffPage: React.FC = () => {
   const fetchData = async () => {
     try {
       setLoading(true);
+      if (isBoltMode) {
+        const [u, a, ad, p] = await Promise.all([
+          fetchUsers(token),
+          fetchAttendance(token),
+          fetchAdvances(token),
+          fetchPayroll(token, selectedMonth, selectedYear),
+        ]);
+        setUsersList(u as any[]);
+        setAttendanceList((a as any[]).filter((r: any) => globalDate.isInRange(r.date)));
+        setAdvancesList((ad as any[]).filter((r: any) => globalDate.isInRange(r.date)));
+        setPayrollList(p as any[]);
+        return;
+      }
       const headers = { Authorization: `Bearer ${token}` };
 
-      // Users
       const resU = await fetch("/api/users", { headers });
       if (resU.ok) setUsersList(await resU.json());
 
-      // Attendance
       const resA = await fetch("/api/attendance", { headers });
       if (resA.ok) {
         const rows = await resA.json();
         setAttendanceList(rows.filter((row: Attendance) => globalDate.isInRange(row.date)));
       }
 
-      // Advances
       const resAd = await fetch("/api/advances", { headers });
       if (resAd.ok) {
         const rows = await resAd.json();
         setAdvancesList(rows.filter((row: Advance) => globalDate.isInRange(row.date)));
       }
 
-      // Payroll
       const resP = await fetch(`/api/payroll?month=${selectedMonth}&year=${selectedYear}`, { headers });
       if (resP.ok) setPayrollList(await resP.json());
 

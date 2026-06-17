@@ -1,4 +1,6 @@
 import React, { useEffect, useState } from "react";
+import { isBoltMode } from "../lib/supabase";
+import { fetchTasks, fetchUsers } from "../lib/api";
 import { useAuth } from "../contexts/AuthContext";
 import { 
   Plus, 
@@ -46,21 +48,24 @@ const TasksPage: React.FC = () => {
   const fetchData = async () => {
     try {
       setLoading(true);
+      if (isBoltMode) {
+        const [t, s] = await Promise.all([
+          fetchTasks(token),
+          fetchUsers(token),
+        ]);
+        setTasks(t as any[]);
+        setStaffList(s as any[]);
+        return;
+      }
       const resT = await fetch("/api/tasks", {
         headers: { Authorization: `Bearer ${token}` }
       });
-      if (resT.ok) {
-        const dataT = await resT.json();
-        setTasks(dataT);
-      }
+      if (resT.ok) setTasks(await resT.json());
 
       const resS = await fetch("/api/users", {
         headers: { Authorization: `Bearer ${token}` }
       });
-      if (resS.ok) {
-        const dataS = await resS.json();
-        setStaffList(dataS);
-      }
+      if (resS.ok) setStaffList(await resS.json());
     } catch (err) {
       console.error("Error loading task data:", err);
     } finally {

@@ -2,6 +2,7 @@ import React from "react";
 import { createPortal } from "react-dom";
 import { Bell, X } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
+import { fetchNotifications } from "@/lib/api";
 
 type Notif = {
   id: number; type: string; title: string; message?: string;
@@ -26,10 +27,8 @@ export const NotificationBell: React.FC = () => {
 
   const load = React.useCallback(async () => {
     try {
-      const res = await fetch("/api/notifications", {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
-      if (res.ok) setItems(await res.json());
+      const data = await fetchNotifications(token);
+      setItems(data as Notif[]);
     } catch { /* offline / not logged in */ }
   }, [token]);
 
