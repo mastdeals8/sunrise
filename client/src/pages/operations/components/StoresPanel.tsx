@@ -208,7 +208,7 @@ const StoresPanel: React.FC<StoresPanelProps> = ({
       const haystack = [
         storeName, s.storeCode, s.city, s.state, s.regionZone, s.location,
         s.address, s.contactPerson, s.contactPhone, clientName, brandName,
-      ].filter(Boolean).join("  ");
+      ].filter(Boolean).join(" | ");
       return { s, client, brand, clientName, brandName, storeName, haystack };
     });
   }, [stores, clients, brands]);
