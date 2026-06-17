@@ -14,7 +14,8 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdirSync } from "node:fs";
-import * as XLSX from "xlsx";
+import XLSXModule from "xlsx-js-style";
+const XLSX = XLSXModule.default ?? XLSXModule;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

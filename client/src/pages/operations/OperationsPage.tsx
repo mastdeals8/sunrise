@@ -1345,6 +1345,20 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     return found;
   };
 
+  // Keeps only the first packing/installation/transport row per store.
+  const deduplicateSpecialCharges = <T extends { lineType?: string; storeId?: string }>(items: T[]): T[] => {
+    const seen = new Map<string, Set<string>>();
+    return items.filter(item => {
+      if (!["packing", "installation", "transport"].includes(item.lineType ?? "")) return true;
+      const key = String(item.storeId ?? "");
+      if (!seen.has(key)) seen.set(key, new Set());
+      const storeSet = seen.get(key)!;
+      if (storeSet.has(item.lineType!)) return false;
+      storeSet.add(item.lineType!);
+      return true;
+    });
+  };
+
   const addServiceItem = (
     storeId: string,
     lineType: "packing" | "installation" | "transport",
@@ -1412,6 +1426,10 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
   // The product master takes precedence so admins can edit GST/HSN/rate/calc
   // type in one place and have all new estimates pick it up.
   const addPackingItem = (storeId: string) => {
+    if (estItems.some(it => it.lineType === "packing" && it.storeId === storeId)) {
+      alert("Packing Charge already exists in this estimate.");
+      return;
+    }
     const sp = findServiceProduct("Packing Charges");
     const settingsValue = sellerProfile.defaultPacking ?? estPacking;
     const rateValue = sp?.rate != null ? String(sp.rate) : settingsValue;
@@ -1433,6 +1451,10 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
   };
 
   const addInstallationItem = (storeId: string) => {
+    if (estItems.some(it => it.lineType === "installation" && it.storeId === storeId)) {
+      alert("Installation Charge already exists in this estimate.");
+      return;
+    }
     const sp = findServiceProduct("Installation Charges");
     const settingsValue = sellerProfile.defaultImplementation ?? estImplementation;
     const rateValue = sp?.rate != null ? String(sp.rate) : settingsValue;
@@ -1454,6 +1476,10 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
   };
 
   const addTransportItem = (storeId: string, mode: "local" | "outstation" = "local") => {
+    if (estItems.some(it => it.lineType === "transport" && it.storeId === storeId)) {
+      alert("Transportation Charge already exists in this estimate.");
+      return;
+    }
     const sp = mode === "outstation"
       ? findServiceProduct("Outstation Charges")
       : findServiceProduct("Local Transportation");
@@ -1832,7 +1858,11 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     console.log(`[save] handler entered`, { editingEstimateId, estNumber, items: estItems.length });
     setIsSaving(true);
     try {
-      const normalizedItems = recalculateEstimateRows(estItems);
+      const dedupedItems = deduplicateSpecialCharges(estItems);
+      if (dedupedItems.length !== estItems.length) {
+        console.warn(`[save] Removed ${estItems.length - dedupedItems.length} duplicate special charge row(s) before saving`);
+      }
+      const normalizedItems = recalculateEstimateRows(dedupedItems);
       const formattedItems = normalizedItems.map(item => {
         const selectedProduct = item.productId
           ? products.find(p => p.id === Number(item.productId))
@@ -1886,9 +1916,13 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
         };
       });
 
-      setEstItems(normalizedItems);
+      const cleanedItems = deduplicateSpecialCharges(normalizedItems);
+      if (cleanedItems.length !== normalizedItems.length) {
+        console.warn(`[EstimateLoad] Auto-removed ${normalizedItems.length - cleanedItems.length} duplicate special charge row(s) from estimate`);
+      }
+      setEstItems(cleanedItems);
 
-      const storeGrouping = buildStoreGrouping(normalizedItems, estStoreOverrides, "0", "0");
+      const storeGrouping = buildStoreGrouping(cleanedItems, estStoreOverrides, "0", "0");
       const estimateSubtotal = normalizedItems.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
       const estimateTax = normalizedItems.reduce(
         (sum, item) => sum

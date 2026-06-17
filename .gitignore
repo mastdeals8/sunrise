@@ -12,3 +12,4 @@ docs/
 *.zip
 *.pdf
 *.docx
+client/public/templates/*.xlsx

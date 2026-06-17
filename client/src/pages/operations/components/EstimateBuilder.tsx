@@ -1146,7 +1146,17 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
         next.push(row);
         if (selected.has(index)) next.push({ ...row });
       });
-      return next;
+      // Strip duplicate packing/installation/transport per store
+      const seen = new Map<string, Set<string>>();
+      return next.filter((row: any) => {
+        if (!["packing", "installation", "transport"].includes(row.lineType ?? "")) return true;
+        const key = String(row.storeId ?? "");
+        if (!seen.has(key)) seen.set(key, new Set());
+        const storeSet = seen.get(key)!;
+        if (storeSet.has(row.lineType)) return false;
+        storeSet.add(row.lineType);
+        return true;
+      });
     });
   };
 
