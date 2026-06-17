@@ -45,6 +45,8 @@ import EstimatePreview from "./components/EstimatePreview";
 import ProjectWorkspace from "./components/ProjectWorkspace";
 import WccDcEditor from "./components/WccDcEditor";
 import { useOperationsData, type Invoice } from "./hooks/useOperationsData";
+import { isBoltMode } from "../../lib/supabase";
+import { createEstimate, updateEstimate, createDeliveryChallan, updateDeliveryChallan } from "../../lib/api";
 import { useEstimateBuilder } from "./hooks/useEstimateBuilder";
 import { useInvoiceWorkflow } from "./hooks/useInvoiceWorkflow";
 import { useWccDcEditor } from "./hooks/useWccDcEditor";
@@ -1967,26 +1969,33 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
 
       const url = editingEstimateId ? `/api/operations/estimates/${editingEstimateId}` : "/api/operations/estimates";
       const method = editingEstimateId ? "PATCH" : "POST";
-      // Hard timeout so a stalled server can't strand the UI on "Saving...".
-      // If the response doesn't arrive within 25 s, abort and surface an error.
-      const controller = new AbortController();
-      const timeoutId = window.setTimeout(() => controller.abort(), 25_000);
       console.log(`[save] request start (${_ms()}ms)`, { method, url, bytes: JSON.stringify(formattedItems).length });
       let res: Response;
-      try {
-        res = await fetch(url, {
-          method,
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`
-          },
-          body: JSON.stringify(editingEstimateId
-            ? { ...estimatePayload, items: formattedItems }
-            : { estimate: estimatePayload, items: formattedItems }),
-          signal: controller.signal,
-        });
-      } finally {
-        window.clearTimeout(timeoutId);
+      if (isBoltMode) {
+        try {
+          const data = editingEstimateId
+            ? await updateEstimate(token, editingEstimateId, { ...estimatePayload, items: formattedItems })
+            : await createEstimate(token, { estimate: estimatePayload, items: formattedItems });
+          res = new Response(JSON.stringify(data), { status: 200 });
+        } catch (err: any) {
+          res = new Response(JSON.stringify({ message: err.message }), { status: 500 });
+        }
+      } else {
+        // Hard timeout so a stalled server can't strand the UI on "Saving...".
+        const controller = new AbortController();
+        const timeoutId = window.setTimeout(() => controller.abort(), 25_000);
+        try {
+          res = await fetch(url, {
+            method,
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+            body: JSON.stringify(editingEstimateId
+              ? { ...estimatePayload, items: formattedItems }
+              : { estimate: estimatePayload, items: formattedItems }),
+            signal: controller.signal,
+          });
+        } finally {
+          window.clearTimeout(timeoutId);
+        }
       }
       console.log(`[save] response received (${_ms()}ms)`, { status: res.status, ok: res.ok });
 
@@ -2324,14 +2333,21 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
 
   const handleUpdateStatus = async (estId: number, status: string) => {
     try {
-      const res = await fetch(`/api/operations/estimates/${estId}`, {
-        method: "PATCH",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`
-        },
-        body: JSON.stringify({ status })
-      });
+      let res: Response;
+      if (isBoltMode) {
+        try {
+          const data = await updateEstimate(token, estId, { status });
+          res = new Response(JSON.stringify(data), { status: 200 });
+        } catch (err: any) {
+          res = new Response(JSON.stringify({ message: err.message }), { status: 500 });
+        }
+      } else {
+        res = await fetch(`/api/operations/estimates/${estId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ status }),
+        });
+      }
       if (res.ok) {
         showSuccess(`Estimate status updated to ${status.replace("_", " ").toUpperCase()}`);
         const updated = await res.json();
@@ -2604,21 +2620,29 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     if (!targetEstimate || !poNumber || !poAmount) return;
 
     try {
-      const res = await fetch(`/api/operations/estimates/${targetEstimate.id}`, {
-        method: "PATCH",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          status: "po_received",
-          poNumber,
-          poDate: poDate || new Date().toISOString(),
-          poAmount: Number(poAmount),
-          poFilePath: poFileUrl || null,
-          poRemarks: poRemarks || null
-        })
-      });
+      const poPayload = {
+        status: "po_received",
+        poNumber,
+        poDate: poDate || new Date().toISOString(),
+        poAmount: Number(poAmount),
+        poFilePath: poFileUrl || null,
+        poRemarks: poRemarks || null,
+      };
+      let res: Response;
+      if (isBoltMode) {
+        try {
+          const data = await updateEstimate(token, targetEstimate.id, poPayload);
+          res = new Response(JSON.stringify(data), { status: 200 });
+        } catch (err: any) {
+          res = new Response(JSON.stringify({ message: err.message }), { status: 500 });
+        }
+      } else {
+        res = await fetch(`/api/operations/estimates/${targetEstimate.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify(poPayload),
+        });
+      }
 
       if (res.ok) {
         showSuccess("Purchase Order successfully uploaded and attached!");
@@ -2811,12 +2835,22 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
           checklist: { window: true, inStore: false, nso: false, repairing: false, materialTransfer: false },
         },
       };
-      const res = await fetch("/api/operations/delivery-challans", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify(payload),
-      });
-      if (res.ok) createdCount++;
+      let dcRes: Response;
+      if (isBoltMode) {
+        try {
+          const data = await createDeliveryChallan(token, payload);
+          dcRes = new Response(JSON.stringify(data), { status: 200 });
+        } catch (err: any) {
+          dcRes = new Response(JSON.stringify({ message: err.message }), { status: 500 });
+        }
+      } else {
+        dcRes = await fetch("/api/operations/delivery-challans", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify(payload),
+        });
+      }
+      if (dcRes.ok) createdCount++;
     }
     showSuccess(`Generated ${createdCount} of ${sids.length} WCC drafts.`);
     // refresh data
@@ -2876,14 +2910,23 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
         }
       };
 
-      const res = await fetch(editingDcId ? `/api/operations/delivery-challans/${editingDcId}` : "/api/operations/delivery-challans", {
-        method: editingDcId ? "PATCH" : "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`
-        },
-        body: JSON.stringify(payload)
-      });
+      let res: Response;
+      if (isBoltMode) {
+        try {
+          const data = editingDcId
+            ? await updateDeliveryChallan(token, editingDcId, payload)
+            : await createDeliveryChallan(token, payload);
+          res = new Response(JSON.stringify(data), { status: 200 });
+        } catch (err: any) {
+          res = new Response(JSON.stringify({ message: err.message }), { status: 500 });
+        }
+      } else {
+        res = await fetch(editingDcId ? `/api/operations/delivery-challans/${editingDcId}` : "/api/operations/delivery-challans", {
+          method: editingDcId ? "PATCH" : "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify(payload),
+        });
+      }
 
       if (res.ok) {
         showSuccess(`WCC "${dcNumberVal}" ${editingDcId ? "updated" : "created"} successfully!`);

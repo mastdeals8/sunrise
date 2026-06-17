@@ -3,7 +3,7 @@ import { formatCurrency } from "@/utils/format";
 import { useAuth } from "../contexts/AuthContext";
 import { useGlobalDate } from "../contexts/GlobalDateContext";
 import { isBoltMode } from "../lib/supabase";
-import { fetchAccounts, fetchInvoices, fetchPayments } from "../lib/api";
+import { fetchAccounts, fetchInvoices, fetchPayments, createInvoice, createPayment } from "../lib/api";
 import { 
   Wallet, 
   FileText, 
@@ -183,24 +183,33 @@ const FinancePage: React.FC = () => {
       const taxNum = Number(invTax) || 0;
       const totalNum = amountNum + taxNum;
 
-      const res = await fetch("/api/finance/invoices", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          invoiceNumber: invNumber,
-          type: invType,
-          partyName: invParty,
-          amount: amountNum,
-          taxAmount: taxNum,
-          totalAmount: totalNum,
-          date: new Date().toISOString(),
-          dueDate: invDueDate ? new Date(invDueDate).toISOString() : new Date().toISOString(),
-          status: "unpaid"
-        })
-      });
+      const invoicePayload = {
+        invoiceNumber: invNumber,
+        type: invType,
+        partyName: invParty,
+        amount: amountNum,
+        taxAmount: taxNum,
+        totalAmount: totalNum,
+        date: new Date().toISOString(),
+        dueDate: invDueDate ? new Date(invDueDate).toISOString() : new Date().toISOString(),
+        status: "unpaid"
+      };
+
+      let res: Response;
+      if (isBoltMode) {
+        try {
+          const data = await createInvoice(token, invoicePayload);
+          res = new Response(JSON.stringify(data), { status: 200 });
+        } catch (err: any) {
+          res = new Response(JSON.stringify({ message: err.message }), { status: 500 });
+        }
+      } else {
+        res = await fetch("/api/finance/invoices", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify(invoicePayload),
+        });
+      }
 
       if (res.ok) {
         setMessage("Invoice successfully registered & journalized!");
@@ -222,23 +231,32 @@ const FinancePage: React.FC = () => {
     if (!vouchNumber || !vouchParty || !vouchAmount) return;
 
     try {
-      const res = await fetch("/api/finance/payments", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          voucherNumber: vouchNumber,
-          type: vouchType,
-          partyName: vouchParty,
-          amount: Number(vouchAmount),
-          method: vouchMethod,
-          description: vouchDesc || null,
-          invoiceId: vouchLinkedInvoice || null,
-          date: new Date().toISOString()
-        })
-      });
+      const paymentPayload = {
+        voucherNumber: vouchNumber,
+        type: vouchType,
+        partyName: vouchParty,
+        amount: Number(vouchAmount),
+        method: vouchMethod,
+        description: vouchDesc || null,
+        invoiceId: vouchLinkedInvoice || null,
+        date: new Date().toISOString()
+      };
+
+      let res: Response;
+      if (isBoltMode) {
+        try {
+          const data = await createPayment(token, paymentPayload);
+          res = new Response(JSON.stringify(data), { status: 200 });
+        } catch (err: any) {
+          res = new Response(JSON.stringify({ message: err.message }), { status: 500 });
+        }
+      } else {
+        res = await fetch("/api/finance/payments", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify(paymentPayload),
+        });
+      }
 
       if (res.ok) {
         setMessage("Payment registered & invoice balances updated!");
