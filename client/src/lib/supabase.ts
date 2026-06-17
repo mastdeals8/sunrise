@@ -3,11 +3,9 @@ import { createClient } from "@supabase/supabase-js";
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
 
-if (import.meta.env.VITE_BOLT_PREVIEW === "true" && (!supabaseUrl || !supabaseAnonKey)) {
-  console.warn(
-    "⚠️  Supabase env vars missing. Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY " +
-    "in Bolt → Settings → Environment Variables (Secrets)."
-  );
+if (import.meta.env.VITE_BOLT_PREVIEW === "true") {
+  console.log("[supabase] URL configured:", supabaseUrl ? "yes" : "no");
+  console.log("[supabase] anon key configured:", supabaseAnonKey ? "yes" : "no");
 }
 
 export const supabase = createClient(

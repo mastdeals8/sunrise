@@ -48,10 +48,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (isBoltMode) {
       // ── Bolt mode: restore from Supabase Auth session ────────────────────
       if (!hasSupabaseConfig) {
-        setBoltAuthError(
-          "Missing Supabase environment variables. Add VITE_SUPABASE_URL and " +
-          "VITE_SUPABASE_ANON_KEY in Bolt → Settings → Environment Variables."
-        );
+        // No env vars yet — show login page without error; error appears only after failed attempt
         setLoading(false);
         return;
       }
@@ -115,24 +112,33 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const login = async (username: string, password: string): Promise<boolean> => {
     if (isBoltMode) {
-      // ── Bolt mode: Supabase Auth (treat "username" as email) ─────────────
+      // ── Bolt mode: Supabase Auth with username→email lookup ──────────────
       if (!hasSupabaseConfig) {
         setBoltAuthError(
-          "Supabase is not configured. Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY."
+          "System configuration missing. Please add Supabase environment variables in Bolt."
         );
         return false;
       }
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email: username,
-        password,
-      });
+
+      // Resolve email: if the user typed an email directly, use it; otherwise
+      // look up the email by username from the public users table.
+      let email = username;
+      if (!username.includes("@")) {
+        const { data: userRow } = await supabase
+          .from("users")
+          .select("email")
+          .eq("username", username)
+          .maybeSingle();
+        if (!userRow?.email) {
+          setBoltAuthError("Invalid username or password.");
+          return false;
+        }
+        email = userRow.email;
+      }
+
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
       if (error || !data.user) {
-        setBoltAuthError(
-          error?.message?.includes("Invalid login credentials")
-            ? "Invalid credentials. In Bolt mode, sign in with your Supabase Auth email & password. " +
-              "Create a user in Supabase Dashboard → Authentication → Users."
-            : (error?.message ?? "Supabase Auth error.")
-        );
+        setBoltAuthError("Invalid username or password.");
         return false;
       }
       setBoltAuthError(null);

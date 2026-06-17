@@ -1,6 +1,5 @@
 import React, { useState } from "react";
 import { useAuth } from "../contexts/AuthContext";
-import { isBoltMode } from "../lib/supabase";
 
 const Login: React.FC = () => {
   const { login, register, boltAuthError } = useAuth();
@@ -20,7 +19,7 @@ const Login: React.FC = () => {
     try {
       if (isLogin) {
         const success = await login(username, password);
-        if (!success) setError("Invalid credentials. Try admin/admin123");
+        if (!success) setError("Invalid username or password.");
       } else {
         if (!email || !name) {
           setError("Email and Name are required");
@@ -54,15 +53,6 @@ const Login: React.FC = () => {
             ENTERPRISE RESOURCE PLANNING
           </p>
         </div>
-
-        {isBoltMode && (
-          <div className="mb-4 p-3 bg-blue-50 border border-blue-200 text-blue-700 text-xs rounded-lg">
-            <strong>Bolt mode:</strong> Sign in with your{" "}
-            <strong>Supabase Auth email & password</strong>. Create users in
-            Supabase Dashboard → Authentication → Users. The username field
-            accepts your email address.
-          </div>
-        )}
 
         {(error || boltAuthError) && (
           <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 text-xs rounded-lg font-medium">
@@ -115,15 +105,15 @@ const Login: React.FC = () => {
 
           <div>
             <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1">
-              {isBoltMode ? "Email (Supabase Auth)" : "Username"}
+              Username
             </label>
             <input
-              type={isBoltMode ? "email" : "text"}
+              type="text"
               required
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               className="w-full px-4 py-2 bg-white border border-slate-200 rounded-lg text-slate-800 focus:outline-none focus:border-orange-500 text-sm"
-              placeholder={isBoltMode ? "you@example.com" : "admin"}
+              placeholder="admin"
             />
           </div>
 

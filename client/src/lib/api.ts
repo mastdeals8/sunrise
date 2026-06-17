@@ -496,3 +496,159 @@ export async function fetchCustomerRateCards(token: string | null) {
   }
   return sbSelect("customer_rate_cards", (q) => q.select("*").order("name"));
 }
+
+// ─── Write helpers — Edge Functions (Bolt) or Express (full mode) ─────────────
+
+/**
+ * Call a Supabase Edge Function with the user's JWT.
+ * SUPABASE_URL must be set as VITE_SUPABASE_URL in .env.
+ */
+async function edgeFetch(
+  functionName: string,
+  token: string | null,
+  options: RequestInit & { pathSuffix?: string } = {}
+): Promise<Response> {
+  const supabaseUrl = (import.meta.env.VITE_SUPABASE_URL as string | undefined) ?? "";
+  const { pathSuffix = "", ...fetchOptions } = options;
+  const url = `${supabaseUrl}/functions/v1/${functionName}${pathSuffix}`;
+  return fetch(url, {
+    ...fetchOptions,
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...fetchOptions.headers,
+    },
+  });
+}
+
+// ─── Estimates ────────────────────────────────────────────────────────────────
+
+export async function createEstimate(
+  token: string | null,
+  payload: { estimate: Record<string, unknown>; items: unknown[] }
+): Promise<any> {
+  if (!isBoltMode) {
+    const res = await apiFetch("/api/operations/estimates", token, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error((await res.json()).message ?? "Failed to create estimate");
+    return res.json();
+  }
+  const res = await edgeFetch("estimate-save", token, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error((await res.json()).message ?? "Failed to create estimate");
+  return res.json();
+}
+
+export async function updateEstimate(
+  token: string | null,
+  id: number,
+  payload: Record<string, unknown>
+): Promise<any> {
+  if (!isBoltMode) {
+    const res = await apiFetch(`/api/operations/estimates/${id}`, token, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error((await res.json()).message ?? "Failed to update estimate");
+    return res.json();
+  }
+  const res = await edgeFetch("estimate-save", token, {
+    method: "PATCH",
+    pathSuffix: `/${id}`,
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error((await res.json()).message ?? "Failed to update estimate");
+  return res.json();
+}
+
+// ─── Invoices ─────────────────────────────────────────────────────────────────
+
+export async function createInvoice(
+  token: string | null,
+  payload: Record<string, unknown>
+): Promise<any> {
+  if (!isBoltMode) {
+    const res = await apiFetch("/api/finance/invoices", token, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error((await res.json()).message ?? "Failed to create invoice");
+    return res.json();
+  }
+  const res = await edgeFetch("invoice-create", token, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error((await res.json()).message ?? "Failed to create invoice");
+  return res.json();
+}
+
+// ─── Delivery Challans ────────────────────────────────────────────────────────
+
+export async function createDeliveryChallan(
+  token: string | null,
+  payload: Record<string, unknown>
+): Promise<any> {
+  if (!isBoltMode) {
+    const res = await apiFetch("/api/operations/delivery-challans", token, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error((await res.json()).message ?? "Failed to create delivery challan");
+    return res.json();
+  }
+  const res = await edgeFetch("dc-save", token, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error((await res.json()).message ?? "Failed to create delivery challan");
+  return res.json();
+}
+
+export async function updateDeliveryChallan(
+  token: string | null,
+  id: number,
+  payload: Record<string, unknown>
+): Promise<any> {
+  if (!isBoltMode) {
+    const res = await apiFetch(`/api/operations/delivery-challans/${id}`, token, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error((await res.json()).message ?? "Failed to update delivery challan");
+    return res.json();
+  }
+  const res = await edgeFetch("dc-save", token, {
+    method: "PATCH",
+    pathSuffix: `/${id}`,
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error((await res.json()).message ?? "Failed to update delivery challan");
+  return res.json();
+}
+
+// ─── Payments ─────────────────────────────────────────────────────────────────
+
+export async function createPayment(
+  token: string | null,
+  payload: Record<string, unknown>
+): Promise<any> {
+  if (!isBoltMode) {
+    const res = await apiFetch("/api/finance/payments", token, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error((await res.json()).message ?? "Failed to create payment");
+    return res.json();
+  }
+  const res = await edgeFetch("payment-post", token, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error((await res.json()).message ?? "Failed to create payment");
+  return res.json();
+}
