@@ -30,6 +30,15 @@ import { ABLBL_LEGAL_NAME, isAblblFormat, normalizeDisplayName, normalizeFormatM
 import { formatProductDetails } from "../shared/productDetails";
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  if (process.env.BOLT_SAFE_BOOT === "true") {
+    const httpServer = createServer(app);
+    app.get("/api/health", (_req, res) => {
+      res.json({ status: "ok" });
+    });
+    console.log("[routes] BOLT_SAFE_BOOT: only /api/health registered");
+    return httpServer;
+  }
+
   const documentTypeForDc = (value: any): "wcc" | "dc" => {
     return isAblblFormat(value?.documentType || value?.clientFormat) ? "wcc" : String(value?.documentType || "").toLowerCase() === "wcc" ? "wcc" : "dc";
   };
