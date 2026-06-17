@@ -121,19 +121,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
 
       // Resolve email: if the user typed an email directly, use it; otherwise
-      // look up the email by username from the public users table.
+      // call resolve_login_email() — a SECURITY DEFINER RPC that bypasses RLS
+      // and returns only the email for the given username (never password_hash).
       let email = username;
       if (!username.includes("@")) {
-        const { data: userRow } = await supabase
-          .from("users")
-          .select("email")
-          .eq("username", username)
-          .maybeSingle();
-        if (!userRow?.email) {
+        const { data: resolvedEmail, error: rpcErr } = await supabase
+          .rpc("resolve_login_email", { login_username: username });
+        if (rpcErr || !resolvedEmail) {
           setBoltAuthError("Invalid username or password.");
           return false;
         }
-        email = userRow.email;
+        email = resolvedEmail as string;
       }
 
       const { data, error } = await supabase.auth.signInWithPassword({ email, password });
