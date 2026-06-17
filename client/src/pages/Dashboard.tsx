@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { formatCurrency } from "@/utils/format";
 import { useAuth } from "../contexts/AuthContext";
+import { fetchDashboard } from "../lib/api";
 import { useGlobalDate, toYmd } from "../contexts/GlobalDateContext";
 import {
   TrendingUp,
@@ -146,20 +147,17 @@ const Dashboard: React.FC = () => {
   const [activityExpanded, setActivityExpanded] = useState(false);
 
   useEffect(() => {
-    const fetchStats = async () => {
+    const loadStats = async () => {
       try {
-        const params = new URLSearchParams({ startDate: globalDate.range.start, endDate: globalDate.range.end });
-        const res = await fetch(`/api/finance/dashboard?${params.toString()}`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        if (res.ok) setStats(await res.json());
+        const data = await fetchDashboard(token, globalDate.range.start, globalDate.range.end);
+        setStats(data);
       } catch (err) {
         console.error("Error fetching dashboard statistics:", err);
       } finally {
         setLoading(false);
       }
     };
-    fetchStats();
+    loadStats();
   }, [globalDate.range.end, globalDate.range.start, token]);
 
   const counters = stats?.erpCounters;

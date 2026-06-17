@@ -1,8 +1,9 @@
 import React, { useState } from "react";
 import { useAuth } from "../contexts/AuthContext";
+import { isBoltMode } from "../lib/supabase";
 
 const Login: React.FC = () => {
-  const { login, register } = useAuth();
+  const { login, register, boltAuthError } = useAuth();
   const [isLogin, setIsLogin] = useState(true);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -54,9 +55,18 @@ const Login: React.FC = () => {
           </p>
         </div>
 
-        {error && (
+        {isBoltMode && (
+          <div className="mb-4 p-3 bg-blue-50 border border-blue-200 text-blue-700 text-xs rounded-lg">
+            <strong>Bolt mode:</strong> Sign in with your{" "}
+            <strong>Supabase Auth email & password</strong>. Create users in
+            Supabase Dashboard → Authentication → Users. The username field
+            accepts your email address.
+          </div>
+        )}
+
+        {(error || boltAuthError) && (
           <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 text-xs rounded-lg font-medium">
-            {error}
+            {error || boltAuthError}
           </div>
         )}
 
@@ -104,14 +114,16 @@ const Login: React.FC = () => {
           )}
 
           <div>
-            <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1">Username</label>
+            <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1">
+              {isBoltMode ? "Email (Supabase Auth)" : "Username"}
+            </label>
             <input
-              type="text"
+              type={isBoltMode ? "email" : "text"}
               required
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               className="w-full px-4 py-2 bg-white border border-slate-200 rounded-lg text-slate-800 focus:outline-none focus:border-orange-500 text-sm"
-              placeholder="admin"
+              placeholder={isBoltMode ? "you@example.com" : "admin"}
             />
           </div>
 
