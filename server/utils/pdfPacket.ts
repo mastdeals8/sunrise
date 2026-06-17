@@ -14,7 +14,6 @@
  * No iframes, no object/embed, no browser rendering of attachments.
  */
 
-import { chromium } from "playwright-core";
 import { PDFDocument, rgb } from "pdf-lib";
 import fs from "fs";
 import path from "path";
@@ -87,6 +86,7 @@ async function renderPageToPdf(
   const baseUrl = (process.env.PUBLIC_BASE_URL || `http://localhost:${port}`).replace(/\/$/, "");
   const executablePath = findChrome();
 
+  const { chromium } = await import("playwright-core");
   const browser = await chromium.launch({
     executablePath,
     headless: true,

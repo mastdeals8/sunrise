@@ -1,0 +1,15 @@
+This is Sunrise Media ERP — a full-stack Express + React + TypeScript application.
+
+Stack:
+- Frontend: React 18, Vite, Tailwind CSS, shadcn/ui, TanStack Query, wouter
+- Backend: Express (tsx), Drizzle ORM, PostgreSQL via @neondatabase/serverless
+- Auth: JWT + bcryptjs
+
+Start command: npm run dev
+Dev server: http://localhost:5000
+
+Environment variables required (.env):
+  DATABASE_URL=   # PostgreSQL connection string (Supabase pooler URL recommended)
+  JWT_SECRET=     # At least 32 random characters
+
+Do NOT change estimate/invoice/payment/WCC logic or database schema without explicit instruction.
