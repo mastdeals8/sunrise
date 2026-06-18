@@ -2,7 +2,7 @@ import React, { useMemo, useState } from "react";
 import { Plus, Pencil, Archive, ArchiveRestore, Save, X, Search, Trash2, Copy } from "lucide-react";
 import type { Brand, Client } from "../types";
 import { normalizeDisplayName } from "../../../../../shared/textFormat";
-import { isBoltMode } from "../../../lib/supabase";
+import { masterDataSave } from "../../../lib/api";
 
 interface BrandsPanelProps {
   brands: Brand[];
@@ -66,44 +66,31 @@ const BrandsPanel: React.FC<BrandsPanelProps> = ({
   };
   const patch = async (id: number, body: any) => {
     if (!token) return;
-    if (isBoltMode) { alert("Brand update migration pending."); return; }
-    const r = await fetch(`/api/operations/brands/${id}`, {
-      method: "PATCH",
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (r.ok) reload && reload();
+    try {
+      await masterDataSave(token, "brands", "PATCH", id, body);
+      reload && reload();
+    } catch (err: any) { alert(err.message || "Update failed"); }
   };
   const hardDelete = async (b: Brand) => {
     if (!token) return;
-    if (isBoltMode) { alert("Brand delete migration pending."); return; }
     if (!confirm(`Delete brand "${b.name}" permanently? This cannot be undone.`)) return;
-    const r = await fetch(`/api/operations/brands/${b.id}`, {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (r.ok) reload && reload();
-    else {
-      const j = await r.json().catch(() => ({}));
-      alert(j.message || "Delete failed");
-    }
+    try {
+      await masterDataSave(token, "brands", "DELETE", b.id);
+      reload && reload();
+    } catch (err: any) { alert(err.message || "Delete failed"); }
   };
   const duplicate = async (b: Brand) => {
     if (!token) return;
-    if (isBoltMode) { alert("Brand duplicate migration pending."); return; }
     const newName = prompt(`Duplicate "${b.name}" — new name?`, `${b.name} (copy)`);
     if (!newName) return;
-    const r = await fetch(`/api/operations/brands`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
+    try {
+      await masterDataSave(token, "brands", "POST", null, {
         name: normalizeDisplayName(newName),
         parentClientId: parentClientIdForBrand(b),
         isActive: true,
-      }),
-    });
-    if (r.ok) reload && reload();
-    else alert("Duplicate failed");
+      });
+      reload && reload();
+    } catch (err: any) { alert(err.message || "Duplicate failed"); }
   };
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase();

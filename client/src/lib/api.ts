@@ -526,6 +526,27 @@ export async function fetchBillingProfiles(token: string | null, clientId: numbe
 
 // ─── Invoice for a single estimate ───────────────────────────────────────────
 
+export async function fetchEstimateById(token: string | null, estimateId: number) {
+  if (!isBoltMode) {
+    const res = await apiFetch(`/api/operations/estimates/${estimateId}`, token);
+    return res.ok ? res.json() : null;
+  }
+  const rows = await sbSelect<any>("estimates", (q) =>
+    q.select("*").eq("id", estimateId).limit(1)
+  );
+  return rows[0] ?? null;
+}
+
+export async function fetchPaymentsForInvoice(token: string | null, invoiceId: number) {
+  if (!isBoltMode) {
+    const res = await apiFetch(`/api/finance/invoices/${invoiceId}/payments`, token);
+    return res.ok ? res.json() : [];
+  }
+  return sbSelect<any>("payments", (q) =>
+    q.select("*").eq("invoice_id", invoiceId).order("created_at", { ascending: true })
+  );
+}
+
 export async function fetchInvoiceById(token: string | null, invoiceId: number) {
   if (!isBoltMode) {
     const res = await apiFetch(`/api/finance/invoices/${invoiceId}`, token);
@@ -792,6 +813,45 @@ export async function updateDeliveryChallan(
   });
   if (!res.ok) throw new Error((await res.json()).message ?? "Failed to update delivery challan");
   return res.json();
+}
+
+// ─── Master Data (clients / brands / stores / products / billing-profiles) ────
+
+/**
+ * Call master-data-save Edge Function in Bolt mode, or fall back to Express.
+ * entity: "clients" | "brands" | "stores" | "products" | "billing-profiles"
+ * method: "POST" | "PATCH" | "DELETE"
+ */
+export async function masterDataSave(
+  token: string | null,
+  entity: string,
+  method: "POST" | "PATCH" | "DELETE",
+  id?: number | null,
+  payload?: Record<string, unknown>
+): Promise<any> {
+  if (!isBoltMode) {
+    const url = id ? `/api/operations/${entity}/${id}` : `/api/operations/${entity}`;
+    const res = await apiFetch(url, token, {
+      method,
+      body: method !== "DELETE" ? JSON.stringify(payload) : undefined,
+    });
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      throw Object.assign(new Error(j.message ?? `${entity} ${method} failed`), { status: res.status, body: j });
+    }
+    return res.json().catch(() => ({}));
+  }
+  const pathSuffix = id ? `/${entity}/${id}` : `/${entity}`;
+  const res = await edgeFetch("master-data-save", token, {
+    method,
+    pathSuffix,
+    body: method !== "DELETE" ? JSON.stringify(payload) : undefined,
+  });
+  if (!res.ok) {
+    const j = await res.json().catch(() => ({}));
+    throw Object.assign(new Error(j.message ?? `${entity} ${method} failed`), { status: res.status, body: j });
+  }
+  return res.json().catch(() => ({}));
 }
 
 // ─── Payments ─────────────────────────────────────────────────────────────────

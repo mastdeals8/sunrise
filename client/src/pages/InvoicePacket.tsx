@@ -7,7 +7,7 @@ import { Package, Search, Printer, FileDown, ChevronUp, ChevronDown, Check, Load
 import EstimateDocument from "../components/EstimateDocument";
 import type { Client, Brand, Product, Store } from "./operations/types";
 import { isBoltMode } from "../lib/supabase";
-import { fetchInvoices, fetchCompanySettings } from "../lib/api";
+import { fetchInvoices, fetchCompanySettings, fetchEstimateById, fetchEstimateItems, fetchDeliveryChallansForEstimate, fetchPaymentsForInvoice, fetchClients, fetchStores, fetchProducts } from "../lib/api";
 
 interface Invoice {
   id: number;
@@ -115,22 +115,35 @@ const InvoicePacketPage: React.FC = () => {
       return;
     }
     const load = async () => {
-      if (isBoltMode) {
-        // Invoice packet assembly requires the Express backend — show empty state
-        setPacket(null); setPages([]);
-        return;
-      }
       try {
-        const res = await fetch(`/api/finance/invoice-packet/${selectedId}`, { headers: { Authorization: `Bearer ${token}` } });
-        if (res.ok) {
-          const data = await res.json();
+        let data: PacketData | null = null;
+        if (isBoltMode) {
+          // Client-side packet assembly from Supabase
+          const inv = invoices.find((i: any) => i.id === selectedId);
+          if (!inv) return;
+          const estimateId = inv.estimateId ?? null;
+          const [estimate, estimateItems, challans, payments, clients, stores, products] = await Promise.all([
+            estimateId ? fetchEstimateById(token, estimateId) : Promise.resolve(null),
+            estimateId ? fetchEstimateItems(token, estimateId) : Promise.resolve([]),
+            estimateId ? fetchDeliveryChallansForEstimate(token, estimateId) : Promise.resolve([]),
+            fetchPaymentsForInvoice(token, selectedId),
+            fetchClients(token),
+            fetchStores(token),
+            fetchProducts(token),
+          ]);
+          const client = clients.find((c: any) => c.id === inv.clientId);
+          data = { invoice: inv, estimate, estimateItems, challans, client, payments, stores, clients, products };
+        } else {
+          const res = await fetch(`/api/finance/invoice-packet/${selectedId}`, { headers: { Authorization: `Bearer ${token}` } });
+          if (res.ok) data = await res.json();
+        }
+        if (data) {
           setPacket(data);
-          // build pages list
           const list: PacketPage[] = [];
           list.push({ id: "inv", label: "Invoice Front Page", kind: "invoice", included: true });
           if (data.estimate?.poFilePath) list.push({ id: "po", label: `Purchase Order (${data.estimate.poNumber || "PO"})`, kind: "po", filePath: data.estimate.poFilePath, included: true });
           if (data.estimate) list.push({ id: "est", label: `Estimate ${data.estimate.estimateNumber}`, kind: "estimate", included: true });
-          (data.challans || []).forEach((c: any, idx: number) => {
+          (data.challans || []).forEach((c: any) => {
             list.push({ id: `dc-${c.id}`, label: `DC / WCC ${c.dcNumber}`, kind: "dc", included: true });
             if (c.signedChallanPath) list.push({ id: `dc-${c.id}-signed`, label: `Signed Challan (${c.dcNumber})`, kind: "extra", filePath: c.signedChallanPath, included: true });
             if (c.photoPath) list.push({ id: `dc-${c.id}-photo`, label: `Installation Photo (${c.dcNumber})`, kind: "photo", filePath: c.photoPath, included: true });
@@ -144,7 +157,7 @@ const InvoicePacketPage: React.FC = () => {
       }
     };
     load();
-  }, [selectedId, token]);
+  }, [selectedId, token, invoices]);
 
   // Signal playwright that the page is ready for PDF capture.
   // Only fires when pdfMode is "invoice" or "estimate" and packet data is loaded.
@@ -183,9 +196,12 @@ const InvoicePacketPage: React.FC = () => {
 
   const downloadPdf = async () => {
     if (!selectedId) return;
+    if (isBoltMode) {
+      window.print();
+      return;
+    }
     setGeneratingPdf(true);
     try {
-      // Server determines order and fetches all files — no client-side page list needed
       const res = await fetch(`/api/finance/invoice-packet/${selectedId}/pdf`, {
         method: "POST",
         headers: {
@@ -296,10 +312,10 @@ const InvoicePacketPage: React.FC = () => {
                     onClick={downloadPdf}
                     disabled={generatingPdf}
                     className="flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-orange-600 hover:bg-orange-700 disabled:opacity-60 text-white text-xs font-semibold"
-                    title="Download full packet as a single PDF (includes all pages and attachments)"
+                    title={isBoltMode ? "Print / Save as PDF" : "Download full packet as a single PDF (includes all pages and attachments)"}
                   >
                     {generatingPdf ? <Loader2 className="w-3 h-3 animate-spin" /> : <FileDown className="w-3 h-3" />}
-                    {generatingPdf ? "Building…" : "Download PDF"}
+                    {generatingPdf ? "Building…" : isBoltMode ? "Print / PDF" : "Download PDF"}
                   </button>
                 </div>
               </div>

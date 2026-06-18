@@ -5,7 +5,7 @@ import { normalizeDisplayName } from "../../../../../shared/textFormat";
 import { isSystemServiceProduct } from "../../../../../shared/systemServices";
 import CategoryAutocomplete, { categoryKey, normalizeCategoryLabel } from "./CategoryAutocomplete";
 import ProductForm, { type ProductFormValue } from "./ProductForm";
-import { isBoltMode } from "../../../lib/supabase";
+import { masterDataSave } from "../../../lib/api";
 
 interface ProductsPanelProps {
   products: Product[];
@@ -118,44 +118,32 @@ const ProductsPanel: React.FC<ProductsPanelProps> = ({
 
   const patch = async (id: number, body: any) => {
     if (!token) return;
-    if (isBoltMode) { alert("Product update migration pending."); return; }
-    const r = await fetch(`/api/operations/products/${id}`, {
-      method: "PATCH",
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (r.ok) reload && reload();
-    else alert("Update failed");
+    try {
+      await masterDataSave(token, "products", "PATCH", id, body);
+      reload && reload();
+    } catch (err: any) { alert(err.message || "Update failed"); }
   };
   const hardDelete = async (p: Product) => {
     if (!token) return;
-    if (isBoltMode) { alert("Product delete migration pending."); return; }
     if (!confirm(`Delete product "${p.name}"? If used in an estimate it will be deactivated instead.`)) return;
-    const r = await fetch(`/api/operations/products/${p.id}`, {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok) { alert(j.message || "Delete failed"); return; }
-    if (j.soft) alert(j.message || "Product deactivated.");
-    reload && reload();
+    try {
+      const j = await masterDataSave(token, "products", "DELETE", p.id);
+      if (j.soft) alert(j.message || "Product deactivated.");
+      reload && reload();
+    } catch (err: any) { alert(err.message || "Delete failed"); }
   };
   const duplicate = async (p: Product) => {
     if (!token) return;
-    if (isBoltMode) { alert("Product duplicate migration pending."); return; }
     const newName = prompt(`Duplicate product "${p.name}" — new name?`, `${p.name} (copy)`);
     if (!newName) return;
-    const r = await fetch(`/api/operations/products`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
+    try {
+      await masterDataSave(token, "products", "POST", null, {
         name: newName,
         category: p.category,
         unit: p.unit,
         rate: p.rate,
         description: p.description,
         hsnSac: p.hsnSac,
-        materialCode: p.materialCode,
         isStandard: p.isStandard,
         calculationType: p.calculationType,
         gstPercent: p.gstPercent,
@@ -163,10 +151,9 @@ const ProductsPanel: React.FC<ProductsPanelProps> = ({
         warranty: p.warranty,
         isActive: true,
         materialCodeId: p.materialCodeId,
-      }),
-    });
-    if (r.ok) reload && reload();
-    else { const j = await r.json().catch(() => ({})); alert(j.message || "Duplicate failed"); }
+      });
+      reload && reload();
+    } catch (err: any) { alert(err.message || "Duplicate failed"); }
   };
 
   const saveEdit = async () => {

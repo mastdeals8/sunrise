@@ -46,7 +46,7 @@ import ProjectWorkspace from "./components/ProjectWorkspace";
 import WccDcEditor from "./components/WccDcEditor";
 import { useOperationsData, type Invoice } from "./hooks/useOperationsData";
 import { isBoltMode } from "../../lib/supabase";
-import { createEstimate, updateEstimate, createDeliveryChallan, updateDeliveryChallan, fetchEstimateItems, fetchDeliveryChallansForEstimate, fetchBillingProfiles as apiFetchBillingProfiles, fetchCompanySettings, createInvoice, createPayment, fetchClientLedger } from "../../lib/api";
+import { createEstimate, updateEstimate, createDeliveryChallan, updateDeliveryChallan, fetchEstimateItems, fetchDeliveryChallansForEstimate, fetchBillingProfiles as apiFetchBillingProfiles, fetchCompanySettings, createInvoice, createPayment, fetchClientLedger, masterDataSave } from "../../lib/api";
 import { useEstimateBuilder } from "./hooks/useEstimateBuilder";
 import { useInvoiceWorkflow } from "./hooks/useInvoiceWorkflow";
 import { useWccDcEditor } from "./hooks/useWccDcEditor";
@@ -784,137 +784,107 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
   const handleCreateClient = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!clientName) return;
-    if (isBoltMode) { alert("Client create migration pending."); return; }
 
     try {
-      const res = await fetch("/api/operations/clients", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          name: normalizeDisplayName(clientName),
-          email: clientEmail || null,
-          mobile: clientPhone || null,
-          city: normalizeDisplayName(clientCity) || null,
-          address: clientAddress || null,
-          gstNumber: normalizeGstinPan(clientGst) || null,
-          format: normalizeFormatMode(clientFormatSetting),
-          clientGroupName: normalizeDisplayName(clientGroupName) || null,
-          clientType: clientType,
-          pan: normalizeGstinPan(clientPan) || null,
-          primaryContactPerson: normalizeDisplayName(clientPrimaryContact) || null,
-          paymentTerms: clientPaymentTerms || null,
-          vendorCode: clientVendorCodeField || null,
-          isActive: true
-        })
+      await masterDataSave(token, "clients", "POST", null, {
+        name: normalizeDisplayName(clientName),
+        email: clientEmail || null,
+        mobile: clientPhone || null,
+        city: normalizeDisplayName(clientCity) || null,
+        address: clientAddress || null,
+        gstNumber: normalizeGstinPan(clientGst) || null,
+        format: normalizeFormatMode(clientFormatSetting),
+        clientGroupName: normalizeDisplayName(clientGroupName) || null,
+        clientType: clientType,
+        pan: normalizeGstinPan(clientPan) || null,
+        primaryContactPerson: normalizeDisplayName(clientPrimaryContact) || null,
+        paymentTerms: clientPaymentTerms || null,
+        vendorCode: clientVendorCodeField || null,
+        isActive: true
       });
-
-      if (res.ok) {
-        showSuccess(`Client "${clientName}" registered successfully with ${displayFormatLabel(clientFormatSetting)} format!`);
-        setShowClientForm(false);
-        setClientName("");
-        setClientEmail("");
-        setClientPhone("");
-        setClientCity("");
-        setClientAddress("");
-        setClientGst("");
-        setClientFormatSetting("normal");
-        setClientGroupName("");
-        setClientType("normal");
-        setClientPan("");
-        setClientPrimaryContact("");
-        setClientPaymentTerms("");
-        setClientVendorCodeField("");
-        fetchData();
-      }
-    } catch (err) {
+      showSuccess(`Client "${clientName}" registered successfully with ${displayFormatLabel(clientFormatSetting)} format!`);
+      setShowClientForm(false);
+      setClientName("");
+      setClientEmail("");
+      setClientPhone("");
+      setClientCity("");
+      setClientAddress("");
+      setClientGst("");
+      setClientFormatSetting("normal");
+      setClientGroupName("");
+      setClientType("normal");
+      setClientPan("");
+      setClientPrimaryContact("");
+      setClientPaymentTerms("");
+      setClientVendorCodeField("");
+      fetchData();
+    } catch (err: any) {
       console.error("Client creation failed:", err);
+      alert(err.message || "Client creation failed");
     }
   };
 
   const handleCreateBrand = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!brandName || !brandParent) return;
-    if (isBoltMode) { alert("Brand create migration pending."); return; }
 
     try {
-      const res = await fetch("/api/operations/brands", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          name: normalizeDisplayName(brandName),
-          parentClientId: Number(brandParent),
-          isActive: true
-        })
+      await masterDataSave(token, "brands", "POST", null, {
+        name: normalizeDisplayName(brandName),
+        parentClientId: Number(brandParent),
+        isActive: true
       });
-
-      if (res.ok) {
-        showSuccess(`Brand "${brandName}" registered successfully!`);
-        setShowBrandForm(false);
-        setBrandName("");
-        setBrandParent("");
-        fetchData();
-      }
-    } catch (err) {
+      showSuccess(`Brand "${brandName}" registered successfully!`);
+      setShowBrandForm(false);
+      setBrandName("");
+      setBrandParent("");
+      fetchData();
+    } catch (err: any) {
       console.error("Brand creation failed:", err);
+      alert(err.message || "Brand creation failed");
     }
   };
 
   const handleCreateStore = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!storeName || !storeClientId || !storeBrandId) return;
-    if (isBoltMode) { alert("Store create migration pending."); return; }
 
     try {
-      const res = await fetch("/api/operations/stores", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          name: normalizeDisplayName(storeName),
-          clientId: Number(storeClientId),
-          brandId: Number(storeBrandId),
-          location: storeLocation || null,
-          address: storeAddress || null,
-          contactPerson: normalizeDisplayName(storeContact) || null,
-          contactPhone: storePhone || null,
-          storeCode: storeCode || null,
-          city: normalizeDisplayName(storeCity) || null,
-          state: normalizeDisplayName(storeState) || null,
-          stateCode: storeStateCode || null,
-          regionZone: storeRegion || null,
-          contact: normalizeDisplayName(storeAltContact) || null,
-          isActive: true
-        })
+      await masterDataSave(token, "stores", "POST", null, {
+        name: normalizeDisplayName(storeName),
+        clientId: Number(storeClientId),
+        brandId: Number(storeBrandId),
+        location: storeLocation || null,
+        address: storeAddress || null,
+        contactPerson: normalizeDisplayName(storeContact) || null,
+        contactPhone: storePhone || null,
+        storeCode: storeCode || null,
+        city: normalizeDisplayName(storeCity) || null,
+        state: normalizeDisplayName(storeState) || null,
+        stateCode: storeStateCode || null,
+        regionZone: storeRegion || null,
+        contact: normalizeDisplayName(storeAltContact) || null,
+        isActive: true
       });
-
-      if (res.ok) {
-        showSuccess(`Store Site "${storeName}" registered!`);
-        setShowStoreForm(false);
-        setStoreName("");
-        setStoreClientId("");
-        setStoreBrandId("");
-        setStoreLocation("");
-        setStoreAddress("");
-        setStoreContact("");
-        setStorePhone("");
-        setStoreCode("");
-        setStoreCity("");
-        setStoreState("");
-        setStoreStateCode("");
-        setStoreRegion("");
-        setStoreAltContact("");
-        fetchData();
-      }
-    } catch (err) {
+      showSuccess(`Store Site "${storeName}" registered!`);
+      setShowStoreForm(false);
+      setStoreName("");
+      setStoreClientId("");
+      setStoreBrandId("");
+      setStoreLocation("");
+      setStoreAddress("");
+      setStoreContact("");
+      setStorePhone("");
+      setStoreCode("");
+      setStoreCity("");
+      setStoreState("");
+      setStoreStateCode("");
+      setStoreRegion("");
+      setStoreAltContact("");
+      fetchData();
+    } catch (err: any) {
       console.error("Store creation failed:", err);
+      alert(err.message || "Store creation failed");
     }
   };
 
@@ -958,62 +928,48 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     };
 
     try {
-      const url = editingBpId 
-        ? `/api/operations/billing-profiles/${editingBpId}` 
-        : `/api/operations/billing-profiles`;
-      
-      const res = await fetch(url, {
-        method: editingBpId ? "PATCH" : "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`
-        },
-        body: JSON.stringify(payload)
-      });
-
-      if (res.ok) {
-        showSuccess(editingBpId ? "Billing Profile updated!" : "Billing Profile added!");
-        setBpLegalName("");
-        setBpBranch("");
-        setBpGstin("");
-        setBpPan("");
-        setBpState("");
-        setBpStateCode("");
-        setBpBillingAddress("");
-        setBpShippingAddress("");
-        setBpContactPerson("");
-        setBpMobile("");
-        setBpEmail("");
-        setBpIsDefault(false);
-        setBpIsActive(true);
-        setBpNotes("");
-        setEditingBpId(null);
-        setShowBpForm(false);
-        fetchBillingProfiles(selectedClientForProfiles.id);
-      } else {
-        const data = await res.json();
-        alert(`Error: ${data.message || "Failed to save billing profile"}`);
-      }
-    } catch (err) {
+      await masterDataSave(
+        token,
+        "billing-profiles",
+        editingBpId ? "PATCH" : "POST",
+        editingBpId || null,
+        payload
+      );
+      showSuccess(editingBpId ? "Billing Profile updated!" : "Billing Profile added!");
+      setBpLegalName("");
+      setBpBranch("");
+      setBpGstin("");
+      setBpPan("");
+      setBpState("");
+      setBpStateCode("");
+      setBpBillingAddress("");
+      setBpShippingAddress("");
+      setBpContactPerson("");
+      setBpMobile("");
+      setBpEmail("");
+      setBpIsDefault(false);
+      setBpIsActive(true);
+      setBpNotes("");
+      setEditingBpId(null);
+      setShowBpForm(false);
+      fetchBillingProfiles(selectedClientForProfiles.id);
+    } catch (err: any) {
       console.error("Save billing profile failed:", err);
+      alert(`Error: ${err.message || "Failed to save billing profile"}`);
     }
   };
 
   const handleDeleteBillingProfile = async (id: number) => {
     if (!confirm("Are you sure you want to delete this billing profile?")) return;
     try {
-      const res = await fetch(`/api/operations/billing-profiles/${id}`, {
-        method: "DELETE",
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      if (res.ok) {
-        showSuccess("Billing Profile deleted!");
-        if (selectedClientForProfiles) {
-          fetchBillingProfiles(selectedClientForProfiles.id);
-        }
+      await masterDataSave(token, "billing-profiles", "DELETE", id);
+      showSuccess("Billing Profile deleted!");
+      if (selectedClientForProfiles) {
+        fetchBillingProfiles(selectedClientForProfiles.id);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error("Delete billing profile failed:", err);
+      alert(err.message || "Delete failed");
     }
   };
 
@@ -1128,51 +1084,41 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
   const handleCreateProduct = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!prodName || !prodRate) return;
-    if (isBoltMode) { alert("Product create migration pending."); return; }
 
     try {
-      const res = await fetch("/api/operations/products", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          name: prodName,
-          category: normalizeDisplayName(prodCat) || null,
-          unit: prodUnit,
-          rate: Number(prodRate),
-          description: prodDesc || null,
-          hsnSac: prodHsn.trim().toUpperCase() || null,
-          isStandard: prodIsStandard,
-          calculationType: prodCalcType,
-          gstPercent: Number(prodGst) || 18,
-          defaultSpecification: prodSpecs || null,
-          warranty: prodWarranty || null,
-          materialCodeId: prodMaterialCodeId ? parseInt(prodMaterialCodeId, 10) : null,
-          isActive: true
-        })
+      await masterDataSave(token, "products", "POST", null, {
+        name: prodName,
+        category: normalizeDisplayName(prodCat) || null,
+        unit: prodUnit,
+        rate: Number(prodRate),
+        description: prodDesc || null,
+        hsnSac: prodHsn.trim().toUpperCase() || null,
+        isStandard: prodIsStandard,
+        calculationType: prodCalcType,
+        gstPercent: Number(prodGst) || 18,
+        defaultSpecification: prodSpecs || null,
+        warranty: prodWarranty || null,
+        materialCodeId: prodMaterialCodeId ? parseInt(prodMaterialCodeId, 10) : null,
+        isActive: true
       });
-
-      if (res.ok) {
-        showSuccess(`Product "${prodName}" added to catalog!`);
-        setShowProductForm(false);
-        setProdName("");
-        setProdCat("");
-        setProdUnit("sqft");
-        setProdRate("");
-        setProdDesc("");
-        setProdHsn("");
-        setProdIsStandard(true);
-        setProdCalcType("sqft");
-        setProdGst("18");
-        setProdSpecs("");
-        setProdWarranty("");
-        setProdMaterialCodeId("");
-        fetchData();
-      }
-    } catch (err) {
+      showSuccess(`Product "${prodName}" added to catalog!`);
+      setShowProductForm(false);
+      setProdName("");
+      setProdCat("");
+      setProdUnit("sqft");
+      setProdRate("");
+      setProdDesc("");
+      setProdHsn("");
+      setProdIsStandard(true);
+      setProdCalcType("sqft");
+      setProdGst("18");
+      setProdSpecs("");
+      setProdWarranty("");
+      setProdMaterialCodeId("");
+      fetchData();
+    } catch (err: any) {
       console.error("Product creation failed:", err);
+      alert(err.message || "Product creation failed");
     }
   };
 
