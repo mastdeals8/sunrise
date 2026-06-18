@@ -261,7 +261,7 @@ export async function fetchEstimateItems(token: string | null, estimateId: numbe
     return res.ok ? res.json() : [];
   }
   return sbSelect("estimate_items", (q) =>
-    q.select("*").eq("estimate_id", estimateId).order("position")
+    q.select("*").eq("estimate_id", estimateId).order("id", { ascending: true })
   );
 }
 
