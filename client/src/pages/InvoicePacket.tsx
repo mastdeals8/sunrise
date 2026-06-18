@@ -6,8 +6,6 @@ import { companyAssetUrl } from "../utils/companyAssets";
 import { Package, Search, Printer, FileDown, ChevronUp, ChevronDown, Check, Loader2 } from "lucide-react";
 import EstimateDocument from "../components/EstimateDocument";
 import type { Client, Brand, Product, Store } from "./operations/types";
-import { isBoltMode } from "../lib/supabase";
-import { fetchInvoices, fetchCompanySettings } from "../lib/api";
 
 interface Invoice {
   id: number;
@@ -90,20 +88,11 @@ const InvoicePacketPage: React.FC = () => {
   useEffect(() => {
     const load = async () => {
       try {
-        if (isBoltMode) {
-          const [settings, invs] = await Promise.all([
-            fetchCompanySettings(token),
-            fetchInvoices(token),
-          ]);
-          if (settings) setSellerProfile(settings);
-          setInvoices(invs as Invoice[]);
-        } else {
-          console.log("[settings-debug] Invoice packet loading /api/company-settings");
-          const settingsRes = await fetch("/api/company-settings", { headers: { Authorization: `Bearer ${token}` } });
-          if (settingsRes.ok) setSellerProfile(await settingsRes.json());
-          const res = await fetch("/api/finance/invoices", { headers: { Authorization: `Bearer ${token}` } });
-          if (res.ok) setInvoices(await res.json());
-        }
+        console.log("[settings-debug] Invoice packet loading /api/company-settings");
+        const settingsRes = await fetch("/api/company-settings", { headers: { Authorization: `Bearer ${token}` } });
+        if (settingsRes.ok) setSellerProfile(await settingsRes.json());
+        const res = await fetch("/api/finance/invoices", { headers: { Authorization: `Bearer ${token}` } });
+        if (res.ok) setInvoices(await res.json());
       } catch (err) {
         console.error(err);
       } finally {
@@ -119,12 +108,6 @@ const InvoicePacketPage: React.FC = () => {
       return;
     }
     const load = async () => {
-      if (isBoltMode) {
-        // Invoice packet assembly requires the Express backend.
-        // In Bolt mode, show a placeholder so the page doesn't crash.
-        setPacket(null);
-        return;
-      }
       try {
         const res = await fetch(`/api/finance/invoice-packet/${selectedId}`, { headers: { Authorization: `Bearer ${token}` } });
         if (res.ok) {

@@ -10,8 +10,6 @@ import ProductForm, { type ProductFormValue, emptyProductFormValue } from "./Pro
 import { categoryKey, normalizeCategoryLabel } from "./CategoryAutocomplete";
 import ClientForm, { type ClientFormValue, emptyClientFormValue } from "./ClientForm";
 import { isBoltMode } from "../../../lib/supabase";
-import { fetchEstimateItems } from "../../../lib/api";
-import { exportEstimateToExcel } from "../utils/exportHelpers";
 
 // ─── Create Product Drawer ───────────────────────────────────────────────────
 // Renders as a fixed right-side panel (pointer-events passthrough backdrop so
@@ -1398,20 +1396,6 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
     setGstProfileSearch(`${normalizeDisplayName(bp.state || bp.branchLocationName)} — ${normalizeDisplayName(bp.legalCompanyName)} (${normalizeGstinPan(bp.gstin)})`);
   };
 
-  // Sync derived state: format and title are derived from client/subject — do
-  // this in effects, never during render, to avoid React's "cannot update
-  // a component while rendering a different component" warning.
-  React.useEffect(() => {
-    const eClient = clients.find((c: any) => c.id === Number(estClientId));
-    const derived = normalizeFormatMode(eClient?.format);
-    if (estFormat !== derived) setEstFormat(derived);
-  }, [estClientId, clients]);
-
-  React.useEffect(() => {
-    const wanted = estSubject || estNumber || "";
-    if (estTitle !== wanted) setEstTitle(wanted);
-  }, [estSubject, estNumber]);
-
   // Memoized derivations — computed once per estItems change, not per render.
   const activeStoreIds = React.useMemo<string[]>(() =>
     Array.from(new Set(estItems.map((it: any) => String(it.storeId || "")).filter(Boolean))),
@@ -1653,23 +1637,15 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
 	                                >
 	                                  <Edit3 className="w-3.5 h-3.5" />
 	                                </button>
-	                                <button
+	                                <a
+	                                  href={isBoltMode ? "#" : `/api/operations/estimates/${e.id}/export-excel`}
 	                                  title="Download as Excel"
-	                                  onClick={async (ev) => {
-	                                    ev.preventDefault();
-	                                    if (isBoltMode) {
-	                                      const items = await fetchEstimateItems(token, e.id);
-	                                      const client = clients.find((c: any) => c.id === e.clientId);
-	                                      await exportEstimateToExcel(e, items, client?.name);
-	                                    } else {
-	                                      window.open(`/api/operations/estimates/${e.id}/export-excel`, "_blank");
-	                                    }
-	                                  }}
+	                                  onClick={isBoltMode ? (ev) => { ev.preventDefault(); alert("Export migration to Edge Function pending."); } : undefined}
 	                                  className="inline-flex h-7 w-7 items-center justify-center rounded border border-slate-200 bg-white text-emerald-700 hover:bg-emerald-50 transition"
 	                                  aria-label="Export Excel"
 	                                >
 	                                  <FileSpreadsheet className="w-3.5 h-3.5" />
-	                                </button>
+	                                </a>
                                 {e.poNumber ? (
 	                                  <button
 	                                    onClick={() => openPoViewerForEstimate?.(e)}
@@ -1753,6 +1729,9 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                 const eClient = clients.find(c => c.id === Number(estClientId));
                 const eClientFormat = normalizeFormatMode(eClient?.format);
                 const eIsAbfrl = isAblblFormat(eClientFormat);
+                if (estFormat !== eClientFormat) setEstFormat(eClientFormat);
+                const wantedTitle = estSubject || estNumber || "";
+                if (estTitle !== wantedTitle) setEstTitle(wantedTitle);
 
                 // activeStoreIds is memoized at component level — do not redeclare here
                 const eClientIdNum = Number(estClientId) || null;

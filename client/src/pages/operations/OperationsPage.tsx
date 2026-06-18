@@ -1809,8 +1809,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
   const handleCreateEstimate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isSaving) return;
-    // In Bolt mode the estimate number is generated server-side by the Edge Function.
-    if ((!isBoltMode && !estNumber) || !estClientId || !estBrandId) return;
+    if (!estNumber || !estClientId || !estBrandId) return;
     if (!estTitle && !estSubject) return;
 
     // Phase 7: Validate estimate items
