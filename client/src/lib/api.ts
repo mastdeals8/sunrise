@@ -558,6 +558,108 @@ export async function fetchCustomerRateCards(token: string | null) {
   return sbSelect("customer_rate_cards", (q) => q.select("*").order("name"));
 }
 
+// ─── Storage uploads ─────────────────────────────────────────────────────────
+
+/**
+ * Upload a file to Supabase Storage.
+ * Returns the storage path (relative) and a URL for display/download.
+ * Private buckets → signed URL (1 hour). Public buckets → public URL.
+ */
+export async function uploadToStorage(
+  bucket: string,
+  storagePath: string,
+  file: File
+): Promise<{ storagePath: string; displayUrl: string }> {
+  const { error } = await supabase.storage.from(bucket).upload(storagePath, file, {
+    upsert: true,
+    contentType: file.type || undefined,
+  });
+  if (error) throw new Error(error.message);
+
+  // company-assets bucket is public; execution-documents is private
+  if (bucket === "company-assets") {
+    const { data } = supabase.storage.from(bucket).getPublicUrl(storagePath);
+    return { storagePath, displayUrl: data.publicUrl };
+  }
+  const { data, error: signErr } = await supabase.storage
+    .from(bucket)
+    .createSignedUrl(storagePath, 3600);
+  if (signErr) throw new Error(signErr.message);
+  return { storagePath, displayUrl: data!.signedUrl };
+}
+
+/**
+ * Register an uploaded execution document in the DB.
+ * Bolt mode: direct Supabase insert.
+ * Express mode: POST /api/operations/execution-documents.
+ */
+export async function registerExecutionDocument(
+  token: string | null,
+  doc: {
+    estimateId: number;
+    storeCode: string;
+    documentType: string;
+    filePath: string;
+    originalFileName: string;
+    mimeType?: string | null;
+    fileSize?: number | null;
+    uploadedVia?: string;
+    metadata?: Record<string, unknown>;
+  }
+): Promise<any> {
+  if (!isBoltMode) {
+    const res = await apiFetch("/api/operations/execution-documents", token, {
+      method: "POST",
+      body: JSON.stringify({
+        estimateId: doc.estimateId,
+        storeCode: doc.storeCode,
+        documentType: doc.documentType,
+        filePath: doc.filePath,
+        originalFileName: doc.originalFileName,
+        mimeType: doc.mimeType ?? null,
+        fileSize: doc.fileSize ?? null,
+        uploadedVia: doc.uploadedVia ?? "project_workspace",
+        metadata: doc.metadata ?? {},
+      }),
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).message ?? "Failed to register document");
+    return res.json();
+  }
+  const row: Record<string, unknown> = {
+    estimate_id: doc.estimateId,
+    store_code: doc.storeCode,
+    document_type: doc.documentType,
+    file_path: doc.filePath,
+    original_file_name: doc.originalFileName,
+    mime_type: doc.mimeType ?? null,
+    file_size: doc.fileSize ?? null,
+    uploaded_via: doc.uploadedVia ?? "project_workspace",
+    metadata: doc.metadata ?? {},
+  };
+  const { data, error } = await supabase.from("execution_documents").insert(row).select().single();
+  if (error) throw new Error(error.message);
+  return toCamel(data);
+}
+
+/**
+ * Save a company asset (logo / stamp) path to app_settings.
+ * Bolt mode: direct Supabase upsert. Express mode: embedded in PUT /api/company-settings.
+ */
+export async function saveAssetSetting(
+  token: string | null,
+  settingKey: string,
+  value: string
+): Promise<void> {
+  if (!isBoltMode) {
+    // Express mode handles this through the company-settings PUT endpoint
+    return;
+  }
+  const { error } = await supabase
+    .from("app_settings")
+    .upsert({ key: settingKey, value }, { onConflict: "key" });
+  if (error) throw new Error(error.message);
+}
+
 // ─── Write helpers — Edge Functions (Bolt) or Express (full mode) ─────────────
 
 /**

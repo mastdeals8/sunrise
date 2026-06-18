@@ -1,6 +1,6 @@
 import React from "react";
 import { isBoltMode } from "../../../lib/supabase";
-import { fetchEstimateItems, fetchDeliveryChallansForEstimate, fetchExecutionStores, fetchExecutionDocuments, fetchInvoiceForEstimate } from "../../../lib/api";
+import { fetchEstimateItems, fetchDeliveryChallansForEstimate, fetchExecutionStores, fetchExecutionDocuments, fetchInvoiceForEstimate, uploadToStorage, registerExecutionDocument } from "../../../lib/api";
 import {
   ArrowLeft, Camera, CheckCircle, CheckCircle2, ChevronRight, Clock,
   Download, ExternalLink, Eye, File, FileCheck2, FilePlus, FileText,
@@ -409,38 +409,39 @@ const StoreDrawer: React.FC<{
   };
 
   const uploadDoc = async (file: File, docType: "photo" | "signed_wcc") => {
-    if (isBoltMode) {
-      alert("Upload migration to Supabase Storage pending. File uploads are not yet available in Bolt preview mode.");
-      return;
-    }
     setUploading(true);
     try {
-      const fd = new FormData();
-      fd.append("file", file);
-      const upRes = await fetch("/api/operations/upload", { method: "POST", headers: authHeader, body: fd });
-      if (!upRes.ok) throw new Error("Upload failed");
-      const { filePath, fileName, fileSize } = await upRes.json();
+      let filePath: string;
+      let fileName = file.name;
 
-      await fetch("/api/operations/execution-documents", {
-        method: "POST",
-        headers: { ...authHeader, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          estimateId: estimate.id,
-          storeCode: row.storeCode,
-          documentType: docType,
-          filePath,
-          originalFileName: fileName || file.name,
-          mimeType: file.type || null,
-          fileSize: fileSize || file.size || null,
-          status: "active",
-          version: 1,
-          uploadedVia: "project_workspace",
-          uploadedAt: new Date().toISOString(),
-        }),
+      if (isBoltMode) {
+        const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+        const storagePath = `estimate-${estimate.id}/${row.storeCode}/${Date.now()}-${safeName}`;
+        const { storagePath: saved } = await uploadToStorage("execution-documents", storagePath, file);
+        filePath = saved;
+      } else {
+        const fd = new FormData();
+        fd.append("file", file);
+        const upRes = await fetch("/api/operations/upload", { method: "POST", headers: authHeader, body: fd });
+        if (!upRes.ok) throw new Error("Upload failed");
+        const data = await upRes.json();
+        filePath = data.filePath;
+        fileName = data.fileName || file.name;
+      }
+
+      await registerExecutionDocument(token, {
+        estimateId: estimate.id,
+        storeCode: row.storeCode,
+        documentType: docType,
+        filePath,
+        originalFileName: fileName,
+        mimeType: file.type || null,
+        fileSize: file.size || null,
+        uploadedVia: "project_workspace",
       });
       onRefresh();
-    } catch (e) {
-      alert("Upload failed. Please try again.");
+    } catch (e: any) {
+      alert(e?.message || "Upload failed. Please try again.");
     } finally {
       setUploading(false);
     }
@@ -1264,61 +1265,74 @@ const DocumentsTab: React.FC<{
   };
 
   const uploadTransport = async (file: File) => {
-    if (isBoltMode) {
-      alert("Upload migration to Supabase Storage pending. File uploads are not yet available in Bolt preview mode.");
-      return;
-    }
     setUploading(true);
     try {
-      const fd = new FormData();
-      fd.append("file", file);
-      const res = await fetch(`/api/projects/${estimate.id}/transport-receipt`, {
-        method: "POST",
-        headers: authHeader,
-        body: fd,
-      });
-      if (!res.ok) throw new Error("Upload failed");
+      if (isBoltMode) {
+        const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+        const storagePath = `estimate-${estimate.id}/transport/${Date.now()}-${safeName}`;
+        const { storagePath: saved } = await uploadToStorage("execution-documents", storagePath, file);
+        await registerExecutionDocument(token, {
+          estimateId: estimate.id,
+          storeCode: "",
+          documentType: "transport_receipt",
+          filePath: saved,
+          originalFileName: file.name,
+          mimeType: file.type || null,
+          fileSize: file.size || null,
+          uploadedVia: "project_workspace",
+        });
+      } else {
+        const fd = new FormData();
+        fd.append("file", file);
+        const res = await fetch(`/api/projects/${estimate.id}/transport-receipt`, {
+          method: "POST",
+          headers: authHeader,
+          body: fd,
+        });
+        if (!res.ok) throw new Error("Upload failed");
+      }
       onRefresh();
-    } catch {
-      alert("Upload failed.");
+    } catch (e: any) {
+      alert(e?.message || "Upload failed.");
     } finally {
       setUploading(false);
     }
   };
 
   const uploadExtra = async (file: File) => {
-    if (isBoltMode) {
-      alert("Upload migration to Supabase Storage pending. File uploads are not yet available in Bolt preview mode.");
-      return;
-    }
     setUploading(true);
     try {
-      const fd = new FormData();
-      fd.append("file", file);
-      const upRes = await fetch("/api/operations/upload", { method: "POST", headers: authHeader, body: fd });
-      if (!upRes.ok) throw new Error("Upload failed");
-      const { filePath, fileName, fileSize } = await upRes.json();
-      await fetch("/api/operations/execution-documents", {
-        method: "POST",
-        headers: { ...authHeader, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          estimateId: estimate.id,
-          deliveryChallanId: null,
-          storeCode: null,
-          documentType: "extra",
-          filePath,
-          originalFileName: fileName || file.name,
-          mimeType: file.type || null,
-          fileSize: fileSize || file.size || null,
-          status: "active",
-          version: 1,
-          uploadedVia: "project_workspace",
-          uploadedAt: new Date().toISOString(),
-        }),
+      let filePath: string;
+      let fileName = file.name;
+
+      if (isBoltMode) {
+        const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+        const storagePath = `estimate-${estimate.id}/extra/${Date.now()}-${safeName}`;
+        const { storagePath: saved } = await uploadToStorage("execution-documents", storagePath, file);
+        filePath = saved;
+      } else {
+        const fd = new FormData();
+        fd.append("file", file);
+        const upRes = await fetch("/api/operations/upload", { method: "POST", headers: authHeader, body: fd });
+        if (!upRes.ok) throw new Error("Upload failed");
+        const data = await upRes.json();
+        filePath = data.filePath;
+        fileName = data.fileName || file.name;
+      }
+
+      await registerExecutionDocument(token, {
+        estimateId: estimate.id,
+        storeCode: "",
+        documentType: "extra",
+        filePath,
+        originalFileName: fileName,
+        mimeType: file.type || null,
+        fileSize: file.size || null,
+        uploadedVia: "project_workspace",
       });
       onRefresh();
-    } catch {
-      alert("Upload failed.");
+    } catch (e: any) {
+      alert(e?.message || "Upload failed.");
     } finally {
       setUploading(false);
     }

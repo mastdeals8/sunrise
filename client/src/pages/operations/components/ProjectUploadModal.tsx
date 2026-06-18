@@ -4,6 +4,7 @@ import {
   File, AlertCircle, CheckCircle, Loader,
 } from "lucide-react";
 import { isBoltMode } from "../../../lib/supabase";
+import { uploadToStorage, registerExecutionDocument } from "../../../lib/api";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -130,53 +131,56 @@ const ProjectUploadModal: React.FC<Props> = ({
       setUploadErrors(["Please select a store for every file before uploading."]);
       return;
     }
-    if (isBoltMode) {
-      setUploadErrors(["Upload migration to Supabase Storage pending. File uploads are not yet available in Bolt preview mode."]);
-      return;
-    }
     setUploading(true);
     setUploadErrors([]);
     const errs: string[] = [];
 
     for (const p of pending) {
       try {
-        // Step 1: upload file
-        const fd = new FormData();
-        fd.append("file", p.file);
-        const upRes = await fetch("/api/operations/upload", {
-          method: "POST",
-          headers: authHeader,
-          body: fd,
-        });
-        if (!upRes.ok) {
-          const msg = await upRes.json().catch(() => ({ message: "Upload failed" }));
-          throw new Error(msg?.message || "Upload failed");
-        }
-        const { filePath, fileName, fileSize } = await upRes.json();
+        let filePath: string;
+        let fileName: string = p.file.name;
 
-        // Step 2: register document
-        const body: Record<string, any> = {
+        if (isBoltMode) {
+          // Upload directly to Supabase Storage
+          const ext = p.file.name.split(".").pop() ?? "bin";
+          const safeName = p.file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+          const storagePath = `estimate-${estimateId}/${p.storeCode}/${Date.now()}-${safeName}`;
+          const { storagePath: saved } = await uploadToStorage(
+            "execution-documents",
+            storagePath,
+            p.file
+          );
+          filePath = saved;
+        } else {
+          // Upload via Express
+          const fd = new FormData();
+          fd.append("file", p.file);
+          const upRes = await fetch("/api/operations/upload", {
+            method: "POST",
+            headers: authHeader,
+            body: fd,
+          });
+          if (!upRes.ok) {
+            const msg = await upRes.json().catch(() => ({ message: "Upload failed" }));
+            throw new Error(msg?.message || "Upload failed");
+          }
+          const data = await upRes.json();
+          filePath = data.filePath;
+          fileName = data.fileName || p.file.name;
+        }
+
+        // Register document in DB
+        await registerExecutionDocument(token, {
           estimateId,
           storeCode: p.storeCode,
           documentType: mode,
           filePath,
-          originalFileName: fileName || p.file.name,
+          originalFileName: fileName,
           mimeType: p.file.type || null,
-          fileSize: fileSize || p.file.size || null,
+          fileSize: p.file.size || null,
           uploadedVia: "project_workspace",
-        };
-        if (mode === "photo") {
-          body.metadata = { photoType: p.photoType };
-        }
-        const docRes = await fetch("/api/operations/execution-documents", {
-          method: "POST",
-          headers: { ...authHeader, "Content-Type": "application/json" },
-          body: JSON.stringify(body),
+          metadata: mode === "photo" ? { photoType: p.photoType } : {},
         });
-        if (!docRes.ok) {
-          const msg = await docRes.json().catch(() => ({ message: "Failed to register" }));
-          throw new Error(msg?.message || "Failed to register document");
-        }
       } catch (err: any) {
         errs.push(`${p.file.name}: ${err?.message ?? "Failed"}`);
       }

@@ -3,7 +3,7 @@ import { useAuth } from "../contexts/AuthContext";
 import { Settings as SettingsIcon, Save, Building2, FileText, CreditCard, Image as ImageIcon, Upload } from "lucide-react";
 import { INDIA_STATES, getStateCode } from "@/utils/indiaLocations";
 import { isBoltMode } from "../lib/supabase";
-import { fetchCompanySettings } from "../lib/api";
+import { fetchCompanySettings, uploadToStorage, saveAssetSetting } from "../lib/api";
 
 interface SettingsState {
   companyName: string;
@@ -184,22 +184,33 @@ const SettingsPage: React.FC = () => {
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
-    if (isBoltMode) { setMsg({ kind: "err", text: "Upload migration to Supabase Storage pending." }); setTimeout(() => setMsg(null), 4000); return; }
     setMsg(null);
     try {
-      const body = new FormData();
-      body.append("file", file);
-      const res = await fetch("/api/company-assets/upload", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
-        body,
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.message || "Upload failed");
+      let filePath: string;
+      if (isBoltMode) {
+        const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+        const storagePath = `${key === "companyLogoPath" ? "logo" : "stamp"}/${Date.now()}-${safeName}`;
+        const { storagePath: saved } = await uploadToStorage("company-assets", storagePath, file);
+        filePath = saved;
+        // Persist to app_settings so it survives refreshes
+        const settingKey = key === "companyLogoPath" ? "company.logoPath" : "company.signatureStampPath";
+        await saveAssetSetting(token, settingKey, filePath);
+      } else {
+        const body = new FormData();
+        body.append("file", file);
+        const res = await fetch("/api/company-assets/upload", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+          body,
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.message || "Upload failed");
+        }
+        const data = await res.json();
+        filePath = String(data.filePath || "");
       }
-      const data = await res.json();
-      setForm(prev => ({ ...prev, [key]: String(data.filePath || "") }));
+      setForm(prev => ({ ...prev, [key]: filePath }));
       setMsg({ kind: "ok", text: "Image uploaded. Save settings to apply it to documents." });
       setTimeout(() => setMsg(null), 3000);
     } catch (err: any) {

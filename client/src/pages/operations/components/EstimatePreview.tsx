@@ -1,6 +1,6 @@
 import React from "react";
 import { isBoltMode } from "../../../lib/supabase";
-import { fetchExecutionStores, createInvoice } from "../../../lib/api";
+import { fetchExecutionStores, createInvoice, uploadToStorage, registerExecutionDocument } from "../../../lib/api";
 import { AlertTriangle, Briefcase, Camera, CheckCircle2, ChevronRight, Copy, Download, Edit3, Eye, File, FileCheck2, FilePlus, FileSpreadsheet, FileText, FileUp, Image as ImageIcon, Paperclip, Pen, Plus, Printer, ScanLine, Store as StoreIcon, Upload, X } from "lucide-react";
 import { isAblblFormat } from "../../../../../shared/textFormat";
 import { formatProductDetails } from "../../../../../shared/productDetails";
@@ -1758,26 +1758,44 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
                   input.onchange = async (ev) => {
                     const files = Array.from((ev.target as HTMLInputElement).files || []);
                     if (!files.length) return;
-                    if (isBoltMode) {
-                      alert("Upload migration to Supabase Storage pending. File uploads are not yet available in Bolt preview mode.");
-                      return;
-                    }
                     for (const file of files) {
-                      const fd = new FormData();
-                      fd.append("file", file);
-                      fd.append("documentType", docType);
-                      fd.append("estimateId", String(selectedEstimate.id));
                       try {
-                        const res = await fetch("/api/operations/execution-documents", {
-                          method: "POST",
-                          headers: { Authorization: `Bearer ${token}` },
-                          body: fd,
-                        });
-                        if (!res.ok) {
-                          const body = await res.text().catch(() => "");
-                          alert(`Upload failed (${res.status}). ${body || ""}`);
-                          return;
+                        let filePath: string;
+                        let fileName = file.name;
+
+                        if (isBoltMode) {
+                          const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+                          const storagePath = `estimate-${selectedEstimate.id}/${docType}/${Date.now()}-${safeName}`;
+                          const { storagePath: saved } = await uploadToStorage("execution-documents", storagePath, file);
+                          filePath = saved;
+                        } else {
+                          const fd = new FormData();
+                          fd.append("file", file);
+                          fd.append("documentType", docType);
+                          fd.append("estimateId", String(selectedEstimate.id));
+                          const res = await fetch("/api/operations/execution-documents", {
+                            method: "POST",
+                            headers: { Authorization: `Bearer ${token}` },
+                            body: fd,
+                          });
+                          if (!res.ok) {
+                            const body = await res.text().catch(() => "");
+                            alert(`Upload failed (${res.status}). ${body || ""}`);
+                            return;
+                          }
+                          continue;
                         }
+
+                        await registerExecutionDocument(token, {
+                          estimateId: selectedEstimate.id,
+                          storeCode: "",
+                          documentType: docType,
+                          filePath,
+                          originalFileName: fileName,
+                          mimeType: file.type || null,
+                          fileSize: file.size || null,
+                          uploadedVia: "project_workspace",
+                        });
                       } catch (err: any) {
                         alert(`Upload failed: ${err?.message || err}`);
                         return;
