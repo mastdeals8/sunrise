@@ -784,12 +784,15 @@ export async function updateEstimate(
     if (!res.ok) throw new Error((await res.json()).message ?? "Failed to update estimate");
     return res.json();
   }
+  // Pass id in body rather than URL path — avoids Supabase gateway 405 on path-segment routing.
   const res = await edgeFetch("estimate-save", token, {
     method: "PATCH",
-    pathSuffix: `/${id}`,
-    body: JSON.stringify(payload),
+    body: JSON.stringify({ ...payload, _estimateId: id }),
   });
-  if (!res.ok) throw new Error((await res.json()).message ?? "Failed to update estimate");
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => ({}));
+    throw new Error(errBody.message ?? `estimate-save PATCH failed (${res.status})`);
+  }
   return res.json();
 }
 
@@ -932,11 +935,15 @@ export async function deleteExecutionDocument(
     if (!res.ok) throw new Error(`Delete failed (${res.status})`);
     return;
   }
-  const { error } = await supabase
-    .from("execution_documents")
-    .update({ status: "deleted", deleted_at: new Date().toISOString() })
-    .eq("id", docId);
-  if (error) throw new Error(error.message);
+  // Use edge function with admin client to bypass RLS on execution_documents.
+  const res = await edgeFetch("exec-doc-update", token, {
+    method: "PATCH",
+    body: JSON.stringify({ id: docId, status: "deleted", deleted_at: new Date().toISOString() }),
+  });
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => ({}));
+    throw new Error(errBody.message ?? `Delete failed (${res.status})`);
+  }
 }
 
 /**

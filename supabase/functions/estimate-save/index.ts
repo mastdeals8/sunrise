@@ -73,6 +73,16 @@ async function getSellerStateCode(db: ReturnType<typeof adminClient>): Promise<s
   }
 }
 
+// Convert camelCase keys to snake_case so frontend can send either format.
+function normalizeKeys(body: Record<string, unknown>): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(body)) {
+    const snake = k.replace(/([A-Z])/g, "_$1").toLowerCase();
+    result[snake] = v;
+  }
+  return result;
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return corsResponse();
 
@@ -87,14 +97,22 @@ Deno.serve(async (req: Request) => {
 
   // Determine if this is a PATCH (update) or POST (create)
   // URL pattern: /estimate-save  or  /estimate-save/123
+  // Frontend may also pass _estimateId in the body as a fallback (avoids Supabase gateway 405).
   const pathParts = url.pathname.replace(/^\/functions\/v1\/estimate-save/, "").split("/").filter(Boolean);
-  const estimateId = pathParts[0] ? parseInt(pathParts[0], 10) : null;
+  const pathId = pathParts[0] ? parseInt(pathParts[0], 10) : null;
 
   try {
-    if (req.method === "PATCH" && estimateId) {
+    if (req.method === "PATCH") {
       // ---- UPDATE PATH ----
-      const body = await req.json();
-      const updates: Record<string, unknown> = { ...body };
+      const rawBody = await req.json();
+      // Body-based ID fallback: frontend sends _estimateId when not using path segments.
+      const bodyId = rawBody._estimateId ? parseInt(String(rawBody._estimateId), 10) : null;
+      delete rawBody._estimateId;
+      const estimateId = pathId ?? bodyId;
+      if (!estimateId) return errorResponse("Missing estimate id", 400);
+
+      // Normalize camelCase keys to snake_case (e.g. poNumber → po_number)
+      const updates: Record<string, unknown> = normalizeKeys(rawBody);
 
       // Preprocess date fields
       if ("estimate_date" in updates) updates.estimate_date = preprocessDate(updates.estimate_date)?.toISOString() ?? null;
