@@ -305,10 +305,25 @@ export async function fetchExecutionDocuments(
     const res = await apiFetch(url, token);
     return res.ok ? res.json() : [];
   }
-  return sbSelect("execution_documents", (q) => {
-    const base = q.select("*").order("created_at", { ascending: false });
+  const docs = await sbSelect<any>("execution_documents", (q) => {
+    const base = q.select("*").eq("status", "active").order("created_at", { ascending: false });
     return estimateId ? base.eq("estimate_id", estimateId) : base;
   });
+  if (!docs.length) return docs;
+
+  // Replace raw storage paths with 2-hour signed URLs so they can render in <img>/<a>
+  const paths = docs.map((d: any) => d.filePath).filter(Boolean) as string[];
+  if (paths.length === 0) return docs;
+  try {
+    const { data: signed } = await supabase.storage
+      .from("execution-documents")
+      .createSignedUrls(paths, 7200);
+    if (signed) {
+      const urlMap = new Map(signed.map((s: any) => [s.path, s.signedUrl]));
+      return docs.map((d: any) => ({ ...d, filePath: urlMap.get(d.filePath) ?? d.filePath }));
+    }
+  } catch { /* return raw paths as fallback */ }
+  return docs;
 }
 
 export async function fetchExecutionStores(
@@ -483,8 +498,15 @@ export async function fetchCompanySettings(token: string | null) {
   const rows = await sbSelect<any>("app_settings", (q) =>
     q.select("key, value")
   );
-  // Convert [{key, value}] to an object
-  return Object.fromEntries(rows.map((r: any) => [r.key, r.value]));
+  // Convert [{key, value}] → flat object; also expose 'company.xxx' as plain 'xxx'
+  const out: Record<string, any> = {};
+  for (const r of rows) {
+    out[r.key] = r.value;
+    if (typeof r.key === "string" && r.key.startsWith("company.")) {
+      out[r.key.slice("company.".length)] = r.value;
+    }
+  }
+  return out;
 }
 
 // ─── Client Ledger Statement ──────────────────────────────────────────────────

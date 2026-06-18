@@ -190,9 +190,8 @@ const SettingsPage: React.FC = () => {
       if (isBoltMode) {
         const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
         const storagePath = `${key === "companyLogoPath" ? "logo" : "stamp"}/${Date.now()}-${safeName}`;
-        const { storagePath: saved } = await uploadToStorage("company-assets", storagePath, file);
-        filePath = saved;
-        // Persist to app_settings so it survives refreshes
+        const { displayUrl } = await uploadToStorage("company-assets", storagePath, file);
+        filePath = displayUrl; // store the full public URL so companyAssetUrl renders it directly
         const settingKey = key === "companyLogoPath" ? "company.logoPath" : "company.signatureStampPath";
         await saveAssetSetting(token, settingKey, filePath);
       } else {

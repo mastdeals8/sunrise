@@ -242,7 +242,7 @@ const normalizeProjectData = (payload: any): ProjectData => ({
 });
 
 const loadProjectDataFallback = async (estimate: Estimate, authHeader: Record<string, string>, token?: string | null) => {
-  const [items, challans, stores, docs, invoice] = isBoltMode
+  const [items, challans, execStores, docs, invoice] = isBoltMode
     ? await Promise.all([
         fetchEstimateItems(token ?? null, estimate.id).catch(() => []),
         fetchDeliveryChallansForEstimate(token ?? null, estimate.id).catch(() => []),
@@ -257,6 +257,39 @@ const loadProjectDataFallback = async (estimate: Estimate, authHeader: Record<st
         fetchJson(`/api/operations/execution-documents?estimateId=${estimate.id}`, { headers: authHeader }).catch(() => []),
         fetchJson(`/api/finance/invoices/estimate/${estimate.id}`, { headers: authHeader }).catch(() => null),
       ]);
+
+  // In Bolt mode, execution_stores rows are flat — join docs + challans into each store.
+  let stores = execStores;
+  if (isBoltMode && Array.isArray(execStores)) {
+    const allDocs = Array.isArray(docs) ? docs : [];
+    const allChallans = Array.isArray(challans) ? challans : [];
+    stores = execStores.map((store: any) => {
+      const sc = store.storeCode;
+      const storeDocs = allDocs.filter((d: any) => d.storeCode === sc);
+      const photoDocs = storeDocs.filter((d: any) => d.documentType === "photo");
+      const signedDocs = storeDocs.filter((d: any) => d.documentType === "signed_wcc" || d.documentType === "signed_dc");
+      const otherDocs = storeDocs.filter((d: any) => !["photo", "signed_wcc", "signed_dc"].includes(d.documentType));
+      const storeChallans = allChallans.filter((c: any) => c.storeCode === sc);
+      const wccRecords = storeChallans.filter((c: any) => c.documentType === "wcc");
+      const dcRecords = storeChallans.filter((c: any) => c.documentType === "dc");
+      return {
+        ...store,
+        wccRecords,
+        dcRecords,
+        photoDocuments: photoDocs,
+        signedWccDocuments: signedDocs,
+        documents: otherDocs,
+        stats: {
+          photoCount: photoDocs.length,
+          wccCount: wccRecords.length,
+          dcCount: dcRecords.length,
+          signedWccCount: signedDocs.filter((d: any) => d.documentType === "signed_wcc").length,
+          signedDcCount: signedDocs.filter((d: any) => d.documentType === "signed_dc").length,
+        },
+      };
+    });
+  }
+
   const projectDocuments = Array.isArray(docs)
     ? docs.filter((doc: any) => !doc?.storeCode || ["po", "transport_receipt", "extra"].includes(doc?.documentType))
     : [];
