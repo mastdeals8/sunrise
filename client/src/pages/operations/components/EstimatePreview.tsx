@@ -7,6 +7,7 @@ import { formatProductDetails } from "../../../../../shared/productDetails";
 import { companyAssetUrl } from "../../../utils/companyAssets";
 import { formatCurrency } from "../utils/formatters";
 import { orderedEstimateItems, orderedStoreKeysFromItems } from "../utils/estimateOrdering";
+import { exportEstimateToExcel } from "../utils/exportHelpers";
 import type { Brand, Client, Estimate, EstimateItem, Product, Store } from "../types";
 
 interface EstimatePreviewProps {
@@ -1652,16 +1653,21 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
                   </>
                 )}
 	                {!isPageWorkspace && isProjectWorkspace && (
-                  <a
-                    href={isBoltMode ? "#" : `/api/operations/estimates/${selectedEstimate.id}/export-excel`}
-                    target={isBoltMode ? undefined : "_blank"}
-                    rel="noreferrer"
-                    onClick={isBoltMode ? (e) => { e.preventDefault(); alert("Export migration to Edge Function pending."); } : undefined}
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (isBoltMode) {
+                        const client = clients.find((c: any) => c.id === selectedEstimate.clientId);
+                        await exportEstimateToExcel(selectedEstimate, previewItems, client?.name);
+                      } else {
+                        window.open(`/api/operations/estimates/${selectedEstimate.id}/export-excel`, "_blank");
+                      }
+                    }}
                     className="inline-flex items-center gap-1.5 py-1 px-3 bg-green-50 border border-green-200 text-green-700 text-xs font-bold rounded-lg hover:bg-green-100 transition"
                   >
                     <FileSpreadsheet className="w-3.5 h-3.5" />
                     Detailed Excel
-                  </a>
+                  </button>
                 )}
 		                <button
 		                  type="button"
@@ -1681,18 +1687,23 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
 	                      className="inline-flex items-center gap-1.5 py-1 px-3 bg-white border border-slate-300 text-slate-700 text-xs font-bold rounded-lg hover:bg-slate-100 transition disabled:opacity-50"
 	                    >
 	                      <Download className="w-3.5 h-3.5" />
-	                      Export PDF
+	                      Print / Save as PDF
 	                    </button>
-	                    <a
-	                      href={isBoltMode ? "#" : `/api/operations/estimates/${selectedEstimate.id}/export-excel`}
-	                      target={isBoltMode ? undefined : "_blank"}
-	                      rel="noreferrer"
-	                      onClick={isBoltMode ? (e) => { e.preventDefault(); alert("Export migration to Edge Function pending."); } : undefined}
+	                    <button
+	                      type="button"
+	                      onClick={async () => {
+	                        if (isBoltMode) {
+	                          const client = clients.find((c: any) => c.id === selectedEstimate.clientId);
+	                          await exportEstimateToExcel(selectedEstimate, previewItems, client?.name);
+	                        } else {
+	                          window.open(`/api/operations/estimates/${selectedEstimate.id}/export-excel`, "_blank");
+	                        }
+	                      }}
 	                      className="inline-flex items-center gap-1.5 py-1 px-3 bg-green-50 border border-green-200 text-green-700 text-xs font-bold rounded-lg hover:bg-green-100 transition"
 	                    >
 	                      <FileSpreadsheet className="w-3.5 h-3.5" />
 	                      Export to Excel
-	                    </a>
+	                    </button>
 	                    <button
 	                      type="button"
 	                      onClick={copySummary}
