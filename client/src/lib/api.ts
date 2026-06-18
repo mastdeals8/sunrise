@@ -519,7 +519,7 @@ export async function fetchBillingProfiles(token: string | null, clientId: numbe
     const res = await apiFetch(`/api/operations/clients/${clientId}/billing-profiles`, token);
     return res.ok ? res.json() : [];
   }
-  return sbSelect("billing_profiles", (q) =>
+  return sbSelect("client_billing_profiles", (q) =>
     q.select("*").eq("client_id", clientId).order("legal_company_name")
   );
 }

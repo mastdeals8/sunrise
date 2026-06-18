@@ -109,7 +109,7 @@ Deno.serve(async (req: Request) => {
       // Billing profile snapshot
       if (updates.billing_profile_id) {
         const { data: bp } = await db
-          .from("billing_profiles")
+          .from("client_billing_profiles")
           .select("*")
           .eq("id", Number(updates.billing_profile_id))
           .maybeSingle();
@@ -183,7 +183,7 @@ Deno.serve(async (req: Request) => {
       if (estimate.billing_profile_id || estimate.billingProfileId) {
         const bpId = Number(estimate.billing_profile_id ?? estimate.billingProfileId);
         const { data: bp } = await db
-          .from("billing_profiles")
+          .from("client_billing_profiles")
           .select("*")
           .eq("id", bpId)
           .maybeSingle();
