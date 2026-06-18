@@ -1641,7 +1641,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
 	                                    if (isBoltMode) {
 	                                      const items = await fetchEstimateItems(token, e.id);
 	                                      const client = clients.find((c: any) => c.id === e.clientId);
-	                                      await exportEstimateToExcel(e, items, client?.name);
+	                                      await exportEstimateToExcel(e, items, client?.name, sellerProfile?.name);
 	                                    } else {
 	                                      window.open(`/api/operations/estimates/${e.id}/export-excel`, "_blank");
 	                                    }

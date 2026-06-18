@@ -2494,6 +2494,11 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
 
   const reloadSelectedChallans = async () => {
     if (!selectedEstimate || !token) return;
+    if (isBoltMode) {
+      const challans = await fetchDeliveryChallansForEstimate(token, selectedEstimate.id);
+      setSelectedChallans(challans as any[]);
+      return;
+    }
     const dRes = await fetch(`/api/operations/delivery-challans/estimate/${selectedEstimate.id}`, {
       headers: { Authorization: `Bearer ${token}` },
     });
@@ -2508,12 +2513,19 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     let updated = 0;
     for (let i = 0; i < targetDcs.length; i += batchSize) {
       const batch = targetDcs.slice(i, i + batchSize);
-      const results = await Promise.all(batch.map((dc) => fetch(`/api/operations/delivery-challans/${dc.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify(updatesFor(dc)),
-      })));
-      updated += results.filter((res) => res.ok).length;
+      if (isBoltMode) {
+        const results = await Promise.all(batch.map((dc) =>
+          updateDeliveryChallan(token, dc.id, updatesFor(dc)).then(() => true).catch(() => false)
+        ));
+        updated += results.filter(Boolean).length;
+      } else {
+        const results = await Promise.all(batch.map((dc) => fetch(`/api/operations/delivery-challans/${dc.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify(updatesFor(dc)),
+        })));
+        updated += results.filter((res) => res.ok).length;
+      }
       await new Promise((resolve) => window.setTimeout(resolve, 0));
     }
     await reloadSelectedChallans();
@@ -2921,11 +2933,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
       if (dcRes.ok) createdCount++;
     }
     showSuccess(`Generated ${createdCount} of ${sids.length} WCC drafts.`);
-    // refresh data
-    const dRes = await fetch(`/api/operations/delivery-challans/estimate/${selectedEstimate.id}`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (dRes.ok) setSelectedChallans(await dRes.json());
+    await reloadSelectedChallans();
     fetchData();
   };
 
@@ -3000,12 +3008,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
         showSuccess(`WCC "${dcNumberVal}" ${editingDcId ? "updated" : "created"} successfully!`);
         setShowDcModal(false);
         setEditingDcId(null);
-        
-        // Reload challans
-        const dRes = await fetch(`/api/operations/delivery-challans/estimate/${selectedEstimate.id}`, {
-          headers: { Authorization: `Bearer ${token}` }
-        });
-        if (dRes.ok) setSelectedChallans(await dRes.json());
+        await reloadSelectedChallans();
         fetchData();
       }
     } catch (err) {
@@ -3015,26 +3018,19 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
 
   const handleUpdateDcFiles = async (dcId: number, field: string, filePath: string) => {
     try {
-      const res = await fetch(`/api/operations/delivery-challans/${dcId}`, {
-        method: "PATCH",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`
-        },
-        body: JSON.stringify({ [field]: filePath })
-      });
-      if (res.ok) {
-        showSuccess("Proof document linked successfully to Delivery Challan!");
-        
-        // Reload details
-        if (selectedEstimate) {
-          const dRes = await fetch(`/api/operations/delivery-challans/estimate/${selectedEstimate.id}`, {
-            headers: { Authorization: `Bearer ${token}` }
-          });
-          if (dRes.ok) setSelectedChallans(await dRes.json());
-        }
-        fetchData();
+      if (isBoltMode) {
+        await updateDeliveryChallan(token, dcId, { [field]: filePath });
+      } else {
+        const res = await fetch(`/api/operations/delivery-challans/${dcId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ [field]: filePath }),
+        });
+        if (!res.ok) throw new Error("Update failed");
       }
+      showSuccess("Proof document linked successfully to Delivery Challan!");
+      await reloadSelectedChallans();
+      fetchData();
     } catch (err) {
       console.error("Proof update failed:", err);
     }
@@ -3050,17 +3046,26 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
 
     if (!est) return null;
     if (items.length === 0) {
-      const itemRes = await fetch(`/api/operations/estimates/${dc.estimateId}/items`, {
+      if (isBoltMode) {
+        items = await fetchEstimateItems(token, dc.estimateId).catch(() => []) as any[];
+      } else {
+        const itemRes = await fetch(`/api/operations/estimates/${dc.estimateId}/items`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (itemRes.ok) items = await itemRes.json();
+      }
+    }
+    setSelectedEstimate(est);
+    setSelectedEstimateItems(items);
+    if (isBoltMode) {
+      const challans = await fetchDeliveryChallansForEstimate(token, dc.estimateId).catch(() => []);
+      setSelectedChallans(challans as any[]);
+    } else {
+      const dRes = await fetch(`/api/operations/delivery-challans/estimate/${dc.estimateId}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (itemRes.ok) items = await itemRes.json();
+      if (dRes.ok) setSelectedChallans(await dRes.json());
     }
-    if (est) setSelectedEstimate(est);
-    setSelectedEstimateItems(items);
-    const dRes = await fetch(`/api/operations/delivery-challans/estimate/${dc.estimateId}`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (dRes.ok) setSelectedChallans(await dRes.json());
     return est;
   };
 
@@ -3112,27 +3117,30 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
   const deleteDeliveryChallanForPreview = async (dc: DeliveryChallan) => {
     if (!token) return;
     if (!confirm(`Delete ${isAblblFormat(dc.clientFormat) ? "WCC" : "Delivery Challan"} ${dc.dcNumber}?`)) return;
-    const res = await fetch(`/api/operations/delivery-challans/${dc.id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify({
+    try {
+      const payload = {
         status: "deleted",
         metadata: { ...(dc.metadata || {}), deleted: true, deletedAt: new Date().toISOString() },
-      }),
-    });
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      alert(body.message || "Delete failed");
-      return;
+      };
+      if (isBoltMode) {
+        await updateDeliveryChallan(token, dc.id, payload);
+      } else {
+        const res = await fetch(`/api/operations/delivery-challans/${dc.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body.message || "Delete failed");
+        }
+      }
+      showSuccess("Document deleted.");
+      await reloadSelectedChallans();
+      fetchData();
+    } catch (err: any) {
+      alert(err?.message || "Delete failed");
     }
-    showSuccess("Document deleted.");
-    if (selectedEstimate) {
-      const dRes = await fetch(`/api/operations/delivery-challans/estimate/${selectedEstimate.id}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (dRes.ok) setSelectedChallans(await dRes.json());
-    }
-    fetchData();
   };
 
   const executionDocFileName = (doc: any) =>
