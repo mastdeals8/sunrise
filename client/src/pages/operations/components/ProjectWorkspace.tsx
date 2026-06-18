@@ -1347,22 +1347,31 @@ const DocumentsTab: React.FC<{
           <FileText className="w-4 h-4 text-slate-400" />
           <span className="text-sm font-bold text-slate-700">{estimate.estimateNumber} — {estimate.title}</span>
           <div className="ml-auto flex items-center gap-1.5">
-            <a
-              href={isBoltMode ? "#" : `/api/operations/estimates/export/pdf/${estimate.id}`}
-              target={isBoltMode ? undefined : "_blank"}
-              rel="noreferrer"
-              onClick={isBoltMode ? (e) => { e.preventDefault(); alert("Export migration to Edge Function pending."); } : undefined}
-              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded border text-xs font-bold bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100"
-            >
-              <Eye className="w-3.5 h-3.5" /> View PDF
-            </a>
-            <a
-              href={isBoltMode ? "#" : `/api/operations/estimates/export/xlsx/${estimate.id}`}
-              onClick={isBoltMode ? (e) => { e.preventDefault(); alert("Export migration to Edge Function pending."); } : undefined}
+            {isBoltMode ? (
+              <button type="button" onClick={() => window.print()} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded border text-xs font-bold bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100">
+                <Eye className="w-3.5 h-3.5" /> Print / PDF
+              </button>
+            ) : (
+              <a href={`/api/operations/estimates/export/pdf/${estimate.id}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded border text-xs font-bold bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100">
+                <Eye className="w-3.5 h-3.5" /> View PDF
+              </a>
+            )}
+            <button
+              type="button"
+              onClick={async () => {
+                if (isBoltMode) {
+                  const { fetchEstimateItems: fetchItems } = await import("../../../lib/api");
+                  const { exportEstimateToExcel } = await import("../utils/exportHelpers");
+                  const items = await fetchItems(token, estimate.id);
+                  await exportEstimateToExcel(estimate, items);
+                } else {
+                  window.open(`/api/operations/estimates/export/xlsx/${estimate.id}`, "_blank");
+                }
+              }}
               className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded border text-xs font-bold bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100"
             >
               <Download className="w-3.5 h-3.5" /> Excel
-            </a>
+            </button>
           </div>
         </div>
       </div>
@@ -1749,15 +1758,15 @@ const QuickActionBar: React.FC<{
         )}
       </div>
 
-      <a
-        href={isBoltMode ? "#" : `/api/operations/estimates/export/pdf/${estimate.id}`}
-        target={isBoltMode ? undefined : "_blank"}
-        rel="noreferrer"
-        onClick={isBoltMode ? (e) => { e.preventDefault(); alert("Export migration to Edge Function pending."); } : undefined}
-        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-bold bg-white border-slate-200 text-slate-700 hover:bg-slate-50 transition"
-      >
-        <FileText className="w-3.5 h-3.5 text-slate-400" /> View Estimate
-      </a>
+      {isBoltMode ? (
+        <button type="button" onClick={() => window.print()} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-bold bg-white border-slate-200 text-slate-700 hover:bg-slate-50 transition">
+          <FileText className="w-3.5 h-3.5 text-slate-400" /> Print / PDF
+        </button>
+      ) : (
+        <a href={`/api/operations/estimates/export/pdf/${estimate.id}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-bold bg-white border-slate-200 text-slate-700 hover:bg-slate-50 transition">
+          <FileText className="w-3.5 h-3.5 text-slate-400" /> View Estimate
+        </a>
+      )}
 
       <button
         type="button"
