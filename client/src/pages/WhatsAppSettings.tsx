@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useAuth } from "../contexts/AuthContext";
-import { MessageCircle, CheckCircle, XCircle, RefreshCw, Save, AlertTriangle, Terminal, Shield } from "lucide-react";
+import { MessageCircle, CheckCircle, XCircle, RefreshCw, Save, AlertTriangle, Terminal, Shield, AlertCircle } from "lucide-react";
+import { isBoltMode } from "../lib/supabase";
 
 interface WhatsAppConfig {
   platform: string;
@@ -37,9 +38,10 @@ const WhatsAppSettings: React.FC = () => {
   const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
   const webhookBase = typeof window !== "undefined" ? `${window.location.protocol}//${window.location.host}` : "";
 
-  useEffect(() => { fetchConfig(); fetchLogs(); }, []);
+  useEffect(() => { if (!isBoltMode) { fetchConfig(); fetchLogs(); } }, []);
 
   const fetchConfig = async () => {
+    if (isBoltMode) return;
     setLoading(true);
     try {
       const r = await fetch("/api/automation/whatsapp", { headers });
@@ -48,6 +50,7 @@ const WhatsAppSettings: React.FC = () => {
   };
 
   const fetchLogs = async () => {
+    if (isBoltMode) return;
     setLogsLoading(true);
     try {
       const r = await fetch("/api/automation/logs/whatsapp", { headers });
@@ -57,6 +60,7 @@ const WhatsAppSettings: React.FC = () => {
 
   const save = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isBoltMode) { setMsg({ text: "Not available in Bolt preview mode.", ok: false }); return; }
     setSaving(true);
     setMsg(null);
     try {
@@ -80,6 +84,14 @@ const WhatsAppSettings: React.FC = () => {
       }
     } finally { setSaving(false); }
   };
+
+  if (isBoltMode) return (
+    <div className="flex flex-col items-center justify-center h-[50vh] gap-4 text-center px-4">
+      <AlertCircle className="w-10 h-10 text-amber-500" />
+      <h2 className="text-lg font-bold text-slate-800">WhatsApp Settings require the Express backend</h2>
+      <p className="text-sm text-slate-500 max-w-sm">WhatsApp bot integration is not available in Bolt preview mode.</p>
+    </div>
+  );
 
   if (loading) return <div className="p-8 text-slate-400 text-sm">Loading...</div>;
 

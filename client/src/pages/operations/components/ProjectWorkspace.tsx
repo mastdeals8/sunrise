@@ -630,15 +630,17 @@ const StoreDrawer: React.FC<{
                     <button type="button" onClick={() => onOpenWcc(dc)} className="p-1 text-slate-400 hover:text-slate-700" title="Edit">
                       <Upload className="w-3.5 h-3.5" />
                     </button>
-                    <a
-                      href={`/api/operations/wcc-preview/${dc.id}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="p-1 text-slate-400 hover:text-slate-700"
-                      title="Print/Download"
-                    >
-                      <Printer className="w-3.5 h-3.5" />
-                    </a>
+                    {!isBoltMode && (
+                      <a
+                        href={`/api/operations/wcc-preview/${dc.id}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="p-1 text-slate-400 hover:text-slate-700"
+                        title="Print/Download"
+                      >
+                        <Printer className="w-3.5 h-3.5" />
+                      </a>
+                    )}
                   </div>
                 ))}
               </div>
@@ -1120,15 +1122,17 @@ const WccTab: React.FC<{
                           <button type="button" onClick={() => onOpenWcc(dc)} className="p-1 text-slate-400 hover:text-slate-700" title="Edit">
                             <Upload className="w-3.5 h-3.5" />
                           </button>
-                          <a
-                            href={`/api/operations/wcc-preview/${dc.id}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="p-1 text-slate-400 hover:text-slate-700"
-                            title="Print/Download"
-                          >
-                            <Printer className="w-3.5 h-3.5" />
-                          </a>
+                          {!isBoltMode && (
+                            <a
+                              href={`/api/operations/wcc-preview/${dc.id}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="p-1 text-slate-400 hover:text-slate-700"
+                              title="Print/Download"
+                            >
+                              <Printer className="w-3.5 h-3.5" />
+                            </a>
+                          )}
                         </div>
                       ))}
                     </div>

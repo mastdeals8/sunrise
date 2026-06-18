@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { formatCurrency } from "@/utils/format";
 import { useAuth } from "../contexts/AuthContext";
 import { useGlobalDate } from "../contexts/GlobalDateContext";
+import { isBoltMode } from "../lib/supabase";
 import { 
   Coins, 
   Plus, 
@@ -177,6 +178,18 @@ const PettyCashPage: React.FC = () => {
       setDescription(`OCR Extracted: Purchase at ${randomVendors[idx]} for Sunrise Media production.`);
     }, 2000);
   };
+
+  if (isBoltMode) {
+    return (
+      <div className="flex flex-col items-center justify-center h-[50vh] gap-4 text-center px-4">
+        <AlertCircle className="w-10 h-10 text-amber-500" />
+        <h2 className="text-lg font-bold text-slate-800">Petty Cash requires the Express backend</h2>
+        <p className="text-sm text-slate-500 max-w-sm">
+          This module is not yet available in Bolt preview mode. Run the full stack (<code>npm run dev:full</code>) to access Petty Cash.
+        </p>
+      </div>
+    );
+  }
 
   if (loading) {
     return (

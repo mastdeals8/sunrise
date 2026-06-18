@@ -4,6 +4,7 @@ import {
 } from "lucide-react";
 import { Button, StatusBadge, Card, SectionHeader, EmptyState, cn } from "@/components/ui-kit";
 import { useAuth } from "@/contexts/AuthContext";
+import { isBoltMode } from "@/lib/supabase";
 
 type Recipient = { id: number; name: string; role: string; telegramChatId?: string | null };
 type Delivery = {
@@ -56,6 +57,16 @@ export const FieldLinkManager: React.FC<{ estimateId: number; estimateNumber?: s
 }) => {
   const { token } = useAuth();
   const auth: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+
+  if (isBoltMode) {
+    return (
+      <div className="flex flex-col items-center justify-center py-12 gap-3 text-center px-4">
+        <AlertCircle className="w-8 h-8 text-amber-500" />
+        <p className="text-sm font-semibold text-slate-700">Field Links require the Express backend</p>
+        <p className="text-xs text-slate-500">This feature is not available in Bolt preview mode.</p>
+      </div>
+    );
+  }
   const [links, setLinks] = React.useState<FieldLink[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [copied, setCopied] = React.useState<number | null>(null);

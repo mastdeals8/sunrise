@@ -3,6 +3,8 @@ import { Pager, usePagedList } from "@/components/Pager";
 import { useAuth } from "../contexts/AuthContext";
 import { FileUp, Search, Download, ExternalLink, Image as ImageIcon, FileText, File, X, RefreshCw, Trash2, History } from "lucide-react";
 import { EmptyState } from "@/components/ui-kit";
+import { isBoltMode } from "../lib/supabase";
+import { fetchEstimates, fetchDeliveryChallans, fetchExecutionDocuments } from "../lib/api";
 
 interface Upload {
   id: number;
@@ -80,16 +82,28 @@ const ProjectDocumentsPage: React.FC = () => {
   useEffect(() => {
     const load = async () => {
       try {
-        const [r1, r2, r3, r4] = await Promise.all([
-          fetch("/api/uploads", { headers: { Authorization: `Bearer ${token}` } }),
-          fetch("/api/operations/estimates", { headers: { Authorization: `Bearer ${token}` } }),
-          fetch("/api/operations/delivery-challans", { headers: { Authorization: `Bearer ${token}` } }),
-          fetch("/api/operations/execution-documents", { headers: { Authorization: `Bearer ${token}` } }),
-        ]);
-        if (r1.ok) setUploads(await r1.json());
-        if (r2.ok) setEstimates(await r2.json());
-        if (r3.ok) setChallans(await r3.json());
-        if (r4.ok) setExecutionDocs(await r4.json());
+        if (isBoltMode) {
+          // Bolt mode: read directly from Supabase via api.ts helpers
+          const [ests, dcs, docs] = await Promise.all([
+            fetchEstimates(token),
+            fetchDeliveryChallans(token),
+            fetchExecutionDocuments(token),
+          ]);
+          setEstimates(ests as any);
+          setChallans(dcs as any);
+          setExecutionDocs(docs as any);
+        } else {
+          const [r1, r2, r3, r4] = await Promise.all([
+            fetch("/api/uploads", { headers: { Authorization: `Bearer ${token}` } }),
+            fetch("/api/operations/estimates", { headers: { Authorization: `Bearer ${token}` } }),
+            fetch("/api/operations/delivery-challans", { headers: { Authorization: `Bearer ${token}` } }),
+            fetch("/api/operations/execution-documents", { headers: { Authorization: `Bearer ${token}` } }),
+          ]);
+          if (r1.ok) setUploads(await r1.json());
+          if (r2.ok) setEstimates(await r2.json());
+          if (r3.ok) setChallans(await r3.json());
+          if (r4.ok) setExecutionDocs(await r4.json());
+        }
       } catch (err) {
         console.error(err);
       } finally {
@@ -342,6 +356,7 @@ const DocumentViewer: React.FC<{
   const [replacing, setReplacing] = useState(false);
 
   const uploadFile = async (file: File) => {
+    if (isBoltMode) throw new Error("File upload requires the Express backend.");
     const fd = new FormData();
     fd.append("file", file);
     const res = await fetch("/api/operations/upload", {
@@ -355,6 +370,7 @@ const DocumentViewer: React.FC<{
 
   const replaceDoc = async (file: File) => {
     if (!doc.id) return;
+    if (isBoltMode) { alert("Document replacement requires the Express backend (npm run dev:full)."); return; }
     setReplacing(true);
     try {
       const uploaded = await uploadFile(file);
@@ -389,6 +405,7 @@ const DocumentViewer: React.FC<{
 
   const deleteDoc = async () => {
     if (!doc.id || !window.confirm(`Delete ${doc.fileName}?`)) return;
+    if (isBoltMode) { alert("Document deletion requires the Express backend (npm run dev:full)."); return; }
     const res = await fetch(`/api/operations/execution-documents/${doc.id}`, {
       method: "DELETE",
       headers: { Authorization: `Bearer ${token}` },
@@ -401,6 +418,7 @@ const DocumentViewer: React.FC<{
 
   const loadVersions = async () => {
     if (!doc.id) return;
+    if (isBoltMode) { alert("Version history requires the Express backend (npm run dev:full)."); return; }
     const res = await fetch(`/api/operations/execution-documents/${doc.id}/versions`, {
       headers: { Authorization: `Bearer ${token}` },
     });

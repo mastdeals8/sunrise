@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { isBoltMode } from "../../../lib/supabase";
+import { supabase } from "../../../lib/supabase";
 
 type InvoiceEditorState = {
   open: boolean;
@@ -32,6 +34,12 @@ export const useInvoiceWorkflow = (
     const force = (inv.paidAmount || 0) > 0
       ? confirm("This invoice has recorded payments. Force-cancel anyway? Payments stay recorded.")
       : false;
+    if (isBoltMode) {
+      const { error } = await supabase.from("invoices").update({ status: "cancelled" }).eq("id", inv.id);
+      if (error) { alert(error.message || "Cancel failed"); return; }
+      await fetchLedgerData();
+      return;
+    }
     const r = await fetch(`/api/finance/invoices/${inv.id}/cancel`, {
       method: "POST",
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
@@ -48,6 +56,12 @@ export const useInvoiceWorkflow = (
   const deleteInvoice = async (inv: InvoiceRef) => {
     if (!token) return;
     if (!confirm(`Permanently delete invoice ${inv.invoiceNumber}? This cannot be undone.`)) return;
+    if (isBoltMode) {
+      const { error } = await supabase.from("invoices").delete().eq("id", inv.id);
+      if (error) { alert(error.message || "Delete failed"); return; }
+      await fetchLedgerData();
+      return;
+    }
     const r = await fetch(`/api/finance/invoices/${inv.id}`, {
       method: "DELETE",
       headers: { Authorization: `Bearer ${token}` },

@@ -9,6 +9,28 @@
  */
 import { supabase, isBoltMode } from "./supabase";
 
+// ─── Bolt safety interceptor ─────────────────────────────────────────────────
+// In Bolt mode, any stray /api/* fetch call would silently receive index.html
+// and then fail with "Unexpected token '<'" when parsed as JSON.
+// Intercept at module load so the error is immediate and clearly labelled.
+if (isBoltMode && typeof window !== "undefined") {
+  const _origFetch = window.fetch;
+  window.fetch = function (input: RequestInfo | URL, init?: RequestInit) {
+    const url =
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.href
+          : (input as Request).url;
+    if (url.startsWith("/api/")) {
+      const err = new Error(`[Bolt] Blocked legacy /api call: ${url}`);
+      console.error(err);
+      return Promise.reject(err);
+    }
+    return _origFetch.call(window, input, init);
+  };
+}
+
 // ─── camelCase transformer ────────────────────────────────────────────────────
 // Supabase returns snake_case; the Express/Drizzle backend returns camelCase.
 // Apply this to all Supabase results so existing component code is unchanged.

@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { Bell, X } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { fetchNotifications } from "@/lib/api";
+import { isBoltMode } from "@/lib/supabase";
 
 type Notif = {
   id: number; type: string; title: string; message?: string;
@@ -67,6 +68,7 @@ export const NotificationBell: React.FC = () => {
 
   const markRead = async (id: number) => {
     setItems((prev) => prev.map((n) => (n.id === id ? { ...n, read: true } : n)));
+    if (isBoltMode) return; // best-effort only; no Express endpoint in Bolt
     try {
       await fetch(`/api/notifications/${id}/read`, {
         method: "POST",

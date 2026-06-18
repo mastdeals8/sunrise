@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useAuth } from "../contexts/AuthContext";
-import { Database, Save, CheckCircle, XCircle, FileCode2 } from "lucide-react";
+import { Database, Save, CheckCircle, XCircle, FileCode2, AlertCircle } from "lucide-react";
+import { isBoltMode } from "../lib/supabase";
 
 interface TallySettings {
   enabled: boolean;
@@ -37,7 +38,7 @@ export default function TallySettingsPage() {
   const [testResult, setTestResult] = useState<"" | "ok" | "fail">("");
 
   useEffect(() => {
-    if (!token) return;
+    if (!token || isBoltMode) return;
     fetch("/api/tally/settings", { headers: { Authorization: `Bearer ${token}` } })
       .then(r => r.ok ? r.json() : DEFAULT)
       .then(d => setS({ ...DEFAULT, ...d }))
@@ -45,6 +46,7 @@ export default function TallySettingsPage() {
   }, [token]);
 
   const save = async () => {
+    if (isBoltMode) return;
     setSaved("");
     const r = await fetch("/api/tally/settings", {
       method: "PUT",
@@ -68,6 +70,14 @@ export default function TallySettingsPage() {
       setTimeout(() => setTestResult(""), 3000);
     }
   };
+
+  if (isBoltMode) return (
+    <div className="flex flex-col items-center justify-center h-[50vh] gap-4 text-center px-4">
+      <AlertCircle className="w-10 h-10 text-amber-500" />
+      <h2 className="text-lg font-bold text-slate-800">Tally Settings require the Express backend</h2>
+      <p className="text-sm text-slate-500 max-w-sm">Tally integration is not available in Bolt preview mode.</p>
+    </div>
+  );
 
   if (loading) return <p className="text-sm text-slate-500">Loading…</p>;
 

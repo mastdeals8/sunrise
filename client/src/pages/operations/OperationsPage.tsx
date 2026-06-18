@@ -890,13 +890,8 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
 
   const fetchBillingProfiles = async (clientId: number) => {
     try {
-      const res = await fetch(`/api/operations/clients/${clientId}/billing-profiles`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      if (res.ok) {
-        const list = await res.json();
-        setBillingProfiles(list);
-      }
+      const list = await apiFetchBillingProfiles(token, clientId);
+      if (list) setBillingProfiles(list as any[]);
     } catch (err) {
       console.error("Failed to fetch billing profiles:", err);
     }
@@ -1189,6 +1184,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     opts: { productId?: number | null; materialCodeId?: number | null },
   ) => {
     if (!estClientId) return;
+    if (isBoltMode) return; // rate-card resolver not yet migrated; user enters rate manually
     try {
       const params = new URLSearchParams({ clientId: estClientId });
       if (estBrandId) params.set("brandId", estBrandId);
@@ -2270,6 +2266,13 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
   const handleDeleteEstimate = async (est: Estimate) => {
     if (!window.confirm(`Delete estimate ${est.estimateNumber}? This cannot be undone.`)) return;
     try {
+      if (isBoltMode) {
+        const { error } = await supabase.from("estimates").delete().eq("id", est.id);
+        if (error) { alert(error.message || "Failed to delete estimate."); return; }
+        showSuccess(`Estimate ${est.estimateNumber} deleted.`);
+        fetchData();
+        return;
+      }
       const res = await fetch(`/api/operations/estimates/${est.id}`, {
         method: "DELETE",
         headers: { Authorization: `Bearer ${token}` },
@@ -2288,6 +2291,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
   };
 
   const handleDuplicateEstimate = async (est: Estimate) => {
+    if (isBoltMode) { alert("Duplicate estimate is not yet available in Bolt preview mode."); return; }
     if (!window.confirm(`Duplicate estimate ${est.estimateNumber}? A new draft copy will be created.`)) return;
     try {
       const res = await fetch(`/api/operations/estimates/${est.id}/duplicate`, {
@@ -3160,6 +3164,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
 
   const loadExecutionDocumentVersionsFromOwner = async (doc: any) => {
     if (!doc?.id || !token) return;
+    if (isBoltMode) return; // version history not yet available in Bolt
     const res = await fetch(`/api/operations/execution-documents/${doc.id}/versions`, {
       headers: { Authorization: `Bearer ${token}` },
     });

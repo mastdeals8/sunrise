@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useAuth } from "../contexts/AuthContext";
-import { Send, CheckCircle, XCircle, RefreshCw, Save, AlertTriangle, Terminal, Trash2 } from "lucide-react";
+import { Send, CheckCircle, XCircle, RefreshCw, Save, AlertTriangle, Terminal, Trash2, AlertCircle } from "lucide-react";
+import { isBoltMode } from "../lib/supabase";
 
 interface TelegramConfig {
   platform: string;
@@ -33,9 +34,10 @@ const TelegramSettings: React.FC = () => {
 
   const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
 
-  useEffect(() => { fetchConfig(); fetchLogs(); }, []);
+  useEffect(() => { if (!isBoltMode) { fetchConfig(); fetchLogs(); } }, []);
 
   const fetchConfig = async () => {
+    if (isBoltMode) return;
     setLoading(true);
     try {
       const r = await fetch("/api/automation/telegram", { headers });
@@ -44,6 +46,7 @@ const TelegramSettings: React.FC = () => {
   };
 
   const fetchLogs = async () => {
+    if (isBoltMode) return;
     setLogsLoading(true);
     try {
       const r = await fetch("/api/automation/logs/telegram", { headers });
@@ -53,6 +56,7 @@ const TelegramSettings: React.FC = () => {
 
   const save = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isBoltMode) { setMsg({ text: "Not available in Bolt preview mode.", ok: false }); return; }
     setSaving(true);
     setMsg(null);
     try {
@@ -76,6 +80,14 @@ const TelegramSettings: React.FC = () => {
   };
 
   const webhookBase = typeof window !== "undefined" ? `${window.location.protocol}//${window.location.host}` : "";
+
+  if (isBoltMode) return (
+    <div className="flex flex-col items-center justify-center h-[50vh] gap-4 text-center px-4">
+      <AlertCircle className="w-10 h-10 text-amber-500" />
+      <h2 className="text-lg font-bold text-slate-800">Telegram Settings require the Express backend</h2>
+      <p className="text-sm text-slate-500 max-w-sm">Telegram bot integration is not available in Bolt preview mode.</p>
+    </div>
+  );
 
   if (loading) return <div className="p-8 text-slate-400 text-sm">Loading...</div>;
 
