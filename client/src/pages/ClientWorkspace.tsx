@@ -12,6 +12,8 @@ import {
   Building2, FileText, MapPin, Tag, Receipt, Wallet, Database, ChevronRight,
   Briefcase, Truck, ArrowLeft,
 } from "lucide-react";
+import { isBoltMode } from "../lib/supabase";
+import { fetchClients, fetchBrands, fetchStores, fetchEstimates, fetchInvoices, fetchDeliveryChallans, fetchCustomerRateCards, fetchBillingProfiles as fetchBillingProfilesApi } from "../lib/api";
 
 type Tab =
   | "overview"
@@ -82,18 +84,32 @@ const ClientWorkspace: React.FC = () => {
 
   useEffect(() => {
     if (!token || !clientId) return;
-    const h = { Authorization: `Bearer ${token}` };
     (async () => {
-      const [cs, bp, br, st, es, inv, ch, rc] = await Promise.all([
-        fetch("/api/operations/clients", { headers: h }).then(r => r.ok ? r.json() : []),
-        fetch(`/api/operations/clients/${clientId}/billing-profiles`, { headers: h }).then(r => r.ok ? r.json() : []),
-        fetch("/api/operations/brands", { headers: h }).then(r => r.ok ? r.json() : []),
-        fetch("/api/operations/stores", { headers: h }).then(r => r.ok ? r.json() : []),
-        fetch("/api/operations/estimates", { headers: h }).then(r => r.ok ? r.json() : []),
-        fetch("/api/finance/invoices", { headers: h }).then(r => r.ok ? r.json() : []),
-        fetch("/api/operations/delivery-challans", { headers: h }).then(r => r.ok ? r.json() : []),
-        fetch("/api/customer-rate-cards", { headers: h }).then(r => r.ok ? r.json() : []),
-      ]);
+      let cs: any[], bp: any[], br: any[], st: any[], es: any[], inv: any[], ch: any[], rc: any[];
+      if (isBoltMode) {
+        [cs, bp, br, st, es, inv, ch, rc] = await Promise.all([
+          fetchClients(token).catch(() => []),
+          fetchBillingProfilesApi(token, clientId).catch(() => []),
+          fetchBrands(token).catch(() => []),
+          fetchStores(token).catch(() => []),
+          fetchEstimates(token).catch(() => []),
+          fetchInvoices(token).catch(() => []),
+          fetchDeliveryChallans(token).catch(() => []),
+          fetchCustomerRateCards(token).catch(() => []),
+        ]) as any[][];
+      } else {
+        const h = { Authorization: `Bearer ${token}` };
+        [cs, bp, br, st, es, inv, ch, rc] = await Promise.all([
+          fetch("/api/operations/clients", { headers: h }).then(r => r.ok ? r.json() : []),
+          fetch(`/api/operations/clients/${clientId}/billing-profiles`, { headers: h }).then(r => r.ok ? r.json() : []),
+          fetch("/api/operations/brands", { headers: h }).then(r => r.ok ? r.json() : []),
+          fetch("/api/operations/stores", { headers: h }).then(r => r.ok ? r.json() : []),
+          fetch("/api/operations/estimates", { headers: h }).then(r => r.ok ? r.json() : []),
+          fetch("/api/finance/invoices", { headers: h }).then(r => r.ok ? r.json() : []),
+          fetch("/api/operations/delivery-challans", { headers: h }).then(r => r.ok ? r.json() : []),
+          fetch("/api/customer-rate-cards", { headers: h }).then(r => r.ok ? r.json() : []),
+        ]);
+      }
       const allEstimates: Estimate[] = Array.isArray(es) ? es : [];
       const myEstimates = allEstimates.filter((e) => e.clientId === clientId);
       const myEstimateIds = new Set(myEstimates.map(e => e.id));
@@ -112,6 +128,7 @@ const ClientWorkspace: React.FC = () => {
   // Ledger loaded separately — endpoint returns { statement: [...] }
   useEffect(() => {
     if (!token || !clientId || tab !== "ledger") return;
+    if (isBoltMode) return; // ledger drill-down not yet migrated
     const h = { Authorization: `Bearer ${token}` };
     fetch(`/api/finance/ledgers/client/${clientId}`, { headers: h })
       .then(r => r.ok ? r.json() : { statement: [] })

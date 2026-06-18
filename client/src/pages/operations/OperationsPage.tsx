@@ -784,6 +784,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
   const handleCreateClient = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!clientName) return;
+    if (isBoltMode) { alert("Client create migration pending."); return; }
 
     try {
       const res = await fetch("/api/operations/clients", {
@@ -836,6 +837,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
   const handleCreateBrand = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!brandName || !brandParent) return;
+    if (isBoltMode) { alert("Brand create migration pending."); return; }
 
     try {
       const res = await fetch("/api/operations/brands", {
@@ -866,6 +868,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
   const handleCreateStore = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!storeName || !storeClientId || !storeBrandId) return;
+    if (isBoltMode) { alert("Store create migration pending."); return; }
 
     try {
       const res = await fetch("/api/operations/stores", {
@@ -1017,6 +1020,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
   const handleImportFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || e.target.files.length === 0) return;
     const file = e.target.files[0];
+    if (isBoltMode) { alert("Import migration pending. Bulk import is not yet available in Bolt preview mode."); return; }
     setImpFileName(file.name);
     setImpIsParsing(true);
     setImpStats(null);
@@ -1124,6 +1128,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
   const handleCreateProduct = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!prodName || !prodRate) return;
+    if (isBoltMode) { alert("Product create migration pending."); return; }
 
     try {
       const res = await fetch("/api/operations/products", {
@@ -2391,6 +2396,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, docType: string, customSetCallback: (path: string) => void) => {
     if (!e.target.files || e.target.files.length === 0) return;
     const file = e.target.files[0];
+    if (isBoltMode) { alert("Upload migration to Supabase Storage pending. File uploads are not yet available in Bolt preview mode."); return; }
 
     const formData = new FormData();
     formData.append("file", file);
@@ -2425,6 +2431,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     if (!files || files.length === 0) return;
     const arr = Array.from(files).filter(f => f.type.startsWith("image/"));
     if (arr.length === 0) return;
+    if (isBoltMode) { alert("Upload migration to Supabase Storage pending. Photo uploads are not yet available in Bolt preview mode."); return; }
     setUploadingDocType("wcc_proof_multi");
     try {
       const startCount = dcPhotos.length;
@@ -2574,6 +2581,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
 
   const handleBulkReplacePhoto = async (photoIndex: number, file: File, selectedStoreIds: number[] = []) => {
     if (!file.type.startsWith("image/")) return;
+    if (isBoltMode) { alert("Upload migration to Supabase Storage pending."); return; }
     const fd = new FormData();
     fd.append("file", file);
     setUploadingDocType("wcc_proof_replace");
@@ -3137,6 +3145,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
   };
 
   const replaceExecutionDocumentFromOwner = async (doc: any, file: File) => {
+    if (isBoltMode) { alert("Upload migration to Supabase Storage pending."); return; }
     const formData = new FormData();
     formData.append("file", file);
     const uploadRes = await fetch("/api/operations/upload", {

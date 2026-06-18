@@ -3,6 +3,7 @@ import {
   X, Upload, Camera, FileCheck2, Trash2, Image as ImageIcon,
   File, AlertCircle, CheckCircle, Loader,
 } from "lucide-react";
+import { isBoltMode } from "../../../lib/supabase";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -127,6 +128,10 @@ const ProjectUploadModal: React.FC<Props> = ({
   const uploadAll = async () => {
     if (!canUpload) {
       setUploadErrors(["Please select a store for every file before uploading."]);
+      return;
+    }
+    if (isBoltMode) {
+      setUploadErrors(["Upload migration to Supabase Storage pending. File uploads are not yet available in Bolt preview mode."]);
       return;
     }
     setUploading(true);

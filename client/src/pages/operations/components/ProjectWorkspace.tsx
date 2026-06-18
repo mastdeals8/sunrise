@@ -1463,19 +1463,25 @@ const InvoiceTab: React.FC<{
     if (isNaN(amt) || amt <= 0) { alert("Invalid amount."); return; }
     setRecording(true);
     try {
-      const res = await fetch("/api/finance/payments", {
-        method: "POST",
-        headers: { ...authHeader, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          type: "receipt",
-          invoiceId: inv.id,
-          amount: amt,
-          date: new Date().toISOString(),
-          method: "bank_transfer",
-          allocatedInvoices: [{ invoiceId: inv.id, amount: amt }],
-        }),
-      });
-      if (!res.ok) { const j = await res.json().catch(() => ({})); alert(j.message || "Failed to record payment"); return; }
+      const payload = {
+        type: "receipt",
+        invoiceId: inv.id,
+        amount: amt,
+        date: new Date().toISOString(),
+        method: "bank_transfer",
+        allocatedInvoices: [{ invoiceId: inv.id, amount: amt }],
+      };
+      if (isBoltMode) {
+        const { createPayment } = await import("../../../lib/api");
+        await createPayment(token, payload);
+      } else {
+        const res = await fetch("/api/finance/payments", {
+          method: "POST",
+          headers: { ...authHeader, "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) { const j = await res.json().catch(() => ({})); alert(j.message || "Failed to record payment"); return; }
+      }
       onRefresh();
     } finally {
       setRecording(false);
