@@ -45,8 +45,8 @@ import EstimatePreview from "./components/EstimatePreview";
 import ProjectWorkspace from "./components/ProjectWorkspace";
 import WccDcEditor from "./components/WccDcEditor";
 import { useOperationsData, type Invoice } from "./hooks/useOperationsData";
-import { isBoltMode } from "../../lib/supabase";
-import { createEstimate, updateEstimate, createDeliveryChallan, updateDeliveryChallan, fetchEstimateItems, fetchDeliveryChallansForEstimate, fetchBillingProfiles as apiFetchBillingProfiles, fetchCompanySettings, createInvoice, createPayment, fetchClientLedger, masterDataSave } from "../../lib/api";
+import { isBoltMode, supabase } from "../../lib/supabase";
+import { createEstimate, updateEstimate, createDeliveryChallan, updateDeliveryChallan, fetchEstimateItems, fetchDeliveryChallansForEstimate, fetchBillingProfiles as apiFetchBillingProfiles, fetchCompanySettings, createInvoice, createPayment, fetchClientLedger, masterDataSave, uploadToStorage, registerExecutionDocument, deleteExecutionDocument } from "../../lib/api";
 import { useEstimateBuilder } from "./hooks/useEstimateBuilder";
 import { useInvoiceWorkflow } from "./hooks/useInvoiceWorkflow";
 import { useWccDcEditor } from "./hooks/useWccDcEditor";
@@ -2342,7 +2342,34 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, docType: string, customSetCallback: (path: string) => void) => {
     if (!e.target.files || e.target.files.length === 0) return;
     const file = e.target.files[0];
-    if (isBoltMode) { alert("Upload migration to Supabase Storage pending. File uploads are not yet available in Bolt preview mode."); return; }
+
+    if (isBoltMode) {
+      const estimateId = (poWorkflowEstimate || selectedEstimate)?.id;
+      if (!estimateId) { alert("No active estimate selected for upload."); return; }
+      try {
+        setUploadingDocType(docType);
+        const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+        const storagePath = `estimate-${estimateId}/po/${Date.now()}-${safeName}`;
+        const { storagePath: saved, displayUrl } = await uploadToStorage("execution-documents", storagePath, file);
+        customSetCallback(displayUrl);
+        await registerExecutionDocument(token, {
+          estimateId,
+          storeCode: "",
+          documentType: docType,
+          filePath: saved,
+          originalFileName: file.name,
+          mimeType: file.type || null,
+          fileSize: file.size || null,
+          uploadedVia: "po_modal",
+        });
+        showSuccess("File uploaded successfully.");
+      } catch (err: any) {
+        alert(err?.message || "Upload failed.");
+      } finally {
+        setUploadingDocType(null);
+      }
+      return;
+    }
 
     const formData = new FormData();
     formData.append("file", file);
@@ -2377,40 +2404,81 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     if (!files || files.length === 0) return;
     const arr = Array.from(files).filter(f => f.type.startsWith("image/"));
     if (arr.length === 0) return;
-    if (isBoltMode) { alert("Upload migration to Supabase Storage pending. Photo uploads are not yet available in Bolt preview mode."); return; }
     setUploadingDocType("wcc_proof_multi");
     try {
       const startCount = dcPhotos.length;
       const uploaded: WccPhoto[] = [];
-      for (let i = 0; i < arr.length; i++) {
-        const fd = new FormData();
-        fd.append("file", arr[i]);
-        const res = await fetch("/api/operations/upload", {
-          method: "POST",
-          headers: { Authorization: `Bearer ${token}` },
-          body: fd,
-        });
-        if (!res.ok) continue;
-        const data = await res.json();
-        // Tile new photos in a soft grid so they don't all stack on top of
-        // each other. The user can drag/resize freely afterwards.
-        const tileIndex = startCount + i;
-        const cols = 2;
-        const col = tileIndex % cols;
-        const row = Math.floor(tileIndex / cols);
-        uploaded.push({
-          path: data.filePath,
-          widthPct: 50,
-          objectFit: "cover",
-          objectPosition: "center center",
-          caption: arr[i].name.replace(/\.[a-z0-9]+$/i, ""),
-          xPct: 2 + col * 49,
-          yPct: 2 + row * 49,
-          wPct: 46,
-          hPct: 46,
-          z: tileIndex + 1,
-        });
+
+      if (isBoltMode) {
+        const eid = (selectedEstimate?.id) || (editingDcId ? challans.find(c => c.id === editingDcId)?.estimateId : null) || (selectedDcForPreview?.estimateId) || 0;
+        const sc = selectedDcForPreview
+          ? String((selectedDcForPreview as any).metadata?.storeCode || (selectedDcForPreview as any).storeCode || "wcc")
+          : "wcc";
+        for (let i = 0; i < arr.length; i++) {
+          const safeName = arr[i].name.replace(/[^a-zA-Z0-9._-]/g, "_");
+          const storagePath = `estimate-${eid}/${sc}/${Date.now()}-${safeName}`;
+          const { storagePath: saved, displayUrl } = await uploadToStorage("execution-documents", storagePath, arr[i]);
+          // Tile new photos in a soft grid so they don't all stack on top of each other.
+          const tileIndex = startCount + i;
+          const cols = 2;
+          const col = tileIndex % cols;
+          const row = Math.floor(tileIndex / cols);
+          uploaded.push({
+            path: displayUrl,
+            widthPct: 50,
+            objectFit: "cover",
+            objectPosition: "center center",
+            caption: arr[i].name.replace(/\.[a-z0-9]+$/i, ""),
+            xPct: 2 + col * 49,
+            yPct: 2 + row * 49,
+            wPct: 46,
+            hPct: 46,
+            z: tileIndex + 1,
+          });
+          if (eid) {
+            registerExecutionDocument(token, {
+              estimateId: eid,
+              storeCode: sc !== "wcc" ? sc : "",
+              documentType: "wcc_photo",
+              filePath: saved,
+              originalFileName: arr[i].name,
+              mimeType: arr[i].type || null,
+              fileSize: arr[i].size || null,
+              uploadedVia: "wcc_builder",
+            }).catch(console.warn);
+          }
+        }
+      } else {
+        for (let i = 0; i < arr.length; i++) {
+          const fd = new FormData();
+          fd.append("file", arr[i]);
+          const res = await fetch("/api/operations/upload", {
+            method: "POST",
+            headers: { Authorization: `Bearer ${token}` },
+            body: fd,
+          });
+          if (!res.ok) continue;
+          const data = await res.json();
+          // Tile new photos in a soft grid so they don't all stack on top of each other.
+          const tileIndex = startCount + i;
+          const cols = 2;
+          const col = tileIndex % cols;
+          const row = Math.floor(tileIndex / cols);
+          uploaded.push({
+            path: data.filePath,
+            widthPct: 50,
+            objectFit: "cover",
+            objectPosition: "center center",
+            caption: arr[i].name.replace(/\.[a-z0-9]+$/i, ""),
+            xPct: 2 + col * 49,
+            yPct: 2 + row * 49,
+            wPct: 46,
+            hPct: 46,
+            z: tileIndex + 1,
+          });
+        }
       }
+
       if (uploaded.length > 0) {
         setDcPhotos(prev => [...prev, ...uploaded]);
         showSuccess(`${uploaded.length} image${uploaded.length > 1 ? "s" : ""} uploaded.`);
@@ -2527,18 +2595,28 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
 
   const handleBulkReplacePhoto = async (photoIndex: number, file: File, selectedStoreIds: number[] = []) => {
     if (!file.type.startsWith("image/")) return;
-    if (isBoltMode) { alert("Upload migration to Supabase Storage pending."); return; }
-    const fd = new FormData();
-    fd.append("file", file);
     setUploadingDocType("wcc_proof_replace");
     try {
-      const res = await fetch("/api/operations/upload", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
-        body: fd,
-      });
-      if (!res.ok) return;
-      const data = await res.json();
+      let filePath: string;
+      if (isBoltMode) {
+        const eid = (selectedEstimate?.id) || (editingDcId ? challans.find(c => c.id === editingDcId)?.estimateId : null) || 0;
+        const sc = selectedDcForPreview ? String((selectedDcForPreview as any).metadata?.storeCode || (selectedDcForPreview as any).storeCode || "wcc") : "wcc";
+        const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+        const storagePath = `estimate-${eid}/${sc}/${Date.now()}-${safeName}`;
+        const { displayUrl } = await uploadToStorage("execution-documents", storagePath, file);
+        filePath = displayUrl;
+      } else {
+        const fd = new FormData();
+        fd.append("file", file);
+        const res = await fetch("/api/operations/upload", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+          body: fd,
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        filePath = data.filePath;
+      }
       const existing = dcPhotos[photoIndex];
       const replacement: WccPhoto = {
         ...(existing || {
@@ -2552,7 +2630,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
           hPct: 46,
           z: photoIndex + 1,
         }),
-        path: data.filePath,
+        path: filePath,
         caption: existing?.caption || file.name.replace(/\.[a-z0-9]+$/i, ""),
       };
       setDcPhotos((prev) => {
@@ -3091,7 +3169,34 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
   };
 
   const replaceExecutionDocumentFromOwner = async (doc: any, file: File) => {
-    if (isBoltMode) { alert("Upload migration to Supabase Storage pending."); return; }
+    if (isBoltMode) {
+      try {
+        const estimateId = doc.estimateId || selectedEstimate?.id;
+        if (!estimateId) { alert("No estimate context for upload."); return; }
+        const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+        const storagePath = `estimate-${estimateId}/${doc.storeCode || "misc"}/${Date.now()}-${safeName}`;
+        const { storagePath: saved, displayUrl } = await uploadToStorage("execution-documents", storagePath, file);
+        // Mark old doc as replaced and register new one
+        await supabase.from("execution_documents").update({ status: "replaced" }).eq("id", doc.id);
+        const newDoc = await registerExecutionDocument(token, {
+          estimateId,
+          storeCode: doc.storeCode || "",
+          documentType: doc.documentType,
+          filePath: saved,
+          originalFileName: file.name,
+          mimeType: file.type || null,
+          fileSize: file.size || null,
+          uploadedVia: "project_workspace",
+        });
+        setExecutionDocumentViewer({ ...newDoc, filePath: displayUrl });
+        setExecutionDocumentVersions([]);
+        setShowExecutionDocumentHistory(false);
+        fetchData();
+      } catch (err: any) {
+        alert(err?.message || "Replace failed.");
+      }
+      return;
+    }
     const formData = new FormData();
     formData.append("file", file);
     const uploadRes = await fetch("/api/operations/upload", {
@@ -3120,32 +3225,16 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
   };
 
   const deleteExecutionDocumentFromOwner = async (doc: any) => {
-    console.log("[doc-delete] handler entered", { id: doc?.id, type: doc?.documentType });
-    if (!doc?.id) {
-      console.error("[doc-delete] no doc.id — abort");
-      return;
-    }
-    if (!confirm(`Delete ${executionDocFileName(doc)}?`)) {
-      console.log("[doc-delete] user cancelled");
-      return;
-    }
-    console.log("[doc-delete] sending DELETE", `/api/operations/execution-documents/${doc.id}`);
-    const res = await fetch(`/api/operations/execution-documents/${doc.id}`, {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    console.log("[doc-delete] response", res.status, res.statusText);
-    if (res.ok) {
+    if (!doc?.id) return;
+    if (!confirm(`Delete ${executionDocFileName(doc)}?`)) return;
+    try {
+      await deleteExecutionDocument(token, doc.id);
       setExecutionDocumentViewer(null);
       setExecutionDocumentVersions([]);
       setShowExecutionDocumentHistory(false);
-      console.log("[doc-delete] success — refreshing data");
       await fetchData();
-      console.log("[doc-delete] refresh complete");
-    } else {
-      const body = await res.text().catch(() => "");
-      console.error("[doc-delete] server rejected:", res.status, body);
-      alert(`Delete failed (${res.status}). ${body || "See console for details."}`);
+    } catch (err: any) {
+      alert(`Delete failed. ${err?.message || "See console for details."}`);
     }
   };
 

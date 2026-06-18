@@ -3,7 +3,7 @@ import { useAuth } from "../contexts/AuthContext";
 import { Settings as SettingsIcon, Save, Building2, FileText, CreditCard, Image as ImageIcon, Upload } from "lucide-react";
 import { INDIA_STATES, getStateCode } from "@/utils/indiaLocations";
 import { isBoltMode } from "../lib/supabase";
-import { fetchCompanySettings, uploadToStorage, saveAssetSetting } from "../lib/api";
+import { fetchCompanySettings, uploadToStorage, saveAssetSetting, upsertAppSettings } from "../lib/api";
 
 interface SettingsState {
   companyName: string;
@@ -111,9 +111,37 @@ const SettingsPage: React.FC = () => {
 
   const save = async () => {
     if (!isAdmin) return;
-    if (isBoltMode) { setMsg({ kind: "err", text: "Settings save migration pending." }); setTimeout(() => setMsg(null), 4000); return; }
     setSaving(true);
     try {
+      if (isBoltMode) {
+        await upsertAppSettings({
+          "company.name": form.companyName,
+          "company.address": form.companyAddress,
+          "company.gstin": form.companyGstin,
+          "company.pan": form.companyPan,
+          "company.stateCode": form.companyStateCode,
+          "company.mobile": form.companyMobile,
+          "company.email": form.companyEmail,
+          "company.bankName": form.bankName,
+          "company.bankAccountNumber": form.bankAccountNumber,
+          "company.bankIfsc": form.bankIfsc,
+          "company.bankBranch": form.bankBranch,
+          "company.defaultGstPercent": form.defaultGstPercent,
+          "company.defaultInvoicePrefix": form.defaultInvoicePrefix,
+          "company.defaultEstimatePrefix": form.defaultEstimatePrefix,
+          "company.defaultDcPrefix": form.defaultDcPrefix,
+          "company.defaultPacking": form.defaultPacking,
+          "company.defaultImplementation": form.defaultImplementation,
+          "company.defaultLocalTransport": form.defaultLocalTransport,
+          "company.defaultOutstationTransportRate": form.defaultOutstationTransportRate,
+          "company.logoPath": form.companyLogoPath || null,
+          "company.signatureStampPath": form.signatureStampPath || null,
+          "company.terms": form.terms || null,
+        });
+        setMsg({ kind: "ok", text: "Settings saved." });
+        setTimeout(() => setMsg(null), 3000);
+        return;
+      }
       const res = await fetch("/api/company-settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },

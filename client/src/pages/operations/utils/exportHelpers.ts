@@ -10,15 +10,27 @@ export const downloadBlob = (blob: Blob, fileName: string) => {
 export async function exportEstimateToExcel(
   estimate: any,
   items: any[],
-  clientName?: string
+  clientName?: string,
+  companyName?: string
 ): Promise<void> {
   const XLSX = (await import("xlsx-js-style")).default;
   const safe = (v: any) => (v == null ? "" : String(v));
   const num = (v: any) => (v == null || v === "" ? 0 : Number(v) || 0);
   const fmt = (v: number) => v.toFixed(2);
 
+  const companyRow = companyName ? [companyName, "", "", "", "", "", "", "", "", "", "", "", "", "", ""] : null;
+  const estimateInfoRow = [
+    `Estimate: ${safe(estimate.estimateNumber ?? estimate.estimate_number)}`,
+    `Client: ${safe(clientName || estimate.clientId)}`,
+    `Date: ${safe(estimate.estimateDate ?? estimate.estimate_date ?? "").slice(0, 10)}`,
+    "", "", "", "", "", "", "", "", "", "", "", "",
+  ];
   const header = ["SL", "Store", "Item / Description", "HSN", "Qty", "Unit", "Rate", "Amount", "CGST%", "CGST", "SGST%", "SGST", "IGST%", "IGST", "Total"];
-  const rows: any[][] = [header];
+  const rows: any[][] = [
+    ...(companyRow ? [companyRow] : []),
+    estimateInfoRow,
+    header,
+  ];
 
   for (const it of items) {
     rows.push([

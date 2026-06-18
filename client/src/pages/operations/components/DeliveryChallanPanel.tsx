@@ -3,7 +3,7 @@ import { Pager, usePagedList } from "@/components/Pager";
 import { Edit3, Eye, Plus, Printer, Search, Trash2 } from "lucide-react";
 import type { Client, DeliveryChallan, Estimate, Store } from "../types";
 import { displayFormatLabel, isAblblFormat } from "../../../../../shared/textFormat";
-import { isBoltMode } from "../../../lib/supabase";
+import { isBoltMode, supabase } from "../../../lib/supabase";
 
 interface DeliveryChallanPanelProps {
   challans: DeliveryChallan[];
@@ -117,44 +117,62 @@ const DeliveryChallanPanel: React.FC<DeliveryChallanPanelProps> = ({
 
   const hardDelete = async (d: DeliveryChallan) => {
     if (!token) return;
-    if (isBoltMode) { alert("WCC delete migration pending."); return; }
     if (!confirm("Delete this WCC?")) return;
-    const r = await fetch(`/api/operations/delivery-challans/${d.id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify({
-        status: "deleted",
-        metadata: { ...(d.metadata || {}), deleted: true, deletedAt: new Date().toISOString() },
-      }),
-    });
-    if (!r.ok) {
-      const j = await r.json().catch(() => ({}));
-      alert(j.message || "Delete failed");
-      return;
+    try {
+      if (isBoltMode) {
+        const { error } = await supabase
+          .from("delivery_challans")
+          .update({ status: "deleted", metadata: { ...(d.metadata || {}), deleted: true, deletedAt: new Date().toISOString() } })
+          .eq("id", d.id);
+        if (error) throw new Error(error.message);
+      } else {
+        const r = await fetch(`/api/operations/delivery-challans/${d.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify({
+            status: "deleted",
+            metadata: { ...(d.metadata || {}), deleted: true, deletedAt: new Date().toISOString() },
+          }),
+        });
+        if (!r.ok) {
+          const j = await r.json().catch(() => ({}));
+          throw new Error(j.message || "Delete failed");
+        }
+      }
+      reload && reload();
+    } catch (err: any) {
+      alert(err?.message || "Delete failed");
     }
-    reload && reload();
   };
 
   const deleteDuplicateWccs = async () => {
     if (!token || duplicateWccRows.length === 0) return;
-    if (isBoltMode) { alert("WCC duplicate cleanup migration pending."); return; }
     if (!confirm(`Delete ${duplicateWccRows.length} duplicate WCC record${duplicateWccRows.length === 1 ? "" : "s"}? Latest WCC per estimate/store will remain active.`)) return;
-    for (const d of duplicateWccRows) {
-      const r = await fetch(`/api/operations/delivery-challans/${d.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({
-          status: "deleted",
-          metadata: { ...(d.metadata || {}), deleted: true, deletedAt: new Date().toISOString(), deletedReason: "duplicate_wcc_cleanup" },
-        }),
-      });
-      if (!r.ok) {
-        const j = await r.json().catch(() => ({}));
-        alert(j.message || `Delete failed for ${d.dcNumber}`);
-        break;
+    try {
+      for (const d of duplicateWccRows) {
+        const deletedMeta = { ...(d.metadata || {}), deleted: true, deletedAt: new Date().toISOString(), deletedReason: "duplicate_wcc_cleanup" };
+        if (isBoltMode) {
+          const { error } = await supabase
+            .from("delivery_challans")
+            .update({ status: "deleted", metadata: deletedMeta })
+            .eq("id", d.id);
+          if (error) throw new Error(`${d.dcNumber}: ${error.message}`);
+        } else {
+          const r = await fetch(`/api/operations/delivery-challans/${d.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+            body: JSON.stringify({ status: "deleted", metadata: deletedMeta }),
+          });
+          if (!r.ok) {
+            const j = await r.json().catch(() => ({}));
+            throw new Error(j.message || `Delete failed for ${d.dcNumber}`);
+          }
+        }
       }
+      reload && reload();
+    } catch (err: any) {
+      alert(err?.message || "Cleanup failed");
     }
-    reload && reload();
   };
 
   return (

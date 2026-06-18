@@ -1,6 +1,6 @@
 import React from "react";
-import { isBoltMode } from "../../../lib/supabase";
-import { fetchEstimateItems, fetchDeliveryChallansForEstimate, fetchExecutionStores, fetchExecutionDocuments, fetchInvoiceForEstimate, uploadToStorage, registerExecutionDocument } from "../../../lib/api";
+import { isBoltMode, supabase } from "../../../lib/supabase";
+import { fetchEstimateItems, fetchDeliveryChallansForEstimate, fetchExecutionStores, fetchExecutionDocuments, fetchInvoiceForEstimate, uploadToStorage, registerExecutionDocument, deleteExecutionDocument } from "../../../lib/api";
 import {
   ArrowLeft, Camera, CheckCircle, CheckCircle2, ChevronRight, Clock,
   Download, ExternalLink, Eye, File, FileCheck2, FilePlus, FileText,
@@ -412,30 +412,48 @@ const StoreDrawer: React.FC<{
   const authHeader = { Authorization: `Bearer ${token}` };
 
   const saveNotes = async () => {
-    if (isBoltMode) { alert("Store notes update migration pending."); return; }
     setSavingNotes(true);
     try {
-      await fetch(`/api/operations/execution-stores/${row.id}`, {
-        method: "PATCH",
-        headers: { ...authHeader, "Content-Type": "application/json" },
-        body: JSON.stringify({ notes }),
-      });
+      if (isBoltMode) {
+        const { error } = await supabase
+          .from("execution_stores")
+          .update({ notes })
+          .eq("id", row.id);
+        if (error) throw new Error(error.message);
+      } else {
+        await fetch(`/api/operations/execution-stores/${row.id}`, {
+          method: "PATCH",
+          headers: { ...authHeader, "Content-Type": "application/json" },
+          body: JSON.stringify({ notes }),
+        });
+      }
       onRefresh();
+    } catch (e: any) {
+      alert(e?.message || "Failed to save notes.");
     } finally {
       setSavingNotes(false);
     }
   };
 
   const toggleBilling = async () => {
-    if (isBoltMode) { alert("Billing status update migration pending."); return; }
     setTogglingBilling(true);
     try {
-      await fetch(`/api/operations/execution-stores/${row.id}`, {
-        method: "PATCH",
-        headers: { ...authHeader, "Content-Type": "application/json" },
-        body: JSON.stringify({ billingReady: !row.billingReady }),
-      });
+      if (isBoltMode) {
+        const { error } = await supabase
+          .from("execution_stores")
+          .update({ billing_ready: !row.billingReady })
+          .eq("id", row.id);
+        if (error) throw new Error(error.message);
+      } else {
+        await fetch(`/api/operations/execution-stores/${row.id}`, {
+          method: "PATCH",
+          headers: { ...authHeader, "Content-Type": "application/json" },
+          body: JSON.stringify({ billingReady: !row.billingReady }),
+        });
+      }
       onRefresh();
+    } catch (e: any) {
+      alert(e?.message || "Failed to update billing status.");
     } finally {
       setTogglingBilling(false);
     }
@@ -481,10 +499,13 @@ const StoreDrawer: React.FC<{
   };
 
   const deleteDoc = async (doc: ExecDoc) => {
-    if (isBoltMode) { alert("Delete migration pending."); return; }
     if (!confirm(`Delete ${doc.originalFileName || "this file"}?`)) return;
-    await fetch(`/api/operations/execution-documents/${doc.id}`, { method: "DELETE", headers: authHeader });
-    onRefresh();
+    try {
+      await deleteExecutionDocument(token, doc.id);
+      onRefresh();
+    } catch (e: any) {
+      alert(e?.message || "Delete failed.");
+    }
   };
 
   const billingStatus = statusBillingLabel(row);
@@ -848,10 +869,13 @@ const PhotosTab: React.FC<{
   const authHeader = { Authorization: `Bearer ${token}` };
 
   const deleteDoc = async (doc: ExecDoc) => {
-    if (isBoltMode) { alert("Delete migration pending."); return; }
     if (!confirm(`Delete ${doc.originalFileName || "this photo"}?`)) return;
-    await fetch(`/api/operations/execution-documents/${doc.id}`, { method: "DELETE", headers: authHeader });
-    onRefresh();
+    try {
+      await deleteExecutionDocument(token, doc.id);
+      onRefresh();
+    } catch (e: any) {
+      alert(e?.message || "Delete failed.");
+    }
   };
 
   return (
@@ -976,10 +1000,13 @@ const WccTab: React.FC<{
   const totalSigned = stores.reduce((s, r) => s + r.stats.signedWccCount + r.stats.signedDcCount, 0);
 
   const deleteDoc = async (doc: ExecDoc) => {
-    if (isBoltMode) { alert("Delete migration pending."); return; }
     if (!confirm(`Delete ${doc.originalFileName || "this file"}?`)) return;
-    await fetch(`/api/operations/execution-documents/${doc.id}`, { method: "DELETE", headers: authHeader });
-    onRefresh();
+    try {
+      await deleteExecutionDocument(token, doc.id);
+      onRefresh();
+    } catch (e: any) {
+      alert(e?.message || "Delete failed.");
+    }
   };
 
   const handleCreateWcc = () => {
@@ -1291,10 +1318,13 @@ const DocumentsTab: React.FC<{
   const extraDocs = byType("extra");
 
   const deleteDoc = async (doc: ExecDoc) => {
-    if (isBoltMode) { alert("Delete migration pending."); return; }
     if (!confirm(`Delete ${doc.originalFileName || "this file"}?`)) return;
-    await fetch(`/api/operations/execution-documents/${doc.id}`, { method: "DELETE", headers: authHeader });
-    onRefresh();
+    try {
+      await deleteExecutionDocument(token, doc.id);
+      onRefresh();
+    } catch (e: any) {
+      alert(e?.message || "Delete failed.");
+    }
   };
 
   const uploadTransport = async (file: File) => {

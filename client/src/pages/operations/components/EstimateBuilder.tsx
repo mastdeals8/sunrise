@@ -10,7 +10,7 @@ import ProductForm, { type ProductFormValue, emptyProductFormValue } from "./Pro
 import { categoryKey, normalizeCategoryLabel } from "./CategoryAutocomplete";
 import ClientForm, { type ClientFormValue, emptyClientFormValue } from "./ClientForm";
 import { isBoltMode } from "../../../lib/supabase";
-import { fetchEstimateItems } from "../../../lib/api";
+import { fetchEstimateItems, masterDataSave } from "../../../lib/api";
 import { exportEstimateToExcel } from "../utils/exportHelpers";
 
 // ─── Create Product Drawer ───────────────────────────────────────────────────
@@ -52,39 +52,30 @@ const CreateProductDrawer: React.FC<CreateProductDrawerProps> = ({ initialName, 
   const handleSave = async () => {
     const trimmedName = value.name.trim();
     if (!trimmedName) { setError("Product name is required."); return; }
-    if (isBoltMode) { setError("Product create migration pending."); return; }
     setSaving(true);
     setError("");
     try {
-      const res = await fetch("/api/operations/products", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({
-          name: trimmedName,
-          description: value.description?.trim() || undefined,
-          category: value.category.trim() || undefined,
-          hsnSac: value.hsnSac.trim() || undefined,
-          unit: value.unit,
-          calculationType: value.calculationType,
-          gstPercent: Number(value.gstPercent) || 18,
-          rate: Number(value.rate) || 0,
-          isStandard: value.isStandard,
-          defaultSpecification: value.defaultSpecification?.trim() || undefined,
-          warranty: value.warranty?.trim() || undefined,
-          materialCode: value.materialCode?.trim() || undefined,
-          isActive: true,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        if (res.status === 403) setError("Permission denied. Ask an admin or manager to create products.");
-        else if (res.status === 400 && String(data.message || "").toLowerCase().includes("unique")) setError(`A product named "${trimmedName}" already exists. Search for it instead.`);
-        else setError(data.message || "Failed to create product.");
-        return;
-      }
+      const payload = {
+        name: trimmedName,
+        description: value.description?.trim() || undefined,
+        category: value.category.trim() || undefined,
+        hsnSac: value.hsnSac.trim() || undefined,
+        unit: value.unit,
+        calculationType: value.calculationType,
+        gstPercent: Number(value.gstPercent) || 18,
+        rate: Number(value.rate) || 0,
+        isStandard: value.isStandard,
+        defaultSpecification: value.defaultSpecification?.trim() || undefined,
+        warranty: value.warranty?.trim() || undefined,
+        materialCode: value.materialCode?.trim() || undefined,
+        isActive: true,
+      };
+      const data = await masterDataSave(token, "products", "POST", null, payload);
       onSaveAndUse(data);
-    } catch {
-      setError("Network error. Please try again.");
+    } catch (err: any) {
+      if (err?.status === 403) setError("Permission denied. Ask an admin or manager to create products.");
+      else if (err?.status === 400 && String(err?.body?.message || "").toLowerCase().includes("unique")) setError(`A product named "${trimmedName}" already exists. Search for it instead.`);
+      else setError(err?.message || "Failed to create product.");
     } finally {
       setSaving(false);
     }
@@ -171,40 +162,31 @@ const CreateClientDrawer: React.FC<CreateClientDrawerProps> = ({ initialName, to
   const handleSave = async () => {
     const trimmedName = value.name.trim();
     if (!trimmedName) { setError("Company name is required."); return; }
-    if (isBoltMode) { setError("Client create migration pending."); return; }
     setSaving(true);
     setError("");
     try {
-      const res = await fetch("/api/operations/clients", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({
-          name: trimmedName,
-          groupName: value.groupName.trim() || null,
-          gstNumber: value.gst.trim() || null,
-          pan: value.pan.trim() || null,
-          type: value.type || "corporate",
-          format: value.formatSetting || "normal",
-          email: value.email.trim() || null,
-          phone: value.phone.trim() || null,
-          city: value.city.trim() || null,
-          address: value.address.trim() || null,
-          primaryContact: value.primaryContact.trim() || null,
-          paymentTerms: value.paymentTerms.trim() || null,
-          vendorCode: value.vendorCode.trim() || null,
-          isActive: true,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        if (res.status === 403) setError("Permission denied. Ask an admin or manager to create clients.");
-        else if (res.status === 400 && String(data.message || "").toLowerCase().includes("unique")) setError(`A client named "${trimmedName}" already exists. Search for it instead.`);
-        else setError(data.message || "Failed to create client.");
-        return;
-      }
+      const payload = {
+        name: trimmedName,
+        groupName: value.groupName.trim() || null,
+        gstNumber: value.gst.trim() || null,
+        pan: value.pan.trim() || null,
+        type: value.type || "corporate",
+        format: value.formatSetting || "normal",
+        email: value.email.trim() || null,
+        phone: value.phone.trim() || null,
+        city: value.city.trim() || null,
+        address: value.address.trim() || null,
+        primaryContact: value.primaryContact.trim() || null,
+        paymentTerms: value.paymentTerms.trim() || null,
+        vendorCode: value.vendorCode.trim() || null,
+        isActive: true,
+      };
+      const data = await masterDataSave(token, "clients", "POST", null, payload);
       onSaveAndUse(data);
-    } catch {
-      setError("Network error. Please try again.");
+    } catch (err: any) {
+      if (err?.status === 403) setError("Permission denied. Ask an admin or manager to create clients.");
+      else if (err?.status === 400 && String(err?.body?.message || "").toLowerCase().includes("unique")) setError(`A client named "${trimmedName}" already exists. Search for it instead.`);
+      else setError(err?.message || "Failed to create client.");
     } finally {
       setSaving(false);
     }

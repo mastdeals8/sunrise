@@ -897,3 +897,105 @@ export async function createPayment(
   if (!res.ok) throw new Error((await res.json()).message ?? "Failed to create payment");
   return res.json();
 }
+
+// ─── Execution Document mutations ─────────────────────────────────────────────
+
+/** Soft-delete an execution document. */
+export async function deleteExecutionDocument(
+  token: string | null,
+  docId: number
+): Promise<void> {
+  if (!isBoltMode) {
+    const res = await apiFetch(`/api/operations/execution-documents/${docId}`, token, { method: "DELETE" });
+    if (!res.ok) throw new Error(`Delete failed (${res.status})`);
+    return;
+  }
+  const { error } = await supabase
+    .from("execution_documents")
+    .update({ status: "deleted", deleted_at: new Date().toISOString() })
+    .eq("id", docId);
+  if (error) throw new Error(error.message);
+}
+
+/**
+ * Upload a file to execution-documents bucket and register it in the DB.
+ * Returns the raw storagePath, a signed displayUrl, and the DB row.
+ */
+export async function uploadExecutionDocument(
+  token: string | null,
+  file: File,
+  opts: {
+    estimateId: number;
+    storeCode: string;
+    documentType: string;
+    uploadedVia?: string;
+    metadata?: Record<string, unknown>;
+  }
+): Promise<{ storagePath: string; displayUrl: string; doc: any }> {
+  const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+  const storagePath = `estimate-${opts.estimateId}/${opts.storeCode || "misc"}/${Date.now()}-${safeName}`;
+  const { storagePath: saved, displayUrl } = await uploadToStorage("execution-documents", storagePath, file);
+  const doc = await registerExecutionDocument(token, {
+    estimateId: opts.estimateId,
+    storeCode: opts.storeCode,
+    documentType: opts.documentType,
+    filePath: saved,
+    originalFileName: file.name,
+    mimeType: file.type || null,
+    fileSize: file.size || null,
+    uploadedVia: opts.uploadedVia ?? "project_workspace",
+    metadata: opts.metadata ?? {},
+  });
+  return { storagePath: saved, displayUrl, doc };
+}
+
+/** Generate a 2-hour signed URL for a private execution-documents storage path. */
+export async function getExecutionDocumentDisplayUrl(storagePath: string): Promise<string> {
+  const { data, error } = await supabase.storage
+    .from("execution-documents")
+    .createSignedUrl(storagePath, 7200);
+  if (error) throw new Error(error.message);
+  return data!.signedUrl;
+}
+
+/**
+ * Normalize a company asset path to a displayable URL.
+ * Handles: full HTTPS URLs (as-is), Supabase storage paths (no leading slash → public bucket URL),
+ * and legacy Express /uploads/company-assets/ paths (rewritten for Bolt mode).
+ */
+export function getCompanyAssetUrl(pathOrUrl?: string | null): string {
+  const clean = String(pathOrUrl || "").trim();
+  if (!clean) return "";
+  if (clean.startsWith("http://") || clean.startsWith("https://")) return clean;
+  if (!clean.startsWith("/")) {
+    const { data } = supabase.storage.from("company-assets").getPublicUrl(clean);
+    return data.publicUrl;
+  }
+  if (clean.startsWith("/uploads/company-assets/")) {
+    const filename = clean.split("/").pop() ?? "";
+    if (isBoltMode) {
+      const supabaseUrl = (import.meta.env.VITE_SUPABASE_URL as string | undefined) ?? "";
+      return `${supabaseUrl}/storage/v1/object/public/company-assets/${encodeURIComponent(filename)}`;
+    }
+    return `/api/company-assets/${encodeURIComponent(filename)}`;
+  }
+  return clean;
+}
+
+// ─── Company Settings (Bolt write) ───────────────────────────────────────────
+
+/**
+ * Upsert a batch of key→value pairs into app_settings.
+ * Bolt mode only (Express uses PUT /api/company-settings).
+ */
+export async function upsertAppSettings(
+  settings: Record<string, string | null>
+): Promise<void> {
+  const rows = Object.entries(settings).map(([key, value]) => ({ key, value }));
+  for (const row of rows) {
+    const { error } = await supabase
+      .from("app_settings")
+      .upsert(row, { onConflict: "key" });
+    if (error) throw new Error(error.message);
+  }
+}
