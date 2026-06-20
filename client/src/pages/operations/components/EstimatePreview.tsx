@@ -1267,7 +1267,7 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
                 </>
               )}
               {sIdx < sections.length - 1 && (
-                <tr>
+                <tr className="estimate-store-spacer">
                   <td colSpan={COL_COUNT} style={{ ...cellBase, height: "6px", padding: 0 }}></td>
                 </tr>
               )}
@@ -1658,7 +1658,7 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
                     onClick={async () => {
                       if (isBoltMode) {
                         const client = clients.find((c: any) => c.id === selectedEstimate.clientId);
-                        await exportEstimateToExcel(selectedEstimate, previewItems, client?.name);
+                        await exportEstimateToExcel(selectedEstimate, previewItems, client?.name, sellerProfile);
                       } else {
                         window.open(`/api/operations/estimates/${selectedEstimate.id}/export-excel`, "_blank");
                       }
@@ -1694,7 +1694,7 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
 	                      onClick={async () => {
 	                        if (isBoltMode) {
 	                          const client = clients.find((c: any) => c.id === selectedEstimate.clientId);
-	                          await exportEstimateToExcel(selectedEstimate, previewItems, client?.name);
+	                          await exportEstimateToExcel(selectedEstimate, previewItems, client?.name, sellerProfile);
 	                        } else {
 	                          window.open(`/api/operations/estimates/${selectedEstimate.id}/export-excel`, "_blank");
 	                        }

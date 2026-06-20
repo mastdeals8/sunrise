@@ -302,6 +302,9 @@
     break-inside: avoid !important;
     page-break-inside: avoid !important;
   }
+  .estimate-store-spacer {
+    display: none !important;
+  }
   .estimate-store-section-keep tr:first-child {
     break-after: avoid;
     page-break-after: avoid;

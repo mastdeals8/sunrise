@@ -520,12 +520,35 @@ export async function fetchCompanySettings(token: string | null) {
   const rows = await sbSelect<any>("app_settings", (q) =>
     q.select("key, value")
   );
-  // Convert [{key, value}] → flat object; also expose 'company.xxx' as plain 'xxx'
+  // Convert [{key, value}] → flat object with aliased shorthand keys.
   const out: Record<string, any> = {};
+  const BANK_KEY_MAP: Record<string, string> = {
+    name: "bankName",
+    accountNumber: "bankAccountNumber",
+    ifsc: "bankIfsc",
+    branch: "bankBranch",
+  };
+  const DEFAULTS_KEY_MAP: Record<string, string> = {
+    gstPercent: "defaultGstPercent",
+    packingPercent: "defaultPacking",
+    implementationPercent: "defaultImplementation",
+    localTransport: "defaultLocalTransport",
+    outstationTransportRate: "defaultOutstationTransportRate",
+    terms: "terms",
+  };
   for (const r of rows) {
     out[r.key] = r.value;
-    if (typeof r.key === "string" && r.key.startsWith("company.")) {
-      out[r.key.slice("company.".length)] = r.value;
+    const key = r.key as string;
+    if (key.startsWith("company.")) {
+      out[key.slice("company.".length)] = r.value;
+    } else if (key.startsWith("bank.")) {
+      const sub = key.slice("bank.".length);
+      const mapped = BANK_KEY_MAP[sub];
+      if (mapped) out[mapped] = r.value;
+    } else if (key.startsWith("defaults.")) {
+      const sub = key.slice("defaults.".length);
+      const mapped = DEFAULTS_KEY_MAP[sub];
+      if (mapped) out[mapped] = r.value;
     }
   }
   return out;
@@ -719,10 +742,7 @@ export async function saveAssetSetting(
     // Express mode handles this through the company-settings PUT endpoint
     return;
   }
-  const { error } = await supabase
-    .from("app_settings")
-    .upsert({ key: settingKey, value }, { onConflict: "key" });
-  if (error) throw new Error(error.message);
+  await upsertAppSettings(token, { [settingKey]: value });
 }
 
 // ─── Write helpers — Edge Functions (Bolt) or Express (full mode) ─────────────
@@ -1014,17 +1034,19 @@ export function getCompanyAssetUrl(pathOrUrl?: string | null): string {
 // ─── Company Settings (Bolt write) ───────────────────────────────────────────
 
 /**
- * Upsert a batch of key→value pairs into app_settings.
- * Bolt mode only (Express uses PUT /api/company-settings).
+ * Upsert a batch of key→value pairs into app_settings via the settings-save
+ * edge function which uses the service-role client to bypass RLS INSERT block.
  */
 export async function upsertAppSettings(
+  token: string | null,
   settings: Record<string, string | null>
 ): Promise<void> {
-  const rows = Object.entries(settings).map(([key, value]) => ({ key, value }));
-  for (const row of rows) {
-    const { error } = await supabase
-      .from("app_settings")
-      .upsert(row, { onConflict: "key" });
-    if (error) throw new Error(error.message);
+  const res = await edgeFetch("settings-save", token, {
+    method: "POST",
+    body: JSON.stringify(settings),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.message ?? "Settings save failed");
   }
 }

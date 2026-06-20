@@ -114,7 +114,7 @@ const SettingsPage: React.FC = () => {
     setSaving(true);
     try {
       if (isBoltMode) {
-        await upsertAppSettings({
+        await upsertAppSettings(token, {
           "company.name": form.companyName,
           "company.address": form.companyAddress,
           "company.gstin": form.companyGstin,
@@ -122,21 +122,18 @@ const SettingsPage: React.FC = () => {
           "company.stateCode": form.companyStateCode,
           "company.mobile": form.companyMobile,
           "company.email": form.companyEmail,
-          "company.bankName": form.bankName,
-          "company.bankAccountNumber": form.bankAccountNumber,
-          "company.bankIfsc": form.bankIfsc,
-          "company.bankBranch": form.bankBranch,
-          "company.defaultGstPercent": form.defaultGstPercent,
-          "company.defaultInvoicePrefix": form.defaultInvoicePrefix,
-          "company.defaultEstimatePrefix": form.defaultEstimatePrefix,
-          "company.defaultDcPrefix": form.defaultDcPrefix,
-          "company.defaultPacking": form.defaultPacking,
-          "company.defaultImplementation": form.defaultImplementation,
-          "company.defaultLocalTransport": form.defaultLocalTransport,
-          "company.defaultOutstationTransportRate": form.defaultOutstationTransportRate,
+          "bank.name": form.bankName,
+          "bank.accountNumber": form.bankAccountNumber,
+          "bank.ifsc": form.bankIfsc,
+          "bank.branch": form.bankBranch,
+          "defaults.gstPercent": form.defaultGstPercent,
+          "defaults.packingPercent": form.defaultPacking,
+          "defaults.implementationPercent": form.defaultImplementation,
+          "defaults.localTransport": form.defaultLocalTransport,
+          "defaults.outstationTransportRate": form.defaultOutstationTransportRate,
+          "defaults.terms": form.terms || null,
           "company.logoPath": form.companyLogoPath || null,
           "company.signatureStampPath": form.signatureStampPath || null,
-          "company.terms": form.terms || null,
         });
         setMsg({ kind: "ok", text: "Settings saved." });
         setTimeout(() => setMsg(null), 3000);
