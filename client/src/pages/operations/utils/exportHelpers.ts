@@ -16,15 +16,16 @@ const s = (v: any) => (v == null ? "" : String(v));
 const n = (v: any) => Number(v) || 0;
 const f2 = (v: number) => (Math.round(v * 100) / 100).toFixed(2);
 
-// 14 columns matching the PDF estimate layout:
-// SL | ELEMENT | HSN | Standard/Non | PRODUCT DETAILS | W | H | Qty | T.Sqft | Rate | Amount | GST% | GST Amount | Total
+// ── Column definitions (14, matching the PDF estimate table) ─────────────────
+// SL | ELEMENT | HSN | Standard/Non | PRODUCT DETAILS | W | H | Qty | T.Sqft | Rate | Amount | GST % | GST Amount | Total
 const COL = 14;
-const COL_AMOUNT = 10;
-const COL_GST_PCT = 11;
-const COL_GST_AMT = 12;
-const COL_TOTAL = 13;
+const COL_AMOUNT = 10;   // 0-based index of Amount column
+const COL_GST_PCT = 11;  // GST %
+const COL_GST_AMT = 12;  // GST Amount
+const COL_TOTAL = 13;    // Total
 
 type Row = (string | number)[];
+
 const blank14 = (): Row => Array(COL).fill("");
 
 /** Client-side Excel export matching the PDF estimate layout. */
@@ -33,7 +34,6 @@ export async function exportEstimateToExcel(
   items: any[],
   clientName?: string,
   sellerProfile?: any,
-  stores?: any[],
 ): Promise<void> {
   const XLSX = (await import("xlsx-js-style")).default;
 
@@ -42,7 +42,7 @@ export async function exportEstimateToExcel(
   const hasGrouping = Object.keys(storeGrouping).length > 0;
   const sortedItems = orderedEstimateItems(items);
 
-  // ── Seller / billing info ────────────────────────────────────────────────
+  // ── Resolve seller / billing info ────────────────────────────────────────
   const sp = sellerProfile || {};
   const companyName = s(sp.name || "Sunrise Media");
   const companyAddress = s(sp.address || "");
@@ -52,8 +52,7 @@ export async function exportEstimateToExcel(
   const bankBranch = s(sp.bankBranch || "");
   const bankAccount = s(sp.bankAccountNumber || "");
   const bankIfsc = s(sp.bankIfsc || "");
-  const termsRaw = s(sp.terms ||
-    "1. Taxes will be applicable.\n2. 100% Payment after the delivery of the material.\n3. Transportation charges as per actual.\n4. Any additional work / rework will be extra.");
+  const termsRaw = s(sp.terms || "1. Taxes will be applicable.\n2. 100% Payment after the delivery of the material.\n3. Transportation charges as per actual.\n4. Any additional work / rework will be extra.");
   const termsLines = termsRaw.split(/\n+/).map((l: string) => l.trim()).filter(Boolean);
 
   const billingName = s(estimate.billingLegalNameSnapshot || clientName || estimate.clientId || "");
@@ -62,6 +61,7 @@ export async function exportEstimateToExcel(
   const billingStateCode = s(estimate.billingStateCodeSnapshot || "");
   const shippingRaw = s(estimate.shippingAddressSnapshot || estimate.shippingTo || "");
   const shippingHasOwn = shippingRaw.trim().length > 0 && shippingRaw.trim() !== billingAddr.trim();
+  const shippingName = shippingHasOwn ? billingName : billingName;
   const shippingAddr = shippingHasOwn ? shippingRaw : billingAddr;
 
   const dateStr = (estimate.estimateDate || estimate.createdAt)
@@ -74,72 +74,58 @@ export async function exportEstimateToExcel(
   const subject = s(estimate.subject || estimate.title || "");
   const poNumber = s(estimate.poNumber || "");
 
-  // ── Row accumulator ──────────────────────────────────────────────────────
+  // ── Rows accumulator ─────────────────────────────────────────────────────
   const rows: Row[] = [];
-  const rowHeights: number[] = []; // hpt per row index
 
-  // Style tracking by row index
-  const companyNameRows: number[] = [];
-  const companySubRows: number[] = [];
-  const billingHeaderRows: number[] = [];  // "Billing To" / "Shipping To" label row
-  const billingBodyRows: number[] = [];    // rest of billing block
-  const storeHeaderRows: number[] = [];
-  const columnHeaderRows: number[] = [];
-  const itemRows: number[] = [];
-  const materialTotalRows: number[] = [];
-  const serviceRows: number[] = [];
-  const grandTotalRows: number[] = [];
-  const bankRows: number[] = [];
-  const termsRows: number[] = [];
-  const spacerRows: number[] = [];
+  // Track which row indices need special styles
+  const companyNameRowIdx: number[] = [];
+  const sectionLabelRowIdxs: number[] = [];   // "Billing To", "Shipping To" labels
+  const storeHeaderRowIdxs: number[] = [];
+  const columnHeaderRowIdx: number[] = [];
+  const materialTotalRowIdxs: number[] = [];
+  const serviceRowIdxs: number[] = [];
+  const grandTotalRowIdxs: number[] = [];
+  const bankRowIdxs: number[] = [];
+  const termsTitleIdx: number[] = [];
+  const termsBodyIdxs: number[] = [];
 
-  // Merge ranges to apply
-  const merges: any[] = [];
-  const merge = (r: number, c1: number, c2: number) =>
-    merges.push({ s: { r, c: c1 }, e: { r, c: c2 } });
-
-  const addRow = (cells: Row, hpt = 14) => {
-    while (cells.length < COL) cells.push("");
-    rows.push(cells);
-    rowHeights.push(hpt);
-    return rows.length - 1; // 0-based index
+  const push = (...cells: (string | number)[]) => {
+    const row: Row = [...cells];
+    while (row.length < COL) row.push("");
+    rows.push(row);
   };
 
-  // ── COMPANY HEADER ────────────────────────────────────────────────────────
-  const r0 = addRow([companyName], 22);
-  companyNameRows.push(r0);
+  // ── HEADER SECTION ───────────────────────────────────────────────────────
+  // Row 1: Company name (merged all cols)
+  companyNameRowIdx.push(rows.length);
+  push(companyName);
 
-  if (companyAddress) {
-    const r1 = addRow([companyAddress], 14);
-    companySubRows.push(r1);
-  }
+  // Row 2: Company address (merged)
+  if (companyAddress) push(companyAddress);
+  // Row 3: GSTIN / PAN
   if (companyGstin || companyPan) {
-    const r2 = addRow([
-      `${companyGstin ? `GSTIN: ${companyGstin}` : ""}${companyGstin && companyPan ? "   |   " : ""}${companyPan ? `PAN: ${companyPan}` : ""}`,
-    ], 14);
-    companySubRows.push(r2);
+    push(`${companyGstin ? `GSTIN: ${companyGstin}` : ""}${companyGstin && companyPan ? "   |   " : ""}${companyPan ? `PAN: ${companyPan}` : ""}`);
   }
 
-  // Spacer
-  const spacer1 = addRow(blank14(), 6);
-  spacerRows.push(spacer1);
+  push(...blank14()); // spacer
 
-  // ── BILLING / SHIPPING / META ─────────────────────────────────────────────
-  // Layout: cols 0-5 = Billing, cols 6-9 = Shipping, cols 10-11 = meta label, cols 12-13 = meta value
+  // ── BILLING / SHIPPING + META ────────────────────────────────────────────
+  // Left half (cols 0-6): Billing To; Right half (cols 7-13): Estimate meta
+  // We simulate side-by-side by putting data in specific columns
 
   const billingLines = [
-    "Billing To",
+    `Billing To`,
     `M/S : ${billingName}`,
-    ...billingAddr.split(/\n+/).map((l: string) => l.trim()).filter(Boolean),
+    ...billingAddr.split(/\n+/).map(l => l.trim()).filter(Boolean),
     billingStateCode ? `State Code: ${billingStateCode}` : "",
     billingGstin ? `GSTIN: ${billingGstin}` : "",
   ].filter(Boolean);
 
-  const shippingLines = [
+  const shippingLines = shippingHasOwn ? [
     "Shipping To",
-    `M/S : ${billingName}`,
-    ...shippingAddr.split(/\n+/).map((l: string) => l.trim()).filter(Boolean),
-  ].filter(Boolean);
+    `M/S : ${shippingName}`,
+    ...shippingAddr.split(/\n+/).map(l => l.trim()).filter(Boolean),
+  ] : [`Shipping To`, `M/S : ${shippingName}`, ...billingAddr.split(/\n+/).map(l => l.trim()).filter(Boolean)];
 
   const metaLines: [string, string][] = [
     ["Date :", dateStr],
@@ -150,45 +136,33 @@ export async function exportEstimateToExcel(
     ...(companyPan ? [["PAN :", companyPan] as [string, string]] : []),
   ];
 
-  const billingBlockStart = rows.length;
   const headerRows = Math.max(billingLines.length, shippingLines.length, metaLines.length, 3);
-
   for (let i = 0; i < headerRows; i++) {
     const row: Row = Array(COL).fill("");
+    // Left: billing (cols 0-5)
     if (i < billingLines.length) row[0] = billingLines[i];
+    // Middle: shipping (cols 6-9)
     if (i < shippingLines.length) row[6] = shippingLines[i];
+    // Right: meta (cols 10-13) — label in col 10, value in col 12
     if (i < metaLines.length) {
       row[10] = metaLines[i][0];
       row[12] = metaLines[i][1];
     }
-    const ri = addRow(row, 14);
-    if (i === 0) billingHeaderRows.push(ri);
-    else billingBodyRows.push(ri);
+    if (i === 0) sectionLabelRowIdxs.push(rows.length);
+    rows.push(row);
   }
 
-  // Merge billing block cols 0-5, shipping cols 6-9, meta label 10-11, meta value 12-13
-  for (let r = billingBlockStart; r < rows.length; r++) {
-    merge(r, 0, 5);
-    merge(r, 6, 9);
-    merge(r, 10, 11);
-    merge(r, 12, 13);
-  }
+  push(...blank14()); // spacer
 
-  // Spacer
-  const spacer2 = addRow(blank14(), 6);
-  spacerRows.push(spacer2);
+  // ── TABLE: SUBJECT + COLUMN HEADERS ─────────────────────────────────────
+  // Subject row (merged)
+  push(`Subject : ${subject}`);
 
-  // ── SUBJECT + COLUMN HEADERS ──────────────────────────────────────────────
-  const subjectRow = addRow([`Subject : ${subject}`], 16);
-  merge(subjectRow, 0, COL - 1);
+  // Column headers
+  columnHeaderRowIdx.push(rows.length);
+  push("SL", "ELEMENT", "HSN", "Standard / Non", "PRODUCT DETAILS", "W", "H", "Qty", "T.Sqft", "Rate", "Amount", "GST %", "GST Amount", "Total");
 
-  const colHdrRow = addRow(
-    ["SL", "ELEMENT", "HSN", "Standard / Non", "PRODUCT DETAILS", "W", "H", "Qty", "T.Sqft", "Rate", "Amount", "GST %", "GST Amount", "Total"],
-    30,
-  );
-  columnHeaderRows.push(colHdrRow);
-
-  // ── DATA ROWS ─────────────────────────────────────────────────────────────
+  // ── DATA ROWS ────────────────────────────────────────────────────────────
   let grandBeforeTax = 0;
   let grandGst = 0;
 
@@ -203,74 +177,76 @@ export async function exportEstimateToExcel(
     const amt = n(item.totalPrice ?? item.amount);
     const gst = gstAmt(item);
     const total = n(item.totalAmount ?? item.total_amount);
-    const ri = addRow([
-      sl,
-      s(item.itemName || ""),
-      s(item.hsn || ""),
-      s(item.isStandard === false ? "Non-standard" : "Standard"),
+    push(
+      sl, s(item.itemName || ""), s(item.hsn || ""), s(item.isStandard === false ? "Non-standard" : "Standard"),
       s(item.description || ""),
       item.width ? f2(n(item.width)) : "",
       item.height ? f2(n(item.height)) : "",
       item.quantity != null ? f2(n(item.quantity)) : "",
       item.totalSize != null ? f2(n(item.totalSize)) : "",
       item.rate != null ? f2(n(item.rate)) : "",
-      f2(amt),
-      gstPctLabel(item),
-      f2(gst),
-      f2(total),
-    ], 14);
-    itemRows.push(ri);
+      f2(amt), gstPctLabel(item), f2(gst), f2(total),
+    );
   };
 
-  const addServiceRow = (item: any) => {
+  const addServiceRowXl = (item: any) => {
     const base = n(item.totalPrice ?? item.amount);
     const gst = gstAmt(item);
     const total = n(item.totalAmount ?? item.total_amount);
     const rateLabel = item.calculationType === "percentage" ? `${n(item.rate)}%` : "";
-    const ri = addRow([
-      "",
+    serviceRowIdxs.push(rows.length);
+    push(
+      "", s(item.itemName || ""), s(item.hsn || "9987"), "Standard",
       s(item.itemName || ""),
-      s(item.hsn || "9987"),
-      "Standard",
-      s(item.itemName || ""),
-      "",
-      "",
-      item.quantity != null ? f2(n(item.quantity)) : "",
-      "",
-      rateLabel,
-      f2(base),
-      gstPctLabel(item),
-      f2(gst),
-      f2(total),
-    ], 14);
-    serviceRows.push(ri);
+      "", "", item.quantity != null ? f2(n(item.quantity)) : "",
+      "", rateLabel, f2(base), gstPctLabel(item), f2(gst), f2(total),
+    );
   };
 
-  const processStore = (storeLabelText: string, materialItems: any[], serviceItems: any[]) => {
+  const addSyntheticServiceRow = (kind: string, descr: string, rateLabel: string, base: number) => {
+    if (base <= 0) return;
+    const SERVICE_TAX_PCT = 18;
+    const gst = base * SERVICE_TAX_PCT / 100;
+    const total = base + gst;
+    serviceRowIdxs.push(rows.length);
+    push(
+      "", kind, "9987", "Standard", descr,
+      "", "", "", "", rateLabel, f2(base), "18%", f2(gst), f2(total),
+    );
+  };
+
+  const processStore = (storeLabel: string, storeCode: string, materialItems: any[], serviceItems: any[]) => {
     if (materialItems.length === 0 && serviceItems.length === 0) return;
 
-    const shri = addRow([storeLabelText], 18);
-    storeHeaderRows.push(shri);
-    merge(shri, 0, COL - 1);
+    // Store header row (merged)
+    storeHeaderRowIdxs.push(rows.length);
+    push(`Store: ${storeLabel}${storeCode ? `,  Store Code : ${storeCode}` : ""}`);
 
+    // Material item rows
     materialItems.forEach((it, idx) => addItemRow(it, idx + 1));
 
+    // Material total row (yellow)
+    const matBase = materialItems.reduce((sum, it) => sum + n(it.totalPrice ?? it.amount), 0);
+    const matGst = materialItems.reduce((sum, it) => sum + gstAmt(it), 0);
+    const matTotal = materialItems.reduce((sum, it) => sum + n(it.totalAmount ?? it.total_amount), 0);
+
     if (materialItems.length > 0) {
-      const matBase = materialItems.reduce((sum, it) => sum + n(it.totalPrice ?? it.amount), 0);
-      const matGst = materialItems.reduce((sum, it) => sum + gstAmt(it), 0);
-      const matTotal = materialItems.reduce((sum, it) => sum + n(it.totalAmount ?? it.total_amount), 0);
-      const matRow: Row = Array(COL).fill("");
-      matRow[1] = "Total Material Cost";
-      matRow[COL_AMOUNT] = f2(matBase);
-      matRow[COL_GST_PCT] = "18%";
-      matRow[COL_GST_AMT] = f2(matGst);
-      matRow[COL_TOTAL] = f2(matTotal);
-      const mri = addRow(matRow, 14);
-      materialTotalRows.push(mri);
+      materialTotalRowIdxs.push(rows.length);
+      const r: Row = Array(COL).fill("");
+      r[1] = "Total Material Cost";
+      r[COL_AMOUNT] = f2(matBase);
+      r[COL_GST_PCT] = "18%";
+      r[COL_GST_AMT] = f2(matGst);
+      r[COL_TOTAL] = f2(matTotal);
+      rows.push(r);
     }
 
-    serviceItems.forEach(it => addServiceRow(it));
+    // Service rows
+    if (serviceItems.length > 0) {
+      serviceItems.forEach(it => addServiceRowXl(it));
+    }
 
+    // Grand accumulate
     const allItems = [...materialItems, ...serviceItems];
     grandBeforeTax += allItems.reduce((sum, it) => sum + n(it.totalPrice ?? it.amount), 0);
     grandGst += allItems.reduce((sum, it) => sum + gstAmt(it), 0);
@@ -282,88 +258,73 @@ export async function exportEstimateToExcel(
       const groupData = storeGrouping[sidKey];
       const itemSls: number[] = Array.isArray(groupData) ? groupData : (groupData?.itemSls || []);
       const slSet = new Set(itemSls.map(Number));
-      const storeItems = sortedItems.filter((it: any) => slSet.has(Number(it.sl)));
+      const storeItems = sortedItems.filter(it => slSet.has(Number(it.sl)));
       if (storeItems.length === 0) return;
 
-      const materialItems = storeItems.filter((it: any) => !isServiceItem(it));
-      const serviceItems = storeItems.filter((it: any) => isServiceItem(it));
+      const materialItems = storeItems.filter(it => !isServiceItem(it));
+      const serviceItems = storeItems.filter(it => isServiceItem(it));
+      const storeName = (!Array.isArray(groupData) && groupData?.storeName) ? s(groupData.storeName) : `Store ${sidKey}`;
+      const storeCode = storeItems.find((it: any) => it.storeCode)?.storeCode || "";
 
-      // Resolve store name: prefer stores array lookup, then groupData.storeName, then fallback
-      const tStore = stores?.find((st: any) => st.id === Number(sidKey));
-      const storeName = tStore?.name
-        || (!Array.isArray(groupData) && groupData?.storeName)
-        || "";
-      const storeCode = tStore?.storeCode
-        || storeItems.find((it: any) => it.storeCode)?.storeCode
-        || "";
+      processStore(storeName, storeCode, materialItems, serviceItems);
 
-      const storeLabel = `Store: ${storeName || sidKey}${storeCode ? `,  Store Code : ${storeCode}` : ""}`;
-      processStore(storeLabel, materialItems, serviceItems);
-
-      if (sIdx < storeKeys.length - 1) {
-        const si = addRow(blank14(), 6);
-        spacerRows.push(si);
-      }
+      if (sIdx < storeKeys.length - 1) rows.push(blank14());
     });
   } else {
-    const targetStore = stores?.find((st: any) => st.id === estimate.storeId);
-    const materialItems = sortedItems.filter((it: any) => !isServiceItem(it));
-    const serviceItems = sortedItems.filter((it: any) => isServiceItem(it));
-    const storeName = targetStore?.name || s(estimate.title || "Site");
-    const storeCode = targetStore?.storeCode || sortedItems.find((it: any) => it.storeCode)?.storeCode || "";
-    const storeLabel = `Store: ${storeName}${storeCode ? `,  Store Code : ${storeCode}` : ""}`;
-    processStore(storeLabel, materialItems, serviceItems);
+    const materialItems = sortedItems.filter(it => !isServiceItem(it));
+    const serviceItems = sortedItems.filter(it => isServiceItem(it));
+    const storeCode = sortedItems.find((it: any) => it.storeCode)?.storeCode || "";
+    processStore(s(estimate.title || "Site"), storeCode, materialItems, serviceItems);
   }
 
-  // ── GRAND TOTALS ──────────────────────────────────────────────────────────
-  const spacer3 = addRow(blank14(), 6);
-  spacerRows.push(spacer3);
+  // ── GRAND TOTALS ─────────────────────────────────────────────────────────
+  rows.push(blank14()); // spacer
 
-  const makeGrandRow = (label: string, amount: number) => {
+  const makeTotal = (label: string, amtCol: number, val: number) => {
     const r: Row = Array(COL).fill("");
-    r[COL_TOTAL - 1] = label;
-    r[COL_TOTAL] = f2(amount);
-    const ri = addRow(r, 14);
-    grandTotalRows.push(ri);
+    r[amtCol - 1] = label;
+    r[COL_TOTAL] = f2(val);
+    grandTotalRowIdxs.push(rows.length);
+    rows.push(r);
   };
 
-  // Main TOTAL row
-  const totalRowArr: Row = Array(COL).fill("");
-  totalRowArr[1] = "TOTAL";
-  totalRowArr[COL_AMOUNT] = f2(grandBeforeTax);
-  totalRowArr[COL_GST_PCT] = "18%";
-  totalRowArr[COL_GST_AMT] = f2(grandGst);
-  totalRowArr[COL_TOTAL] = f2(grandBeforeTax + grandGst);
-  const totalRi = addRow(totalRowArr, 14);
-  grandTotalRows.push(totalRi);
+  // TOTAL row
+  const totalRow: Row = Array(COL).fill("");
+  totalRow[1] = "TOTAL";
+  totalRow[COL_AMOUNT] = f2(grandBeforeTax);
+  totalRow[COL_GST_PCT] = "18%";
+  totalRow[COL_GST_AMT] = f2(grandGst);
+  totalRow[COL_TOTAL] = f2(grandBeforeTax + grandGst);
+  grandTotalRowIdxs.push(rows.length);
+  rows.push(totalRow);
 
-  makeGrandRow("TOTAL AMOUNT BEFORE TAX", grandBeforeTax);
+  makeTotal("TOTAL AMOUNT BEFORE TAX", COL_TOTAL, grandBeforeTax);
+
   if (isIgst) {
-    makeGrandRow("Add : IGST 18%", grandGst);
+    makeTotal("Add : IGST 18%", COL_TOTAL, grandGst);
   } else {
     const half = grandGst / 2;
-    makeGrandRow("Add : CGST 9%", half);
-    makeGrandRow("Add : SGST 9%", half);
+    makeTotal("Add : CGST 9%", COL_TOTAL, half);
+    makeTotal("Add : SGST 9%", COL_TOTAL, half);
   }
-  makeGrandRow("TOTAL AMOUNT AFTER TAX", grandBeforeTax + grandGst);
 
-  // ── FOOTER: TERMS + BANK ──────────────────────────────────────────────────
-  const spacer4 = addRow(blank14(), 6);
-  spacerRows.push(spacer4);
+  makeTotal("TOTAL AMOUNT AFTER TAX", COL_TOTAL, grandBeforeTax + grandGst);
+
+  // ── FOOTER: TERMS + BANK ─────────────────────────────────────────────────
+  rows.push(blank14()); // spacer
 
   // Terms header
-  const termsTitleRi = addRow(["Terms & Conditions :"], 14);
-  termsRows.push(termsTitleRi);
-  merge(termsTitleRi, 0, COL - 1);
+  termsTitleIdx.push(rows.length);
+  push("Terms & Conditions :");
 
+  // Terms lines (left), Bank details (right)
   const bankLines: [string, string][] = [
     ["Bank Name :", bankName],
     ["Branch Name :", bankBranch],
-    ["A/C No :", bankAccount],
+    ["C.A/c No :", bankAccount],
     ["IFSC No :", bankIfsc],
   ];
 
-  const footerStart = rows.length;
   const maxFooterRows = Math.max(termsLines.length, bankLines.length);
   for (let i = 0; i < maxFooterRows; i++) {
     const r: Row = Array(COL).fill("");
@@ -371,41 +332,36 @@ export async function exportEstimateToExcel(
     if (i < bankLines.length) {
       r[9] = bankLines[i][0];
       r[11] = bankLines[i][1];
+      bankRowIdxs.push(rows.length);
+    } else {
+      termsBodyIdxs.push(rows.length);
     }
-    const ri = addRow(r, 13);
-    termsRows.push(ri);
-    bankRows.push(ri);
+    if (i < termsLines.length && i >= bankLines.length) termsBodyIdxs.push(rows.length);
+    rows.push(r);
   }
 
-  // Merge terms cols 0-8, bank label 9-10, bank value 11-13 in each footer row
-  for (let r = footerStart; r < rows.length; r++) {
-    merge(r, 0, 8);
-    merge(r, 9, 10);
-    merge(r, 11, 13);
-  }
-
-  // Signature
-  addRow(blank14(), 8);
+  // Signature line
+  rows.push(blank14());
   const sigRow: Row = Array(COL).fill("");
   sigRow[11] = `For ${companyName.toUpperCase()}`;
-  addRow(sigRow, 14);
+  rows.push(sigRow);
   const authRow: Row = Array(COL).fill("");
   authRow[11] = "Authorised Signatory";
-  addRow(authRow, 14);
+  rows.push(authRow);
 
   // ── BUILD WORKSHEET ───────────────────────────────────────────────────────
   const ws = XLSX.utils.aoa_to_sheet(rows);
 
-  // Column widths (14 cols) — proportioned to fit A4 portrait with fitToWidth
+  // Column widths matching PDF percentages (14 cols, A4 portrait, ~194mm printable)
   ws["!cols"] = [
     { wch: 5 },   // SL
     { wch: 14 },  // ELEMENT
-    { wch: 8 },   // HSN
-    { wch: 10 },  // Standard/Non
-    { wch: 38 },  // PRODUCT DETAILS (wide — most important)
+    { wch: 7 },   // HSN
+    { wch: 11 },  // Standard/Non
+    { wch: 24 },  // PRODUCT DETAILS
     { wch: 6 },   // W
     { wch: 6 },   // H
-    { wch: 7 },   // Qty
+    { wch: 6 },   // Qty
     { wch: 8 },   // T.Sqft
     { wch: 9 },   // Rate
     { wch: 11 },  // Amount
@@ -414,21 +370,27 @@ export async function exportEstimateToExcel(
     { wch: 11 },  // Total
   ];
 
-  // Row heights
-  ws["!rows"] = rowHeights.map(hpt => ({ hpt }));
+  // ── MERGES ────────────────────────────────────────────────────────────────
+  const merges: any[] = [];
+  const merge = (r: number, c1: number, c2: number) => merges.push({ s: { r, c: c1 }, e: { r, c: c2 } });
 
-  // Merges
+  // Merge company name row and metadata rows across all 14 cols
+  companyNameRowIdx.forEach(r => merge(r, 0, COL - 1));
+  // Merge the row right after company name (address/GSTIN) - first few rows
+  const companyBase = companyNameRowIdx[0] ?? 0;
+  for (let r = companyBase + 1; r < companyBase + 4; r++) {
+    if (r < rows.length) merge(r, 0, COL - 1);
+  }
+
+  // Merge store headers across all cols
+  storeHeaderRowIdxs.forEach(r => merge(r, 0, COL - 1));
+
+  // Merge subject row across all cols
+  // (the subject row is just before column headers)
+  const colHdrIdx = columnHeaderRowIdx[0] ?? 0;
+  if (colHdrIdx > 0) merge(colHdrIdx - 1, 0, COL - 1);
+
   ws["!merges"] = merges;
-
-  // Page setup — A4 portrait, fit to 1 page wide
-  ws["!pageSetup"] = {
-    paperSize: 9,        // A4
-    orientation: "portrait",
-    fitToPage: true,
-    fitToWidth: 1,
-    fitToHeight: 0,
-  };
-  ws["!margins"] = { left: 0.4, right: 0.4, top: 0.6, bottom: 0.6, header: 0.2, footer: 0.2 };
 
   // ── STYLES ────────────────────────────────────────────────────────────────
   const enc = (r: number, c: number) => XLSX.utils.encode_cell({ r, c });
@@ -437,55 +399,45 @@ export async function exportEstimateToExcel(
     if (!ws[ref]) ws[ref] = { v: "", t: "s" };
     ws[ref].s = style;
   };
-  const applyStyle = (r: number, style: any, from = 0, to = COL - 1) => {
-    for (let c = from; c <= to; c++) setS(r, c, style);
+  const applyRow = (r: number, style: any, cols = COL) => {
+    for (let c = 0; c < cols; c++) setS(r, c, style);
   };
 
-  const thin = { style: "thin", color: { rgb: "000000" } };
-  const borders = { top: thin, bottom: thin, left: thin, right: thin };
-  const noBorder = {};
+  const darkBorder = { style: "thin", color: { rgb: "000000" } };
+  const borders = { top: darkBorder, bottom: darkBorder, left: darkBorder, right: darkBorder };
 
-  // Company name — large bold centered
-  companyNameRows.forEach(r =>
-    applyStyle(r, { font: { bold: true, sz: 14 }, alignment: { horizontal: "center", vertical: "center" } }),
-  );
-
-  // Company sub-rows — small centered
-  companySubRows.forEach(r =>
-    applyStyle(r, { font: { sz: 9 }, alignment: { horizontal: "center", vertical: "center" } }),
-  );
-
-  // Billing header row — bold
-  billingHeaderRows.forEach(r =>
-    applyStyle(r, { font: { bold: true, sz: 10 }, alignment: { horizontal: "left", vertical: "center", wrapText: true } }),
-  );
-
-  // Billing body rows — normal
-  billingBodyRows.forEach(r =>
-    applyStyle(r, { font: { sz: 9 }, alignment: { horizontal: "left", vertical: "top", wrapText: true } }),
-  );
-
-  // Subject row — bold centered, bordered
-  applyStyle(subjectRow, {
-    font: { bold: true, sz: 10 },
+  // Company name row — large bold centered
+  companyNameRowIdx.forEach(r => applyRow(r, {
+    font: { bold: true, sz: 14 },
     alignment: { horizontal: "center", vertical: "center" },
-    border: borders,
-  });
+  }));
 
-  // Column headers — bold, grey fill, centered, bordered, wrapped
-  columnHeaderRows.forEach(r => {
+  // Company sub-rows (address/gstin)
+  for (let r = (companyNameRowIdx[0] ?? 0) + 1; r < (companyNameRowIdx[0] ?? 0) + 4; r++) {
+    if (r < rows.length) applyRow(r, { font: { sz: 9 }, alignment: { horizontal: "center", vertical: "center" } });
+  }
+
+  // Billing/shipping header rows (sectionLabelRowIdxs)
+  sectionLabelRowIdxs.forEach(r => applyRow(r, { font: { bold: true, sz: 10 } }));
+
+  // Column headers
+  columnHeaderRowIdx.forEach(r => {
     for (let c = 0; c < COL; c++) {
       setS(r, c, {
         font: { bold: true, sz: 9 },
-        fill: { patternType: "solid", fgColor: { rgb: "D9D9D9" } },
+        fill: { patternType: "solid", fgColor: { rgb: "FFFFFF" } },
         alignment: { horizontal: "center", vertical: "center", wrapText: true },
         border: borders,
       });
     }
   });
 
+  // Subject row (just before column headers)
+  const subjR = (columnHeaderRowIdx[0] ?? 1) - 1;
+  if (subjR >= 0) applyRow(subjR, { font: { bold: true, sz: 10 }, alignment: { horizontal: "center", vertical: "center" }, border: borders });
+
   // Store header rows — bold, light grey fill, bordered
-  storeHeaderRows.forEach(r => {
+  storeHeaderRowIdxs.forEach(r => {
     for (let c = 0; c < COL; c++) {
       setS(r, c, {
         font: { bold: true, sz: 9 },
@@ -496,39 +448,20 @@ export async function exportEstimateToExcel(
     }
   });
 
-  // Item rows — normal, bordered
-  itemRows.forEach(r => {
-    for (let c = 0; c < COL; c++) {
-      const isNum = c >= 5 && c !== COL_GST_PCT; // W onwards except GST%
-      setS(r, c, {
-        font: { sz: 9 },
-        alignment: {
-          horizontal: c === 0 ? "center" : isNum ? "right" : "left",
-          vertical: "center",
-          wrapText: c === 4, // wrap product details
-        },
-        border: borders,
-      });
-    }
-  });
-
   // Material total rows — yellow, bold, bordered
-  materialTotalRows.forEach(r => {
+  materialTotalRowIdxs.forEach(r => {
     for (let c = 0; c < COL; c++) {
       setS(r, c, {
         font: { bold: true, sz: 9 },
         fill: { patternType: "solid", fgColor: { rgb: "FFF066" } },
-        alignment: {
-          horizontal: c >= COL_AMOUNT ? "right" : c === 1 ? "left" : "center",
-          vertical: "center",
-        },
+        alignment: { horizontal: c >= COL_AMOUNT ? "right" : c === 1 ? "left" : "center", vertical: "center" },
         border: borders,
       });
     }
   });
 
-  // Service rows — normal, bordered
-  serviceRows.forEach(r => {
+  // Service rows — light, bordered
+  serviceRowIdxs.forEach(r => {
     for (let c = 0; c < COL; c++) {
       setS(r, c, {
         font: { sz: 9 },
@@ -539,37 +472,22 @@ export async function exportEstimateToExcel(
   });
 
   // Grand total rows — bold, light fill, bordered
-  grandTotalRows.forEach(r => {
+  grandTotalRowIdxs.forEach(r => {
     for (let c = 0; c < COL; c++) {
       setS(r, c, {
         font: { bold: true, sz: 9 },
-        fill: { patternType: "solid", fgColor: { rgb: "F0F4F8" } },
-        alignment: { horizontal: c >= COL_TOTAL - 1 ? "right" : "left", vertical: "center" },
+        fill: { patternType: "solid", fgColor: { rgb: "F8FAFC" } },
+        alignment: { horizontal: c >= COL_AMOUNT ? "right" : "left", vertical: "center" },
         border: borders,
       });
     }
   });
 
-  // Terms rows
-  termsRows.forEach(r =>
-    applyStyle(r, { font: { sz: 9 }, alignment: { horizontal: "left", vertical: "top", wrapText: true } }),
-  );
+  // Terms title
+  termsTitleIdx.forEach(r => applyRow(r, { font: { bold: true, sz: 9, color: { rgb: "B91C1C" } } }));
 
-  // Bank label/value columns (override within terms rows)
-  bankRows.forEach(r => {
-    setS(r, 9, { font: { bold: true, sz: 9 }, alignment: { horizontal: "left", vertical: "top" } });
-    setS(r, 10, { font: { bold: true, sz: 9 }, alignment: { horizontal: "left", vertical: "top" } });
-    setS(r, 11, { font: { sz: 9 }, alignment: { horizontal: "left", vertical: "top" } });
-    setS(r, 12, { font: { sz: 9 }, alignment: { horizontal: "left", vertical: "top" } });
-    setS(r, 13, { font: { sz: 9 }, alignment: { horizontal: "left", vertical: "top" } });
-  });
-
-  // Spacer rows — no style needed, already blank
-  spacerRows.forEach(r => {
-    for (let c = 0; c < COL; c++) {
-      setS(r, c, { border: noBorder });
-    }
-  });
+  // Bank rows
+  bankRowIdxs.forEach(r => applyRow(r, { font: { sz: 9 } }));
 
   // ── WORKBOOK ──────────────────────────────────────────────────────────────
   const wb = XLSX.utils.book_new();
