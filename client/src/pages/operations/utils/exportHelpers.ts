@@ -553,7 +553,7 @@ export async function exportEstimateToExcel(
     for (let c = 0; c < NCOLS; c++) {
       setS(r, c, {
         font: { bold: true, sz: 9 },
-        fill: { patternType: "solid", fgColor: { rgb: "D9D9D9" } },
+        fill: { patternType: "solid", fgColor: { rgb: "FFFFFF" } },
         alignment: { horizontal: "center", vertical: "center", wrapText: true },
         border: darkBord,
       });
