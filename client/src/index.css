@@ -135,8 +135,8 @@
 /* ============================================================ */
 @media print {
   @page {
-    size: A4;
-    margin: 10mm 12mm 14mm;
+    size: A4 portrait;
+    margin: 8mm;
   }
   /* Document exports must print only an explicit document subtree. */
   body { background: #fff !important; counter-reset: page 1; }
@@ -295,7 +295,6 @@
   .estimate-print tfoot {
     display: table-footer-group !important;
   }
-  .estimate-store-section-keep,
   .estimate-store-total-keep,
   .estimate-totals-keep,
   .estimate-service-row-keep,

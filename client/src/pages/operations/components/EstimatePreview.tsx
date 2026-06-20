@@ -288,8 +288,8 @@ type EstimatePrintOptions = {
 };
 
 const DEFAULT_PRINT_OPTIONS: EstimatePrintOptions = {
-  layout: "landscape",
-  scale: "90",
+  layout: "portrait",
+  scale: "100",
   mode: "compact",
 };
 
@@ -344,7 +344,7 @@ const applyPrintOptionClasses = (options: EstimatePrintOptions) => {
   clearPrintOptionClasses();
   const style = document.createElement("style");
   style.id = "estimate-print-options-style";
-  style.textContent = `@media print { @page { size: A4 ${options.layout}; margin: 10mm 12mm 14mm; } }`;
+  style.textContent = `@media print { @page { size: A4 ${options.layout}; margin: 8mm; } }`;
   document.head.appendChild(style);
   document.body.classList.add(
     `estimate-print-layout-${options.layout}`,
