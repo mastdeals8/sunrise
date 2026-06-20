@@ -7,7 +7,7 @@ import { formatProductDetails } from "../../../../../shared/productDetails";
 import { companyAssetUrl } from "../../../utils/companyAssets";
 import { formatCurrency } from "../utils/formatters";
 import { orderedEstimateItems, orderedStoreKeysFromItems } from "../utils/estimateOrdering";
-import { exportEstimateToExcel } from "../utils/exportHelpers";
+import { exportEstimateToExcel, type XlSection } from "../utils/exportHelpers";
 import type { Brand, Client, Estimate, EstimateItem, Product, Store } from "../types";
 
 interface EstimatePreviewProps {
@@ -25,6 +25,39 @@ const SERVICE_LINE_TYPES = new Set(["packing", "installation", "transport"]);
 
 const isServiceItem = (item: EstimateItem) =>
   SERVICE_LINE_TYPES.has(String(item.lineType || "").toLowerCase());
+
+/** Build pre-resolved store sections for Excel export — mirrors PDF's renderEstimateContent section logic. */
+function buildXlSections(estimate: any, items: EstimateItem[], stores: Store[]): XlSection[] {
+  const isSvc = (it: any) => SERVICE_LINE_TYPES.has(String(it.lineType || "").toLowerCase());
+  const sorted = orderedEstimateItems(items);
+  const sg = (estimate.storeGrouping as Record<string, any>) || {};
+  const hasGrouping = Object.keys(sg).length > 0;
+
+  if (hasGrouping) {
+    return orderedStoreKeysFromItems(sorted, sg)
+      .map(sidKey => {
+        const tStore = stores.find(s => s.id === Number(sidKey));
+        const gd = sg[sidKey] || [];
+        const sls: (number | string)[] = Array.isArray(gd) ? gd : (gd.itemSls || []);
+        const storeItems = sorted.filter(it => sls.includes(it.sl || 0));
+        return {
+          storeName: tStore?.name || (!Array.isArray(gd) && gd.storeName) || `Store ${sidKey}`,
+          storeCode: tStore?.storeCode || (storeItems as any[]).find((it: any) => it.storeCode)?.storeCode || "",
+          materialItems: storeItems.filter(it => !isSvc(it)),
+          serviceItems: storeItems.filter(it => isSvc(it)),
+        };
+      })
+      .filter(s => s.materialItems.length + s.serviceItems.length > 0);
+  } else {
+    const tStore = stores.find(s => s.id === estimate.storeId);
+    return [{
+      storeName: tStore?.name || estimate.title || "Site",
+      storeCode: tStore?.storeCode || (sorted as any[]).find((it: any) => it.storeCode)?.storeCode || "",
+      materialItems: sorted.filter(it => !isSvc(it)),
+      serviceItems: sorted.filter(it => isSvc(it)),
+    }];
+  }
+}
 
 const serviceRateValue = (item: EstimateItem) => Number(item.rate) || 0;
 
@@ -1658,7 +1691,8 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
                     onClick={async () => {
                       if (isBoltMode) {
                         const client = clients.find((c: any) => c.id === selectedEstimate.clientId);
-                        await exportEstimateToExcel(selectedEstimate, previewItems, client?.name, sellerProfile, stores);
+                        const xlSecs = buildXlSections(selectedEstimate, previewItems, stores);
+                        await exportEstimateToExcel(selectedEstimate, xlSecs, client?.name, sellerProfile);
                       } else {
                         window.open(`/api/operations/estimates/${selectedEstimate.id}/export-excel`, "_blank");
                       }
@@ -1694,7 +1728,8 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
 	                      onClick={async () => {
 	                        if (isBoltMode) {
 	                          const client = clients.find((c: any) => c.id === selectedEstimate.clientId);
-	                          await exportEstimateToExcel(selectedEstimate, previewItems, client?.name, sellerProfile, stores);
+	                          const xlSecs = buildXlSections(selectedEstimate, previewItems, stores);
+                        await exportEstimateToExcel(selectedEstimate, xlSecs, client?.name, sellerProfile);
 	                        } else {
 	                          window.open(`/api/operations/estimates/${selectedEstimate.id}/export-excel`, "_blank");
 	                        }
