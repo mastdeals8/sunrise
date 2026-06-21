@@ -1075,14 +1075,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
     logoRef?: string | null,
   ) => {
     const cleanLogoRef = String(logoRef || "").trim();
+    if (!cleanLogoRef) return buffer;
+
+    // Resolve logo file path: support legacy /uploads/company-assets/ and static /brand/ paths
+    let logoFilePath: string | null = null;
     const companyAssetPrefix = "/uploads/company-assets/";
-    if (!cleanLogoRef.startsWith(companyAssetPrefix)) return buffer;
-    const logoFilename = path.basename(cleanLogoRef);
-    if (!logoFilename || cleanLogoRef !== `${companyAssetPrefix}${logoFilename}`) return buffer;
-    const logoPath = path.join(companyAssetDir, logoFilename);
-    const normalizedDir = path.resolve(companyAssetDir);
-    const normalizedLogo = path.resolve(logoPath);
-    if (!normalizedLogo.startsWith(normalizedDir + path.sep) || !fs.existsSync(normalizedLogo)) return buffer;
+    const brandPrefix = "/brand/";
+    if (cleanLogoRef.startsWith(companyAssetPrefix)) {
+      const logoFilename = path.basename(cleanLogoRef);
+      if (!logoFilename || cleanLogoRef !== `${companyAssetPrefix}${logoFilename}`) return buffer;
+      const candidate = path.join(companyAssetDir, logoFilename);
+      const normalizedDir = path.resolve(companyAssetDir);
+      const normalizedCandidate = path.resolve(candidate);
+      if (!normalizedCandidate.startsWith(normalizedDir + path.sep) || !fs.existsSync(normalizedCandidate)) return buffer;
+      logoFilePath = normalizedCandidate;
+    } else if (cleanLogoRef.startsWith(brandPrefix)) {
+      const logoFilename = path.basename(cleanLogoRef);
+      if (!logoFilename) return buffer;
+      const candidate = path.join(process.cwd(), "client", "public", "brand", logoFilename);
+      if (!fs.existsSync(candidate)) return buffer;
+      logoFilePath = candidate;
+    } else {
+      return buffer;
+    }
+    const logoPath = logoFilePath;
 
     try {
       const fromCol = anchor.fromCol ?? 12;
