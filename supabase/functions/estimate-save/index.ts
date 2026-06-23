@@ -95,20 +95,19 @@ Deno.serve(async (req: Request) => {
   const db = adminClient();
   const url = new URL(req.url);
 
-  // Determine if this is a PATCH (update) or POST (create)
-  // URL pattern: /estimate-save  or  /estimate-save/123
-  // Frontend may also pass _estimateId in the body as a fallback (avoids Supabase gateway 405).
+  // ID resolution: path segment → query param ?id= → body _estimateId
   const pathParts = url.pathname.replace(/^\/functions\/v1\/estimate-save/, "").split("/").filter(Boolean);
   const pathId = pathParts[0] ? parseInt(pathParts[0], 10) : null;
+  const queryId = url.searchParams.get("id") ? parseInt(url.searchParams.get("id")!, 10) : null;
 
   try {
     if (req.method === "PATCH") {
       // ---- UPDATE PATH ----
       const rawBody = await req.json();
-      // Body-based ID fallback: frontend sends _estimateId when not using path segments.
+      // Body-based ID: legacy fallback kept for backwards compatibility.
       const bodyId = rawBody._estimateId ? parseInt(String(rawBody._estimateId), 10) : null;
       delete rawBody._estimateId;
-      const estimateId = pathId ?? bodyId;
+      const estimateId = pathId ?? queryId ?? bodyId;
       if (!estimateId) return errorResponse("Missing estimate id", 400);
 
       // Normalize camelCase keys to snake_case (e.g. poNumber → po_number)

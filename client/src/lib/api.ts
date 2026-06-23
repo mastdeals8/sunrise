@@ -804,10 +804,11 @@ export async function updateEstimate(
     if (!res.ok) throw new Error((await res.json()).message ?? "Failed to update estimate");
     return res.json();
   }
-  // Pass id in body rather than URL path — avoids Supabase gateway 405 on path-segment routing.
+  // Pass id as query param — most reliable way through Supabase gateway.
   const res = await edgeFetch("estimate-save", token, {
     method: "PATCH",
-    body: JSON.stringify({ ...payload, _estimateId: id }),
+    pathSuffix: `?id=${id}`,
+    body: JSON.stringify(payload),
   });
   if (!res.ok) {
     const errBody = await res.json().catch(() => ({}));
