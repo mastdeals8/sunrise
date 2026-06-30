@@ -1406,7 +1406,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!normalizedFile.startsWith(normalizedDir + path.sep) || !fs.existsSync(normalizedFile)) {
         return res.status(404).json({ message: "File not found" });
       }
-      res.setHeader("Cache-Control", "private, no-store");
+      // Company assets (logo, stamp) are static per-session — cache in the
+      // browser for 24 h, revalidate after that. `private` prevents shared CDN
+      // caching while still allowing the user's browser to cache across pages.
+      res.setHeader("Cache-Control", "private, max-age=86400, stale-while-revalidate=86400");
       res.sendFile(normalizedFile);
     } catch (err: any) {
       res.status(500).json({ message: err.message });

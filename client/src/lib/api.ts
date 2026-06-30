@@ -9,6 +9,28 @@
  */
 import { supabase, isBoltMode } from "./supabase";
 
+// ─── Signed URL session cache ─────────────────────────────────────────────────
+// Signed URLs for the private execution-documents bucket are valid for 2 hours
+// (7200 s). Regenerating them on every fetchExecutionDocuments call produces a
+// unique URL each time, which the CDN cannot cache → non-cached egress.
+// Cache the signed URL per storage path and reuse it until 60 minutes before
+// expiry (i.e. refresh at the 60-minute mark, giving a 60-minute reuse window).
+interface SignedUrlEntry { url: string; expiresAt: number }
+const _signedUrlCache = new Map<string, SignedUrlEntry>();
+const SIGNED_URL_TTL_S = 7200;
+const SIGNED_URL_REFRESH_BEFORE_S = 3600; // refresh when < 60 min remain
+
+function _cachedSignedUrl(path: string): string | null {
+  const entry = _signedUrlCache.get(path);
+  if (!entry) return null;
+  const refreshAt = entry.expiresAt - SIGNED_URL_REFRESH_BEFORE_S * 1000;
+  return Date.now() < refreshAt ? entry.url : null;
+}
+
+function _cacheSignedUrl(path: string, url: string): void {
+  _signedUrlCache.set(path, { url, expiresAt: Date.now() + SIGNED_URL_TTL_S * 1000 });
+}
+
 // ─── Bolt safety interceptor ─────────────────────────────────────────────────
 // In Bolt mode, any stray /api/* fetch call would silently receive index.html
 // and then fail with "Unexpected token '<'" when parsed as JSON.
@@ -333,17 +355,33 @@ export async function fetchExecutionDocuments(
   });
   if (!docs.length) return docs;
 
-  // Replace raw storage paths with 2-hour signed URLs so they can render in <img>/<a>
+  // Replace raw storage paths with 2-hour signed URLs so they can render in <img>/<a>.
+  // Reuse cached signed URLs (valid for up to 60 min past generation) to avoid
+  // generating unique URLs on every call — unique URLs bypass CDN cache.
   const paths = docs.map((d: any) => d.filePath).filter(Boolean) as string[];
   if (paths.length === 0) return docs;
   try {
-    const { data: signed } = await supabase.storage
-      .from("execution-documents")
-      .createSignedUrls(paths, 7200);
-    if (signed) {
-      const urlMap = new Map(signed.map((s: any) => [s.path, s.signedUrl]));
-      return docs.map((d: any) => ({ ...d, filePath: urlMap.get(d.filePath) ?? d.filePath }));
+    const stale: string[] = [];
+    const hitMap = new Map<string, string>();
+    for (const p of paths) {
+      const cached = _cachedSignedUrl(p);
+      if (cached) hitMap.set(p, cached);
+      else stale.push(p);
     }
+    if (stale.length > 0) {
+      const { data: signed } = await supabase.storage
+        .from("execution-documents")
+        .createSignedUrls(stale, SIGNED_URL_TTL_S);
+      if (signed) {
+        for (const s of signed) {
+          if (s.signedUrl) {
+            _cacheSignedUrl(s.path, s.signedUrl);
+            hitMap.set(s.path, s.signedUrl);
+          }
+        }
+      }
+    }
+    return docs.map((d: any) => ({ ...d, filePath: hitMap.get(d.filePath) ?? d.filePath }));
   } catch { /* return raw paths as fallback */ }
   return docs;
 }
@@ -1048,10 +1086,13 @@ export async function uploadExecutionDocument(
 
 /** Generate a 2-hour signed URL for a private execution-documents storage path. */
 export async function getExecutionDocumentDisplayUrl(storagePath: string): Promise<string> {
+  const cached = _cachedSignedUrl(storagePath);
+  if (cached) return cached;
   const { data, error } = await supabase.storage
     .from("execution-documents")
-    .createSignedUrl(storagePath, 7200);
+    .createSignedUrl(storagePath, SIGNED_URL_TTL_S);
   if (error) throw new Error(error.message);
+  _cacheSignedUrl(storagePath, data!.signedUrl);
   return data!.signedUrl;
 }
 
