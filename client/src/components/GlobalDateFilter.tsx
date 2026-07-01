@@ -7,6 +7,7 @@ const presets: Array<{ value: GlobalDatePreset; label: string }> = [
   { value: "week", label: "This Week" },
   { value: "month", label: "This Month" },
   { value: "quarter", label: "This Quarter" },
+  { value: "fy", label: "This FY" },
   { value: "custom", label: "Custom Range" },
 ];
 
@@ -63,7 +64,7 @@ export const GlobalDateFilter: React.FC = () => {
       <button
         type="button"
         onClick={reset}
-        title="Reset to This Month"
+        title="Reset to This FY"
         className="inline-flex h-7 items-center gap-1 rounded border border-orange-200 bg-white px-2 text-xs font-bold text-orange-700 hover:bg-orange-100"
       >
         <RotateCcw className="w-3.5 h-3.5" />

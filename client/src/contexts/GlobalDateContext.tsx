@@ -1,6 +1,6 @@
 import React from "react";
 
-export type GlobalDatePreset = "today" | "week" | "month" | "quarter" | "custom";
+export type GlobalDatePreset = "today" | "week" | "month" | "quarter" | "fy" | "custom";
 
 export type DateRange = {
   start: string;
@@ -62,6 +62,14 @@ export const resolveDateRange = (preset: GlobalDatePreset, customRange?: DateRan
     return { start: toYmd(start), end: toYmd(end) };
   }
 
+  if (preset === "fy") {
+    // Indian financial year: April 1 – March 31
+    const year = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+    start.setFullYear(year, 3, 1);   // April 1
+    end.setFullYear(year + 1, 2, 31); // March 31
+    return { start: toYmd(start), end: toYmd(end) };
+  }
+
   if (preset === "custom" && customRange?.start && customRange?.end) {
     return customRange.start <= customRange.end
       ? customRange
@@ -90,6 +98,7 @@ const buildLabel = (preset: GlobalDatePreset, range: DateRange) => {
     week: "This Week",
     month: "This Month",
     quarter: "This Quarter",
+    fy: "This FY",
     custom: "Custom Range",
   };
   return `${presetLabel[preset]} · ${formatDisplay(range.start)} - ${formatDisplay(range.end)}`;
@@ -99,14 +108,14 @@ const GlobalDateContext = React.createContext<GlobalDateContextValue | null>(nul
 
 export const GlobalDateProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [state, setState] = React.useState<StoredGlobalDate>(() => {
-    if (typeof window === "undefined") return { preset: "month" };
+    if (typeof window === "undefined") return { preset: "fy" };
     try {
       const parsed = JSON.parse(window.localStorage.getItem(STORAGE_KEY) || "");
       if (parsed?.preset) return parsed;
     } catch {
       // Ignore corrupted preferences.
     }
-    return { preset: "month" };
+    return { preset: "fy" };
   });
 
   const range = React.useMemo(() => resolveDateRange(state.preset, state.customRange), [state]);
@@ -122,7 +131,7 @@ export const GlobalDateProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     label,
     setPreset: (preset) => setState(prev => ({ ...prev, preset })),
     setCustomRange: (customRange) => setState({ preset: "custom", customRange }),
-    reset: () => setState({ preset: "month" }),
+    reset: () => setState({ preset: "fy" }),
     isInRange: (date) => isDateInRange(date, range),
   }), [label, range, state.preset]);
 
