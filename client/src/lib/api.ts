@@ -312,11 +312,12 @@ export async function fetchEstimateItems(token: string | null, estimateId: numbe
 export async function fetchDeliveryChallans(token: string | null) {
   if (!isBoltMode) {
     const res = await apiFetch("/api/operations/delivery-challans", token);
-    return res.ok ? res.json() : [];
+    return res.ok ? await attachPhotoSignedUrls(await res.json()) : [];
   }
-  return sbSelect("delivery_challans", (q) =>
+  const rows = await sbSelect<any>("delivery_challans", (q) =>
     q.select("*").order("created_at", { ascending: false })
   );
+  return attachPhotoSignedUrls(rows);
 }
 
 export async function fetchDeliveryChallansForEstimate(
@@ -328,14 +329,15 @@ export async function fetchDeliveryChallansForEstimate(
       `/api/operations/delivery-challans/estimate/${estimateId}`,
       token
     );
-    return res.ok ? res.json() : [];
+    return res.ok ? await attachPhotoSignedUrls(await res.json()) : [];
   }
-  return sbSelect("delivery_challans", (q) =>
+  const rows = await sbSelect<any>("delivery_challans", (q) =>
     q
       .select("*")
       .eq("estimate_id", estimateId)
       .order("created_at", { ascending: false })
   );
+  return attachPhotoSignedUrls(rows);
 }
 
 export async function fetchExecutionDocuments(
@@ -768,6 +770,44 @@ export async function registerExecutionDocument(
 }
 
 /**
+ * Best-effort delete of a proof photo: removes the storage object and marks
+ * matching execution_documents row(s) as deleted. Both steps are optional —
+ * either can fail without blocking the UI (photo is already removed from
+ * dcPhotos state before this runs). Legacy rows whose stored `path` is a full
+ * URL rather than a storage key are skipped for the storage step.
+ */
+export async function deleteWccPhotoArtifacts(
+  token: string | null,
+  photoPath: string | null | undefined,
+  bucket: string = "execution-documents",
+): Promise<void> {
+  if (!photoPath || typeof photoPath !== "string") return;
+  const isUrl = /^https?:\/\//i.test(photoPath);
+
+  // 1. Storage object — skip legacy URL-shaped paths (no reliable key extraction).
+  if (!isUrl) {
+    try { await supabase.storage.from(bucket).remove([photoPath]); }
+    catch (e) { console.warn("[deleteWccPhotoArtifacts] storage remove failed", e); }
+  }
+
+  // 2. execution_documents audit row (Bolt: direct update; Express: PATCH endpoint)
+  try {
+    if (isBoltMode) {
+      await supabase
+        .from("execution_documents")
+        .update({ status: "deleted" })
+        .eq("file_path", photoPath)
+        .eq("status", "active");
+    } else {
+      await apiFetch(`/api/operations/execution-documents/by-path`, token, {
+        method: "PATCH",
+        body: JSON.stringify({ filePath: photoPath, status: "deleted" }),
+      }).catch(() => {});
+    }
+  } catch (e) { console.warn("[deleteWccPhotoArtifacts] audit update failed", e); }
+}
+
+/**
  * Save a company asset (logo / stamp) path to app_settings.
  * Bolt mode: direct Supabase upsert. Express mode: embedded in PUT /api/company-settings.
  */
@@ -926,21 +966,93 @@ export async function createInvoice(
 
 // ─── Delivery Challans ────────────────────────────────────────────────────────
 
+/**
+ * WCC/DC photos live inside metadata.photos[] as JSONB. Persist ONLY the raw
+ * storage path — never the (short-lived) signed URL. `signedUrl` is a transient
+ * field attached on read; strip it before every write. Also strips any legacy
+ * `_signedUrl` fields from older builds.
+ */
+function stripPhotoTransients(payload: Record<string, unknown>): Record<string, unknown> {
+  const meta = (payload as any)?.metadata;
+  if (!meta || !Array.isArray(meta.photos) || meta.photos.length === 0) return payload;
+  const cleanPhotos = meta.photos.map((p: any) => {
+    if (!p || typeof p !== "object") return p;
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { signedUrl, _signedUrl, ...rest } = p;
+    return rest;
+  });
+  return { ...payload, metadata: { ...meta, photos: cleanPhotos } };
+}
+
+/**
+ * Batch-sign every storage path found in row.metadata.photos[] across all
+ * delivery_challans rows. Attaches a transient `signedUrl` (2h TTL, cached).
+ * Legacy rows whose `path` is already a full URL are passed through unchanged.
+ */
+async function attachPhotoSignedUrls<T extends { metadata?: any }>(rows: T[]): Promise<T[]> {
+  if (!rows.length) return rows;
+  const paths = new Set<string>();
+  for (const row of rows) {
+    const photos = row.metadata?.photos;
+    if (!Array.isArray(photos)) continue;
+    for (const p of photos) {
+      if (p?.path && typeof p.path === "string" && !/^https?:\/\//i.test(p.path)) {
+        paths.add(p.path);
+      }
+    }
+  }
+  if (paths.size === 0) return rows;
+  const hitMap = new Map<string, string>();
+  const stale: string[] = [];
+  for (const p of paths) {
+    const cached = _cachedSignedUrl(p);
+    if (cached) hitMap.set(p, cached);
+    else stale.push(p);
+  }
+  if (stale.length > 0) {
+    try {
+      const { data: signed } = await supabase.storage
+        .from("execution-documents")
+        .createSignedUrls(stale, SIGNED_URL_TTL_S);
+      if (signed) {
+        for (const s of signed) {
+          if (s.signedUrl) {
+            _cacheSignedUrl(s.path, s.signedUrl);
+            hitMap.set(s.path, s.signedUrl);
+          }
+        }
+      }
+    } catch { /* fall through — photos will render as broken links, not blank */ }
+  }
+  return rows.map((row) => {
+    const photos = row.metadata?.photos;
+    if (!Array.isArray(photos) || photos.length === 0) return row;
+    return {
+      ...row,
+      metadata: {
+        ...row.metadata,
+        photos: photos.map((p: any) => (p?.path && hitMap.has(p.path) ? { ...p, signedUrl: hitMap.get(p.path) } : p)),
+      },
+    };
+  });
+}
+
 export async function createDeliveryChallan(
   token: string | null,
   payload: Record<string, unknown>
 ): Promise<any> {
+  const cleaned = stripPhotoTransients(payload);
   if (!isBoltMode) {
     const res = await apiFetch("/api/operations/delivery-challans", token, {
       method: "POST",
-      body: JSON.stringify(payload),
+      body: JSON.stringify(cleaned),
     });
     if (!res.ok) throw new Error((await res.json()).message ?? "Failed to create delivery challan");
     return res.json();
   }
   const res = await edgeFetch("dc-save", token, {
     method: "POST",
-    body: JSON.stringify(payload),
+    body: JSON.stringify(cleaned),
   });
   if (!res.ok) throw new Error((await res.json()).message ?? "Failed to create delivery challan");
   return res.json();
@@ -951,10 +1063,11 @@ export async function updateDeliveryChallan(
   id: number,
   payload: Record<string, unknown>
 ): Promise<any> {
+  const cleaned = stripPhotoTransients(payload);
   if (!isBoltMode) {
     const res = await apiFetch(`/api/operations/delivery-challans/${id}`, token, {
       method: "PATCH",
-      body: JSON.stringify(payload),
+      body: JSON.stringify(cleaned),
     });
     if (!res.ok) throw new Error((await res.json()).message ?? "Failed to update delivery challan");
     return res.json();
@@ -962,7 +1075,7 @@ export async function updateDeliveryChallan(
   const res = await edgeFetch("dc-save", token, {
     method: "PATCH",
     pathSuffix: `/${id}`,
-    body: JSON.stringify(payload),
+    body: JSON.stringify(cleaned),
   });
   if (!res.ok) throw new Error((await res.json()).message ?? "Failed to update delivery challan");
   return res.json();

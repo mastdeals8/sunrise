@@ -157,7 +157,7 @@ export interface DeliveryChallan {
 }
 
 export interface WccPhoto {
-  path: string;
+  path: string;                 // raw Supabase Storage object path (e.g. "estimate-142/BLR-FORUM/…jpg")
   widthPct: number;             // legacy — kept for backwards compat
   objectFit: 'cover' | 'contain';
   objectPosition: string;       // legacy — kept for backwards compat
@@ -169,6 +169,9 @@ export interface WccPhoto {
   wPct?: number;   // 5..100 — width within frame
   hPct?: number;   // 5..100 — height within frame
   z?: number;      // stacking order
+  // Transient — populated on read (fetchDeliveryChallans*) with a 2h signed URL
+  // for the storage `path`. NEVER persisted; api.ts strips this before insert/update.
+  signedUrl?: string;
 }
 
 export interface MaterialCodeRow {

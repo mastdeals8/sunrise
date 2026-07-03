@@ -46,7 +46,7 @@ import ProjectWorkspace from "./components/ProjectWorkspace";
 import WccDcEditor from "./components/WccDcEditor";
 import { useOperationsData, type Invoice } from "./hooks/useOperationsData";
 import { isBoltMode, supabase } from "../../lib/supabase";
-import { createEstimate, updateEstimate, createDeliveryChallan, updateDeliveryChallan, fetchEstimateItems, fetchDeliveryChallansForEstimate, fetchBillingProfiles as apiFetchBillingProfiles, fetchCompanySettings, createInvoice, createPayment, fetchClientLedger, masterDataSave, uploadToStorage, registerExecutionDocument, deleteExecutionDocument } from "../../lib/api";
+import { createEstimate, updateEstimate, createDeliveryChallan, updateDeliveryChallan, fetchEstimateItems, fetchDeliveryChallansForEstimate, fetchBillingProfiles as apiFetchBillingProfiles, fetchCompanySettings, createInvoice, createPayment, fetchClientLedger, masterDataSave, uploadToStorage, registerExecutionDocument, deleteExecutionDocument, deleteWccPhotoArtifacts } from "../../lib/api";
 import { useEstimateBuilder } from "./hooks/useEstimateBuilder";
 import { useInvoiceWorkflow } from "./hooks/useInvoiceWorkflow";
 import { useWccDcEditor } from "./hooks/useWccDcEditor";
@@ -719,6 +719,8 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     setEditingDcId,
     wccPrintMode,
     setWccPrintMode,
+    isWccDirty,
+    markWccPristine,
   } = useWccDcEditor();
 
   useEffect(() => {
@@ -2413,6 +2415,30 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
       const startCount = dcPhotos.length;
       const uploaded: WccPhoto[] = [];
 
+      // Read natural aspect ratio from a file (fire-and-forget-safe) so newly
+      // dropped photos land on the canvas at their real proportion instead of
+      // a hard-coded 46×46 square. Falls back to 1:1 if decode fails.
+      const readAspect = async (file: File): Promise<number> => {
+        try {
+          const url = URL.createObjectURL(file);
+          const img = new Image();
+          img.src = url;
+          await img.decode();
+          const a = img.naturalWidth / img.naturalHeight;
+          URL.revokeObjectURL(url);
+          return Number.isFinite(a) && a > 0 ? a : 1;
+        } catch { return 1; }
+      };
+      // Pick w/h to match a target width while respecting the natural aspect ratio.
+      const sizeFromAspect = (aspect: number): { w: number; h: number } => {
+        const targetW = 46;
+        let w = targetW;
+        let h = targetW / aspect;
+        if (h > 60) { h = 60; w = h * aspect; }
+        if (w > 60) { w = 60; h = w / aspect; }
+        return { w, h };
+      };
+
       if (isBoltMode) {
         const eid = (selectedEstimate?.id) || (editingDcId ? challans.find(c => c.id === editingDcId)?.estimateId : null) || (selectedDcForPreview?.estimateId) || 0;
         const sc = selectedDcForPreview
@@ -2421,22 +2447,28 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
         for (let i = 0; i < arr.length; i++) {
           const safeName = arr[i].name.replace(/[^a-zA-Z0-9._-]/g, "_");
           const storagePath = `estimate-${eid}/${sc}/${Date.now()}-${safeName}`;
+          const aspect = await readAspect(arr[i]);
+          const { w, h } = sizeFromAspect(aspect);
           const { storagePath: saved, displayUrl } = await uploadToStorage("execution-documents", storagePath, arr[i]);
           // Tile new photos in a soft grid so they don't all stack on top of each other.
           const tileIndex = startCount + i;
           const cols = 2;
           const col = tileIndex % cols;
           const row = Math.floor(tileIndex / cols);
+          // Persist the raw storage path — never the signed URL (expires in 1h).
+          // displayUrl is kept only as a transient signedUrl so the just-uploaded
+          // image renders immediately without a round-trip to createSignedUrls.
           uploaded.push({
-            path: displayUrl,
+            path: saved,
+            signedUrl: displayUrl,
             widthPct: 50,
             objectFit: "cover",
             objectPosition: "center center",
-            caption: arr[i].name.replace(/\.[a-z0-9]+$/i, ""),
+            caption: "",
             xPct: 2 + col * 49,
             yPct: 2 + row * 49,
-            wPct: 46,
-            hPct: 46,
+            wPct: w,
+            hPct: h,
             z: tileIndex + 1,
           });
           if (eid) {
@@ -2463,6 +2495,8 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
           });
           if (!res.ok) continue;
           const data = await res.json();
+          const aspect = await readAspect(arr[i]);
+          const { w, h } = sizeFromAspect(aspect);
           // Tile new photos in a soft grid so they don't all stack on top of each other.
           const tileIndex = startCount + i;
           const cols = 2;
@@ -2473,11 +2507,11 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
             widthPct: 50,
             objectFit: "cover",
             objectPosition: "center center",
-            caption: arr[i].name.replace(/\.[a-z0-9]+$/i, ""),
+            caption: "",
             xPct: 2 + col * 49,
             yPct: 2 + row * 49,
-            wPct: 46,
-            hPct: 46,
+            wPct: w,
+            hPct: h,
             z: tileIndex + 1,
           });
         }
@@ -2613,14 +2647,17 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     if (!file.type.startsWith("image/")) return;
     setUploadingDocType("wcc_proof_replace");
     try {
+      // filePath = raw storage path (persisted); freshSignedUrl = transient (renders now).
       let filePath: string;
+      let freshSignedUrl: string | undefined;
       if (isBoltMode) {
         const eid = (selectedEstimate?.id) || (editingDcId ? challans.find(c => c.id === editingDcId)?.estimateId : null) || 0;
         const sc = selectedDcForPreview ? String((selectedDcForPreview as any).metadata?.storeCode || (selectedDcForPreview as any).storeCode || "wcc") : "wcc";
         const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
         const storagePath = `estimate-${eid}/${sc}/${Date.now()}-${safeName}`;
-        const { displayUrl } = await uploadToStorage("execution-documents", storagePath, file);
-        filePath = displayUrl;
+        const { storagePath: saved, displayUrl } = await uploadToStorage("execution-documents", storagePath, file);
+        filePath = saved;
+        freshSignedUrl = displayUrl;
       } else {
         const fd = new FormData();
         fd.append("file", file);
@@ -2639,7 +2676,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
           widthPct: 50,
           objectFit: "cover",
           objectPosition: "center center",
-          caption: file.name.replace(/\.[a-z0-9]+$/i, ""),
+          caption: "",
           xPct: 2,
           yPct: 2,
           wPct: 46,
@@ -2647,7 +2684,9 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
           z: photoIndex + 1,
         }),
         path: filePath,
-        caption: existing?.caption || file.name.replace(/\.[a-z0-9]+$/i, ""),
+        signedUrl: freshSignedUrl,
+        // Preserve any user-typed caption; do NOT auto-populate from filename.
+        caption: existing?.caption || "",
       };
       setDcPhotos((prev) => {
         const next = [...prev];
@@ -2685,6 +2724,24 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
       console.error("Bulk photo replace failed:", err);
     } finally {
       setUploadingDocType(null);
+    }
+  };
+
+  // Full-lifecycle photo removal:
+  // 1. Drop from React state so the tile disappears immediately.
+  // 2. Best-effort delete the storage object (execution-documents bucket).
+  // 3. Best-effort soft-delete matching execution_documents audit row.
+  // The metadata reference is removed by (1) — dcPhotos is what gets written on
+  // the next Save. Steps 2 and 3 are fire-and-forget: if either fails, the UI
+  // still reflects the delete, and orphan cleanup can be handled later.
+  const handleRemovePhoto = (photoIndex: number) => {
+    const target = dcPhotos[photoIndex];
+    setDcPhotos((prev) => prev.filter((_, idx) => idx !== photoIndex));
+    if (target?.path) {
+      // Fire-and-forget; do not await — user has already moved on.
+      deleteWccPhotoArtifacts(token, target.path).catch((e) =>
+        console.warn("[handleRemovePhoto] artifact cleanup failed", e),
+      );
     }
   };
 
@@ -2870,14 +2927,10 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     }
     if (!confirm(`Generate ${sids.length} WCC certificates (one per store) for ${selectedEstimate.estimateNumber}?`)) return;
 
-    // Find next sequential dc number once, then increment per loop
-    let seqBase: string | null = null;
-    if (!isBoltMode) {
-      try {
-        const r = await fetch(`/api/numbering/dc/next`, { headers: { Authorization: `Bearer ${token}` } });
-        if (r.ok) seqBase = (await r.json()).number;
-      } catch {/* fall through to timestamp scheme */}
-    }
+    // dc_number is generated server-side by the dc-save edge function
+    // (nextDocumentNumber → FY-aware SM/DC/YY-YY/NNN). Client sends "" and
+    // the server fills it in atomically per row, so bulk generation cannot
+    // collide with itself or with anything created concurrently.
 
     let createdCount = 0;
     for (let i = 0; i < sids.length; i++) {
@@ -2894,11 +2947,8 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
           width: it.width, height: it.height, rate: it.rate, totalAmount: it.totalAmount,
         }));
       if (storeItems.length === 0) continue;
-      const dcNumber = seqBase
-        ? (sids.length === 1 ? seqBase : `${seqBase}-${tStore?.storeCode || (i + 1)}`)
-        : `DC-${Date.now().toString().slice(-6)}-${i + 1}`;
       const payload = {
-        dcNumber,
+        dcNumber: "",
         estimateId: selectedEstimate.id,
         status: "draft",
         items: storeItems,
@@ -2941,9 +2991,20 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     fetchData();
   };
 
-  const handleDcSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!selectedEstimate || !dcNumberVal) return;
+  // opts.keepOpen: if true, do NOT close the modal or clear editingDcId — used
+  // by navigateWccEditor for auto-save so the editor can immediately load the
+  // next WCC in place. Also returns true/false so callers can branch on save
+  // success (auto-save should not silently swallow failures).
+  const handleDcSubmit = async (
+    e: React.FormEvent | { preventDefault?: () => void },
+    opts?: { keepOpen?: boolean },
+  ): Promise<boolean> => {
+    e?.preventDefault?.();
+    // dcNumberVal is optional on create — dc-save will auto-generate a
+    // FY-aware number when the client sends empty. It IS required on update
+    // because we don't renumber existing WCCs.
+    if (!selectedEstimate) return false;
+    if (editingDcId && !dcNumberVal) return false;
 
     try {
       const scopedStoreId = dcWccStoreScope ? Number(dcWccStoreScope) : selectedEstimate.storeId;
@@ -2952,7 +3013,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
         const existing = findExistingWccForStore(selectedEstimate.id, scopedStore?.storeCode, scopedStore?.id);
         if (existing) {
           await openDcForEdit(existing, "WCC already exists for this store");
-          return;
+          return false;
         }
       }
 
@@ -3010,13 +3071,19 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
 
       if (res.ok) {
         showSuccess(`WCC "${dcNumberVal}" ${editingDcId ? "updated" : "created"} successfully!`);
-        setShowDcModal(false);
-        setEditingDcId(null);
+        if (!opts?.keepOpen) {
+          setShowDcModal(false);
+          setEditingDcId(null);
+        }
+        markWccPristine();
         await reloadSelectedChallans();
         fetchData();
+        return true;
       }
+      return false;
     } catch (err) {
       console.error("DC creation failed:", err);
+      return false;
     }
   };
 
@@ -3097,6 +3164,9 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     setWccPrintMode("current");
     setStandaloneDcEditor(isStandaloneWorkflow);
     setShowDcModal(true);
+    // The bulk hydration above trips the dirty-tracking effect once; mark
+    // pristine so a fresh load isn't classified as an unsaved edit.
+    markWccPristine();
     if (message) showSuccess(message);
   };
 
@@ -3257,6 +3327,18 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     .sort((a, b) => String(a.metadata?.storeCode || "").localeCompare(String(b.metadata?.storeCode || "")) || (a.id || 0) - (b.id || 0));
 
   const navigateWccEditor = async (dcId: number) => {
+    // Auto-save the currently-loaded WCC (if any) before switching so pending
+    // drag/resize/upload/checklist edits are not silently discarded. If save
+    // fails we prompt the user rather than clobbering their work.
+    if (editingDcId && isWccDirty) {
+      const ok = await handleDcSubmit({ preventDefault: () => {} }, { keepOpen: true });
+      if (!ok) {
+        const proceed = window.confirm(
+          "Could not save the current WCC. Continue and discard unsaved changes?",
+        );
+        if (!proceed) return;
+      }
+    }
     const next = activeWccsForEditor.find(dc => dc.id === dcId) || challans.find(dc => dc.id === dcId);
     if (next) await openDcForEdit(next);
   };
@@ -4189,12 +4271,16 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
           handleApplyCurrentPhotosToSelectedWccs,
           handleUseCurrentWccAsTemplateForRemainingStores,
           handleBulkReplacePhoto,
+          handleRemovePhoto,
           dcPhotos,
           dcRemarks,
           setDcRemarks,
           dcDeliveredBy,
           dcReceivedBy,
           wccAuthPerson,
+          setDcDeliveredBy,
+          setDcReceivedBy,
+          setWccAuthPerson,
           selectedEstimateItems,
           showDcPreviewModal,
           selectedDcForPreview,

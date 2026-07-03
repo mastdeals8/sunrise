@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import type { DeliveryChallan, WccPhoto } from "../types";
 
 export const useWccDcEditor = () => {
@@ -24,6 +24,40 @@ export const useWccDcEditor = () => {
   const [dcWccStoreScope, setDcWccStoreScope] = useState<string>("");
   const [editingDcId, setEditingDcId] = useState<number | null>(null);
   const [wccPrintMode, setWccPrintMode] = useState<"current" | "all">("current");
+
+  // ── Dirty tracking (auto-save on store switch) ────────────────────────────
+  // `isWccDirty` becomes true when any user-editable WCC field changes after
+  // the record was loaded. `markWccPristine()` is called by openDcForEdit()
+  // (after it hydrates state) and by handleDcSubmit() on successful save.
+  // The suppressRef flag consumes the effect fire that comes from those bulk
+  // hydrations so we don't mis-classify a load as an edit.
+  const [isWccDirty, setIsWccDirty] = useState(false);
+  const suppressDirtyRef = useRef(false);
+
+  useEffect(() => {
+    if (suppressDirtyRef.current) {
+      suppressDirtyRef.current = false;
+      return;
+    }
+    setIsWccDirty(true);
+  }, [
+    dcPhotos,
+    dcRemarks,
+    wccChecklist,
+    wccShortageNotes,
+    wccAuthPerson,
+    dcNumberVal,
+    dcDeliveredBy,
+    dcReceivedBy,
+    wccVisualBrief,
+    dcWccStoreScope,
+    dcFormat,
+  ]);
+
+  const markWccPristine = () => {
+    suppressDirtyRef.current = true;
+    setIsWccDirty(false);
+  };
 
   return {
     showDcModal,
@@ -58,5 +92,7 @@ export const useWccDcEditor = () => {
     setEditingDcId,
     wccPrintMode,
     setWccPrintMode,
+    isWccDirty,
+    markWccPristine,
   };
 };

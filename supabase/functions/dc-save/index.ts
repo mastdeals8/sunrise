@@ -17,6 +17,7 @@
 
 import { corsHeaders, corsResponse, jsonResponse, errorResponse } from "../_shared/cors.ts";
 import { requireUser, adminClient } from "../_shared/auth.ts";
+import { nextDocumentNumber } from "../_shared/numbering.ts";
 
 // Mirrors routes.ts isAblblFormat() from shared/textFormat.ts
 function isAblblFormat(format: unknown): boolean {
@@ -40,6 +41,18 @@ function storeCodeForDc(value: Record<string, unknown>): string {
     meta?.storeId ||
     "",
   ).trim();
+}
+
+// Convert camelCase keys to snake_case so the client can send either format.
+// Mirrors normalizeKeys() in estimate-save. Shallow — sufficient because
+// delivery_challans rows are flat (metadata is JSONB and left untouched).
+function normalizeKeys(body: Record<string, unknown>): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(body)) {
+    const snake = k.replace(/([A-Z])/g, "_$1").toLowerCase();
+    result[snake] = v;
+  }
+  return result;
 }
 
 function preprocessDate(value: unknown, defaultTo?: () => Date): string | null {
@@ -70,7 +83,10 @@ Deno.serve(async (req: Request) => {
   try {
     if (req.method === "PATCH" && dcId) {
       // ---- UPDATE PATH ----
-      const body = await req.json() as Record<string, unknown>;
+      const rawBody = await req.json() as Record<string, unknown>;
+      // Normalize camelCase → snake_case (dcNumber, estimateId, clientFormat,
+      // storeCode, deliveredBy, receivedBy, …) before touching Supabase.
+      const body = normalizeKeys(rawBody);
 
       // Fetch existing DC
       const { data: existing, error: fetchErr } = await db
@@ -138,7 +154,11 @@ Deno.serve(async (req: Request) => {
 
     if (req.method === "POST") {
       // ---- CREATE PATH ----
-      const body = await req.json() as Record<string, unknown>;
+      const rawBody = await req.json() as Record<string, unknown>;
+      // Normalize camelCase → snake_case for every top-level field before
+      // insert (dcNumber, estimateId, clientFormat, storeCode, deliveredBy,
+      // receivedBy, remarks, etc.). Matches the estimate-save fix.
+      const body = normalizeKeys(rawBody);
 
       // deliveryDate defaults to now
       const payload: Record<string, unknown> = { ...body };
@@ -147,6 +167,16 @@ Deno.serve(async (req: Request) => {
         () => new Date(),
       );
       delete payload.deliveryDate;
+
+      // Auto-generate FY-aware dc_number when the client didn't supply one, or
+      // supplied a legacy placeholder ("DC-<timestamp>-<n>"). Uses the same
+      // _shared/numbering.ts helper as estimate-save, so numbering is
+      // authoritative on the server and consistent across single/bulk creates.
+      const rawDc = String(payload.dc_number ?? "").trim();
+      const legacyPlaceholder = /^DC-\d+(-.*)?$/i.test(rawDc);
+      if (!rawDc || legacyPlaceholder) {
+        payload.dc_number = await nextDocumentNumber(db, "dc");
+      }
 
       // Derive document type
       payload.document_type = documentTypeForDc(payload);

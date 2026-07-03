@@ -1,39 +1,56 @@
 import React from "react";
-import { Copy, ImagePlus, Plus, Printer, Trash, X } from "lucide-react";
+import { Copy, Plus, Printer, X } from "lucide-react";
 import type { Estimate, WccPhoto } from "../types";
 import { isAblblFormat } from "../../../../../shared/textFormat";
 import { companyAssetUrl } from "../../../utils/companyAssets";
 import { orderedStoreKeysFromItems } from "../utils/estimateOrdering";
 
 // ============================================================
-// WccPictureArea — free-positioning canvas for WCC proof photos.
-// Renders the picture frame on the WCC. Each photo has xPct/yPct
-// (top/left within the frame) + wPct/hPct (size). When `editable`,
-// the user can drag images to move them, grab the bottom-right
-// corner to resize, and bring an image to the front by clicking.
+// WccPictureArea — PowerPoint-style free-positioning canvas for
+// WCC proof photos. Each photo has xPct/yPct (top/left) + wPct/hPct
+// (size within frame). When `editable`:
+//   * click a photo → selection (8 handles: 4 corners + 4 edges)
+//   * drag body → move
+//   * corner handle → resize preserving aspect ratio (Shift = free)
+//   * edge handle → resize one axis
+//   * right-click → Bring to Front / Send to Back / Delete
+// Selection lives in the parent (selectedIdx / setSelectedIdx) so
+// the modal-level keyboard listener can Delete / Esc.
 // Falls back to a tile grid for legacy WCCs without xPct/yPct.
 // ============================================================
+type ResizeMode =
+  | "move"
+  | "resize-nw" | "resize-n" | "resize-ne"
+  | "resize-e" | "resize-se" | "resize-s"
+  | "resize-sw" | "resize-w";
+
 export const WccPictureArea: React.FC<{
   photos: WccPhoto[];
   editable: boolean;
   onChange?: (next: WccPhoto[]) => void;
   onFiles?: (files: File[] | FileList | null) => void;
-}> = ({ photos, editable, onChange, onFiles }) => {
+  selectedIdx?: number | null;
+  setSelectedIdx?: (idx: number | null) => void;
+  onDeletePhoto?: (idx: number) => void;
+}> = ({ photos, editable, onChange, onFiles, selectedIdx = null, setSelectedIdx, onDeletePhoto }) => {
   const frameRef = React.useRef<HTMLDivElement | null>(null);
+  const [contextMenu, setContextMenu] = React.useState<null | { x: number; y: number; idx: number }>(null);
   const dragRef = React.useRef<null | {
     idx: number;
-    mode: "move" | "resize-se" | "resize-sw" | "resize-ne" | "resize-nw";
+    mode: ResizeMode;
     startX: number;
     startY: number;
     origX: number;
     origY: number;
     origW: number;
     origH: number;
+    aspect: number;
     frameW: number;
     frameH: number;
+    shiftDown: boolean;
   }>(null);
 
-  const beginDrag = (e: React.MouseEvent, idx: number, mode: "move" | "resize-se" | "resize-sw" | "resize-ne" | "resize-nw") => {
+  const beginDrag = (e: React.MouseEvent, idx: number, mode: ResizeMode) => {
     if (!editable) return;
     e.preventDefault();
     e.stopPropagation();
@@ -41,6 +58,8 @@ export const WccPictureArea: React.FC<{
     if (!frame) return;
     const rect = frame.getBoundingClientRect();
     const p = photos[idx];
+    const origW = p.wPct ?? 30;
+    const origH = p.hPct ?? 30;
     dragRef.current = {
       idx,
       mode,
@@ -48,41 +67,64 @@ export const WccPictureArea: React.FC<{
       startY: e.clientY,
       origX: p.xPct ?? 0,
       origY: p.yPct ?? 0,
-      origW: p.wPct ?? 100,
-      origH: p.hPct ?? 100,
+      origW,
+      origH,
+      aspect: origH > 0 ? origW / origH : 1,
       frameW: rect.width,
       frameH: rect.height,
+      shiftDown: e.shiftKey,
     };
+    if (setSelectedIdx) setSelectedIdx(idx);
+    bringToFront(idx);
+
     const onMove = (ev: MouseEvent) => {
       if (!dragRef.current || !onChange) return;
-      const { idx, mode, startX, startY, origX, origY, origW, origH, frameW, frameH } = dragRef.current;
+      const { idx, mode, startX, startY, origX, origY, origW, origH, aspect, frameW, frameH } = dragRef.current;
       const dxPct = ((ev.clientX - startX) / frameW) * 100;
       const dyPct = ((ev.clientY - startY) / frameH) * 100;
+      const preserveAspect = !ev.shiftKey; // shift toggles OFF constraint
       const next = [...photos];
       const cur = { ...next[idx] };
+
       if (mode === "move") {
-        cur.xPct = clamp(origX + dxPct, 0, 100 - (cur.wPct ?? 30));
-        cur.yPct = clamp(origY + dyPct, 0, 100 - (cur.hPct ?? 30));
-      } else if (mode === "resize-se") {
-        cur.wPct = clamp(origW + dxPct, 8, 100 - origX);
-        cur.hPct = clamp(origH + dyPct, 8, 100 - origY);
-      } else if (mode === "resize-sw") {
-        const nextX = clamp(origX + dxPct, 0, origX + origW - 8);
-        cur.xPct = nextX;
-        cur.wPct = clamp(origW + (origX - nextX), 8, 100 - nextX);
-        cur.hPct = clamp(origH + dyPct, 8, 100 - origY);
-      } else if (mode === "resize-ne") {
-        const nextY = clamp(origY + dyPct, 0, origY + origH - 8);
-        cur.yPct = nextY;
-        cur.wPct = clamp(origW + dxPct, 8, 100 - origX);
-        cur.hPct = clamp(origH + (origY - nextY), 8, 100 - nextY);
+        cur.xPct = clamp(origX + dxPct, 0, 100 - origW);
+        cur.yPct = clamp(origY + dyPct, 0, 100 - origH);
       } else {
-        const nextX = clamp(origX + dxPct, 0, origX + origW - 8);
-        const nextY = clamp(origY + dyPct, 0, origY + origH - 8);
-        cur.xPct = nextX;
-        cur.yPct = nextY;
-        cur.wPct = clamp(origW + (origX - nextX), 8, 100 - nextX);
-        cur.hPct = clamp(origH + (origY - nextY), 8, 100 - nextY);
+        // Compute unconstrained new box based on which handle is dragged.
+        let nx = origX, ny = origY, nw = origW, nh = origH;
+        if (mode === "resize-e")  { nw = origW + dxPct; }
+        if (mode === "resize-w")  { nx = origX + dxPct; nw = origW - dxPct; }
+        if (mode === "resize-s")  { nh = origH + dyPct; }
+        if (mode === "resize-n")  { ny = origY + dyPct; nh = origH - dyPct; }
+        if (mode === "resize-se") { nw = origW + dxPct; nh = origH + dyPct; }
+        if (mode === "resize-sw") { nx = origX + dxPct; nw = origW - dxPct; nh = origH + dyPct; }
+        if (mode === "resize-ne") { ny = origY + dyPct; nw = origW + dxPct; nh = origH - dyPct; }
+        if (mode === "resize-nw") { nx = origX + dxPct; ny = origY + dyPct; nw = origW - dxPct; nh = origH - dyPct; }
+
+        // For corner drags, preserve aspect ratio unless Shift is held.
+        const isCorner = mode === "resize-se" || mode === "resize-sw" || mode === "resize-ne" || mode === "resize-nw";
+        if (isCorner && preserveAspect && aspect > 0) {
+          // Pick whichever axis moved further as the driver.
+          const useW = Math.abs(nw - origW) >= Math.abs(nh - origH);
+          if (useW) {
+            nh = nw / aspect;
+            if (mode === "resize-nw" || mode === "resize-ne") ny = origY + (origH - nh);
+          } else {
+            nw = nh * aspect;
+            if (mode === "resize-nw" || mode === "resize-sw") nx = origX + (origW - nw);
+          }
+        }
+
+        // Enforce mins + frame bounds.
+        const MIN = 5;
+        if (nw < MIN) { if (mode.includes("w")) nx = origX + origW - MIN; nw = MIN; }
+        if (nh < MIN) { if (mode.includes("n")) ny = origY + origH - MIN; nh = MIN; }
+        if (nx < 0) { nw += nx; nx = 0; }
+        if (ny < 0) { nh += ny; ny = 0; }
+        if (nx + nw > 100) nw = 100 - nx;
+        if (ny + nh > 100) nh = 100 - ny;
+
+        cur.xPct = nx; cur.yPct = ny; cur.wPct = nw; cur.hPct = nh;
       }
       next[idx] = cur;
       onChange(next);
@@ -96,33 +138,6 @@ export const WccPictureArea: React.FC<{
     window.addEventListener("mouseup", onUp);
   };
 
-  const recrop = (idx: number) => {
-    if (!editable || !onChange) return;
-    const next = [...photos];
-    const cur = next[idx];
-    next[idx] = {
-      ...cur,
-      objectFit: cur.objectFit === "contain" ? "cover" : "contain",
-      objectPosition: "center center",
-    };
-    onChange(next);
-  };
-
-  const handlePaste = (e: React.ClipboardEvent) => {
-    if (!editable || !onFiles) return;
-    const files: File[] = [];
-    Array.from(e.clipboardData?.items || []).forEach((item) => {
-      if (item.kind === "file" && item.type.startsWith("image/")) {
-        const file = item.getAsFile();
-        if (file) files.push(file);
-      }
-    });
-    if (files.length > 0) {
-      e.preventDefault();
-      onFiles(files);
-    }
-  };
-
   const handleDrop = (e: React.DragEvent) => {
     if (!editable || !onFiles) return;
     e.preventDefault();
@@ -130,17 +145,30 @@ export const WccPictureArea: React.FC<{
     onFiles(e.dataTransfer.files);
   };
 
-  const renderHandle = (idx: number, mode: "resize-se" | "resize-sw" | "resize-ne" | "resize-nw", style: React.CSSProperties) => (
+  const cursorFor = (mode: ResizeMode): string => {
+    switch (mode) {
+      case "resize-n": case "resize-s": return "ns-resize";
+      case "resize-e": case "resize-w": return "ew-resize";
+      case "resize-ne": case "resize-sw": return "nesw-resize";
+      case "resize-nw": case "resize-se": return "nwse-resize";
+      default: return "move";
+    }
+  };
+
+  const renderHandle = (idx: number, mode: ResizeMode, style: React.CSSProperties) => (
     <div
       onMouseDown={(e) => beginDrag(e, idx, mode)}
-      title="Drag to resize"
+      title="Drag to resize (Shift = free aspect)"
       style={{
         position: "absolute",
-        width: 14,
-        height: 14,
-        background: "#f59e0b",
-        cursor: mode === "resize-se" || mode === "resize-nw" ? "nwse-resize" : "nesw-resize",
-        border: "1px solid #fff",
+        width: 10,
+        height: 10,
+        background: "#2563eb",
+        cursor: cursorFor(mode),
+        border: "1.5px solid #fff",
+        borderRadius: 2,
+        boxShadow: "0 0 0 1px rgba(0,0,0,0.15)",
+        zIndex: 10,
         ...style,
       }}
     />
@@ -149,7 +177,15 @@ export const WccPictureArea: React.FC<{
   const bringToFront = (idx: number) => {
     if (!editable || !onChange) return;
     const maxZ = photos.reduce((m, p) => Math.max(m, p.z ?? 0), 0);
+    if ((photos[idx].z ?? 0) === maxZ) return;
     const next = photos.map((p, i) => i === idx ? { ...p, z: maxZ + 1 } : p);
+    onChange(next);
+  };
+
+  const sendToBack = (idx: number) => {
+    if (!editable || !onChange) return;
+    const minZ = photos.reduce((m, p) => Math.min(m, p.z ?? 0), 0);
+    const next = photos.map((p, i) => i === idx ? { ...p, z: minZ - 1 } : p);
     onChange(next);
   };
 
@@ -163,62 +199,112 @@ export const WccPictureArea: React.FC<{
       style={{ minHeight: "85mm", background: "#fff" }}
       onDragOver={(e) => { if (editable) e.preventDefault(); }}
       onDrop={handleDrop}
-      onPaste={handlePaste}
-      tabIndex={editable ? 0 : undefined}
+      onMouseDown={(e) => {
+        // Background click → deselect
+        if (e.target === e.currentTarget && setSelectedIdx) setSelectedIdx(null);
+        setContextMenu(null);
+      }}
     >
       {photos.length === 0 && (
-        <div className="absolute inset-0 flex items-center justify-center text-slate-400 italic text-xs">
-          No proof photo attached yet.
+        <div className="absolute inset-0 flex items-center justify-center text-slate-400 italic text-xs pointer-events-none">
+          Drop, paste (⌘/Ctrl+V), or click "Add Photos" to upload proof images.
         </div>
       )}
       {hasFreePositions
-        ? photos.map((p, idx) => (
-            <div
-              key={idx}
-              onMouseDown={(e) => { bringToFront(idx); beginDrag(e, idx, "move"); }}
-              onDoubleClick={() => recrop(idx)}
-              className="absolute group"
-              style={{
-                left: `${p.xPct ?? 0}%`,
-                top: `${p.yPct ?? 0}%`,
-                width: `${p.wPct ?? 30}%`,
-                height: `${p.hPct ?? 30}%`,
-                zIndex: p.z ?? idx,
-                cursor: editable ? "move" : "default",
-                outline: editable ? "1px dashed rgba(0,0,0,0.4)" : "none",
-                background: "#fff",
-              }}
-            >
-              <img
-                src={p.path}
-                alt={p.caption || `proof ${idx + 1}`}
-                draggable={false}
-                className="w-full h-full"
-                style={{ objectFit: p.objectFit || "cover", objectPosition: p.objectPosition || "center", pointerEvents: "none" }}
-              />
-              {editable && (
-                <>
-                  {renderHandle(idx, "resize-nw", { left: 0, top: 0 })}
-                  {renderHandle(idx, "resize-ne", { right: 0, top: 0 })}
-                  {renderHandle(idx, "resize-sw", { left: 0, bottom: 0 })}
-                  {renderHandle(idx, "resize-se", { right: 0, bottom: 0 })}
-                  {p.caption && (
-                    <div style={{ position: "absolute", left: 0, bottom: 0, right: 0, fontSize: 9, padding: "2px 4px", background: "rgba(255,255,255,0.85)" }}>{p.caption}</div>
-                  )}
-                </>
-              )}
-              {!editable && p.caption && (
-                <div style={{ position: "absolute", left: 0, bottom: 0, right: 0, fontSize: 9, padding: "2px 4px", background: "rgba(255,255,255,0.85)" }}>{p.caption}</div>
-              )}
-            </div>
-          ))
+        ? photos.map((p, idx) => {
+            const isSelected = editable && selectedIdx === idx;
+            return (
+              <div
+                key={idx}
+                onMouseDown={(e) => { if (editable && (e.target as HTMLElement).dataset.handle !== "1") beginDrag(e, idx, "move"); }}
+                onContextMenu={(e) => {
+                  if (!editable) return;
+                  e.preventDefault();
+                  const frame = frameRef.current?.getBoundingClientRect();
+                  if (setSelectedIdx) setSelectedIdx(idx);
+                  setContextMenu({ x: e.clientX - (frame?.left ?? 0), y: e.clientY - (frame?.top ?? 0), idx });
+                }}
+                className="absolute"
+                style={{
+                  left: `${p.xPct ?? 0}%`,
+                  top: `${p.yPct ?? 0}%`,
+                  width: `${p.wPct ?? 30}%`,
+                  height: `${p.hPct ?? 30}%`,
+                  zIndex: p.z ?? idx,
+                  cursor: editable ? "move" : "default",
+                  outline: isSelected ? "2px solid #2563eb" : "none",
+                  background: "#fff",
+                }}
+              >
+                <img
+                  src={p.signedUrl || p.path}
+                  alt={p.caption || `proof ${idx + 1}`}
+                  draggable={false}
+                  className="w-full h-full"
+                  style={{ objectFit: p.objectFit || "cover", objectPosition: p.objectPosition || "center", pointerEvents: "none" }}
+                />
+                {isSelected && (
+                  <>
+                    {renderHandle(idx, "resize-nw", { left: -6, top: -6 })}
+                    {renderHandle(idx, "resize-n",  { left: "calc(50% - 5px)", top: -6 })}
+                    {renderHandle(idx, "resize-ne", { right: -6, top: -6 })}
+                    {renderHandle(idx, "resize-e",  { right: -6, top: "calc(50% - 5px)" })}
+                    {renderHandle(idx, "resize-se", { right: -6, bottom: -6 })}
+                    {renderHandle(idx, "resize-s",  { left: "calc(50% - 5px)", bottom: -6 })}
+                    {renderHandle(idx, "resize-sw", { left: -6, bottom: -6 })}
+                    {renderHandle(idx, "resize-w",  { left: -6, top: "calc(50% - 5px)" })}
+                  </>
+                )}
+                {/* Caption bar rendered ONLY when user has explicitly typed one — not
+                    auto-populated from filename. Not shown on selected image so
+                    handles remain visible. Not shown in editable mode by default. */}
+                {!editable && p.caption && (
+                  <div style={{ position: "absolute", left: 0, bottom: 0, right: 0, fontSize: 9, padding: "2px 4px", background: "rgba(255,255,255,0.85)" }}>{p.caption}</div>
+                )}
+              </div>
+            );
+          })
         : (
           <div className={`grid gap-1 w-full h-full p-1 ${photos.length === 1 ? "grid-cols-1" : photos.length === 2 ? "grid-cols-2" : photos.length === 3 ? "grid-cols-3" : "grid-cols-2"}`}>
             {photos.map((p, idx) => (
-              <img key={idx} src={p.path} alt={`Visual ${idx + 1}`} className="w-full h-full" style={{ objectFit: p.objectFit || "cover", objectPosition: p.objectPosition || "center" }} />
+              <img key={idx} src={p.signedUrl || p.path} alt={`Visual ${idx + 1}`} className="w-full h-full" style={{ objectFit: p.objectFit || "cover", objectPosition: p.objectPosition || "center" }} />
             ))}
           </div>
         )}
+      {contextMenu && editable && (
+        <div
+          onMouseLeave={() => setContextMenu(null)}
+          style={{
+            position: "absolute",
+            left: contextMenu.x,
+            top: contextMenu.y,
+            zIndex: 100,
+            background: "#fff",
+            border: "1px solid #cbd5e1",
+            borderRadius: 6,
+            boxShadow: "0 8px 16px rgba(0,0,0,0.15)",
+            minWidth: 160,
+            fontSize: 11,
+            overflow: "hidden",
+          }}
+        >
+          <button
+            type="button"
+            className="w-full text-left px-3 py-1.5 hover:bg-slate-100"
+            onClick={() => { bringToFront(contextMenu.idx); setContextMenu(null); }}
+          >Bring to Front</button>
+          <button
+            type="button"
+            className="w-full text-left px-3 py-1.5 hover:bg-slate-100"
+            onClick={() => { sendToBack(contextMenu.idx); setContextMenu(null); }}
+          >Send to Back</button>
+          <button
+            type="button"
+            className="w-full text-left px-3 py-1.5 hover:bg-red-50 text-red-600 font-bold border-t border-slate-100"
+            onClick={() => { onDeletePhoto && onDeletePhoto(contextMenu.idx); setContextMenu(null); }}
+          >Delete</button>
+        </div>
+      )}
     </div>
   );
 };
@@ -263,6 +349,7 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
     handleApplyCurrentPhotosToSelectedWccs,
     handleUseCurrentWccAsTemplateForRemainingStores,
     handleBulkReplacePhoto,
+    handleRemovePhoto,
     dcPhotos,
     dcRemarks,
     setDcRemarks,
@@ -283,8 +370,95 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
     wccPrintMode = "current",
     setWccPrintMode,
     token,
-    sellerProfile = {}
+    sellerProfile = {},
+    setDcDeliveredBy,
+    setDcReceivedBy,
+    setWccAuthPerson,
   } = props;
+
+  // ── Editor-wide selection (single-photo) ──────────────────────────────
+  // Lives at the modal level so keyboard shortcuts (Delete / Esc) can act on it.
+  const [selectedPhotoIdx, setSelectedPhotoIdx] = React.useState<number | null>(null);
+  React.useEffect(() => {
+    // Reset selection when the list identity changes (e.g. store switch, load).
+    setSelectedPhotoIdx(null);
+  }, [editingDcId]);
+  React.useEffect(() => {
+    // Clamp selection if the array shrinks past it.
+    if (selectedPhotoIdx !== null && selectedPhotoIdx >= (dcPhotos?.length || 0)) {
+      setSelectedPhotoIdx(null);
+    }
+  }, [dcPhotos, selectedPhotoIdx]);
+
+  // ── Modal-level keyboard + paste listeners ────────────────────────────
+  // Attached to `document` while showDcModal is open so shortcuts work from
+  // anywhere inside the modal (including when focus is on the left panel or
+  // no element is focused at all).
+  React.useEffect(() => {
+    if (!showDcModal) return;
+    const isEditableTarget = (t: EventTarget | null): boolean => {
+      const el = t as HTMLElement | null;
+      if (!el) return false;
+      const tag = el.tagName;
+      return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el.isContentEditable;
+    };
+    const onKey = (e: KeyboardEvent) => {
+      // Ctrl/Cmd+S = save (fires even inside inputs so the user never loses work)
+      if ((e.metaKey || e.ctrlKey) && (e.key === "s" || e.key === "S")) {
+        e.preventDefault();
+        handleDcSubmit({ preventDefault: () => {} });
+        return;
+      }
+      if (isEditableTarget(e.target)) return;
+      if (e.key === "ArrowRight") {
+        const cur = activeWccsForEditor.findIndex((dc: any) => dc.id === editingDcId);
+        if (cur >= 0 && cur < activeWccsForEditor.length - 1 && navigateWccEditor) {
+          e.preventDefault();
+          navigateWccEditor(activeWccsForEditor[cur + 1].id);
+        }
+      } else if (e.key === "ArrowLeft") {
+        const cur = activeWccsForEditor.findIndex((dc: any) => dc.id === editingDcId);
+        if (cur > 0 && navigateWccEditor) {
+          e.preventDefault();
+          navigateWccEditor(activeWccsForEditor[cur - 1].id);
+        }
+      } else if (e.key === "Delete" || e.key === "Backspace") {
+        if (selectedPhotoIdx !== null) {
+          e.preventDefault();
+          handleRemovePhoto && handleRemovePhoto(selectedPhotoIdx);
+          setSelectedPhotoIdx(null);
+        }
+      } else if (e.key === "Escape") {
+        if (selectedPhotoIdx !== null) {
+          e.preventDefault();
+          setSelectedPhotoIdx(null);
+        }
+        // Otherwise fall through — the backdrop click handler still owns close.
+      }
+    };
+    const onPaste = (e: ClipboardEvent) => {
+      const items = e.clipboardData?.items || [];
+      const files: File[] = [];
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i];
+        if (it.kind === "file" && it.type.startsWith("image/")) {
+          const f = it.getAsFile();
+          if (f) files.push(f);
+        }
+      }
+      if (files.length > 0) {
+        e.preventDefault();
+        handleMultiPhotoUpload && handleMultiPhotoUpload(files);
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    document.addEventListener("paste", onPaste);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("paste", onPaste);
+    };
+  }, [showDcModal, activeWccsForEditor, editingDcId, selectedPhotoIdx, navigateWccEditor, handleRemovePhoto, handleMultiPhotoUpload, handleDcSubmit]);
+
   const orderedSelectedStoreKeys = React.useMemo(
     () => orderedStoreKeysFromItems(selectedEstimateItems || [], selectedEstimate?.storeGrouping as Record<string, any>),
     [selectedEstimate, selectedEstimateItems],
@@ -506,6 +680,9 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
                   editable={!!metadata?.__editable}
                   onChange={(next) => { if (metadata?.__editable) setDcPhotos(next); }}
                   onFiles={handleMultiPhotoUpload}
+                  selectedIdx={metadata?.__editable ? selectedPhotoIdx : null}
+                  setSelectedIdx={metadata?.__editable ? setSelectedPhotoIdx : undefined}
+                  onDeletePhoto={metadata?.__editable ? (idx) => { handleRemovePhoto && handleRemovePhoto(idx); setSelectedPhotoIdx(null); } : undefined}
                 />
                 <div className="text-center font-black py-0.5 wcc-title" style={{ borderLeft: "1px solid black", borderRight: "1px solid black", borderBottom: "1px solid black" }}>PICTURE</div>
 
@@ -758,7 +935,7 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
                         {photosList.map((photo: any, index: number) => (
                           <div key={index} className="border border-slate-200 rounded overflow-hidden bg-white p-1 flex gap-2">
                             <img
-                              src={photo.path}
+                              src={photo.signedUrl || photo.path}
                               alt={`Proof ${index + 1}`}
                               className="w-12 h-12 object-cover rounded border border-slate-100 flex-shrink-0"
                             />
@@ -826,50 +1003,17 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
               <div className="wcc-modal-backdrop fixed inset-0 z-[150] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 print:p-0" onClick={() => setShowDcModal(false)}>
                 <div className="wcc-modal-panel bg-slate-100 w-full max-w-7xl h-[95vh] rounded-2xl shadow-2xl border border-slate-200 flex flex-col md:flex-row overflow-hidden print:w-screen print:h-screen print:rounded-none print:border-none print:shadow-none" onClick={(event) => event.stopPropagation()}>
                   
-                  {/* Left Controls Panel */}
-                  <form onSubmit={handleDcSubmit} className="w-full md:w-1/3 bg-white p-6 border-r border-slate-200 overflow-y-auto space-y-6 flex flex-col justify-between print:hidden">
-                    <div className="space-y-6">
+                  {/* Left Controls Panel — simplified, PowerPoint-style. Anything
+                      that used to live here but is now considered secondary
+                      metadata (format picker, Delivered By, Received By, Auth
+                      person) has moved to the compact top header inside the
+                      right panel. The canvas owns all image manipulation. */}
+                  <form onSubmit={handleDcSubmit} className="w-full md:w-[280px] bg-white p-5 border-r border-slate-200 overflow-y-auto space-y-5 flex flex-col justify-between print:hidden">
+                    <div className="space-y-5">
                       <div className="border-b border-slate-200 pb-3 flex justify-between items-start">
                         <div>
-                          <span className="text-[10px] font-black text-orange-600 uppercase tracking-widest block">A4 Document Canvas & Editor</span>
-                          <h4 className="font-extrabold text-slate-800 text-lg">WCC / Dispatch Builder</h4>
-                          {activeWccsForEditor.length > 1 && currentWccIndex >= 0 && (
-                            <div className="mt-2 space-y-1">
-                              <div className="text-[11px] font-bold text-slate-600">
-                                Store {currentWccIndex + 1} of {activeWccsForEditor.length}
-                                {currentStoreTitle ? <span className="block text-slate-900">{currentStoreTitle}</span> : null}
-                              </div>
-                              <div className="flex gap-1">
-                                <button
-                                  type="button"
-                                  disabled={currentWccIndex <= 0}
-                                  onClick={() => navigateWccEditor && navigateWccEditor(activeWccsForEditor[currentWccIndex - 1].id)}
-                                  className="px-2 py-1 text-[10px] font-bold rounded border border-slate-200 disabled:opacity-40 hover:bg-slate-50"
-                                >
-                                  Previous Store
-                                </button>
-                                <button
-                                  type="button"
-                                  disabled={currentWccIndex >= activeWccsForEditor.length - 1}
-                                  onClick={() => navigateWccEditor && navigateWccEditor(activeWccsForEditor[currentWccIndex + 1].id)}
-                                  className="px-2 py-1 text-[10px] font-bold rounded border border-slate-200 disabled:opacity-40 hover:bg-slate-50"
-                                >
-                                  Next Store
-                                </button>
-                              </div>
-                              <select
-                                value={editingDcId || ""}
-                                onChange={(e) => navigateWccEditor && navigateWccEditor(Number(e.target.value))}
-                                className="w-full px-2 py-1 bg-white border border-slate-200 rounded text-[11px] font-bold"
-                              >
-                                {activeWccsForEditor.map((dc: any, idx: number) => (
-                                  <option key={dc.id} value={dc.id}>
-                                    Store {idx + 1}: {dc.metadata?.storeCode ? `${dc.metadata.storeCode} - ` : ""}{dc.metadata?.storeName || `WCC ${dc.dcNumber}`}
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
-                          )}
+                          <span className="text-[10px] font-black text-orange-600 uppercase tracking-widest block">Execution</span>
+                          <h4 className="font-extrabold text-slate-800 text-base">WCC Builder</h4>
                         </div>
                         <button type="button" onClick={() => setShowDcModal(false)} className="text-slate-400 hover:text-slate-600 p-1.5 hover:bg-slate-100 rounded-full transition">
                           <X className="w-5 h-5" />
@@ -877,274 +1021,146 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
                       </div>
 
                       <div className="space-y-4 text-xs">
-                        {/* Format selector override */}
+                        {/* 1. Document number — readonly badge (dc-save generates it) */}
                         <div>
-                          <label className="block font-bold text-slate-500 uppercase mb-1">Document Format Layout</label>
-                          <select
-                            value={dcFormat}
-                            onChange={(e) => setDcFormat(e.target.value)}
-                            className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-slate-800 font-bold focus:outline-none focus:border-orange-500"
-                          >
-                            <option value="normal">Standard Sunrise Delivery Challan (DC)</option>
-                            <option value="ABFRL">ABLBL Store Work Completion Certificate (WCC)</option>
-                          </select>
+                          <label className="block font-bold text-slate-500 uppercase mb-1 text-[10px]">Document Number</label>
+                          <div className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-800 font-bold font-mono text-sm">
+                            {dcNumberVal || <span className="text-slate-400 italic font-normal text-xs">Auto-generated on save</span>}
+                          </div>
                         </div>
 
-                        <div className="grid grid-cols-2 gap-4">
+                        {/* 2. Store selector (for ABFRL multi-store estimates) */}
+                        {dcFormat === "ABFRL" && orderedSelectedStoreKeys.length > 0 && (
                           <div>
-                            <label className="block font-bold text-slate-500 uppercase mb-1">Document Number</label>
-                            <input
-                              type="text"
-                              required
-                              value={dcNumberVal}
-                              onChange={(e) => setDcNumberVal(e.target.value)}
-                              className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-slate-800 focus:outline-none focus:border-orange-500 font-bold font-mono"
-                            />
+                            <label className="block font-bold text-slate-500 uppercase mb-1 text-[10px]">Store</label>
+                            <select
+                              value={dcWccStoreScope}
+                              onChange={(e) => setDcWccStoreScope(e.target.value)}
+                              className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-slate-800 focus:outline-none focus:border-purple-500 text-xs font-bold"
+                            >
+                              <option value="">(estimate primary store)</option>
+                              {orderedSelectedStoreKeys.map(sid => {
+                                const tStore = stores.find(s => s.id === Number(sid));
+                                return <option key={sid} value={sid}>{tStore?.storeCode ? `${tStore.storeCode} — ` : ""}{tStore?.name || `Store ${sid}`}</option>;
+                              })}
+                            </select>
                           </div>
-                          {dcFormat === "ABFRL" && (() => {
-                            // Per-store scope picker for ABFRL multi-store estimates.
-                            const sids = orderedSelectedStoreKeys;
-                            if (sids.length === 0) return null;
-                            return (
-                              <div>
-                                <label className="block font-bold text-slate-500 uppercase mb-1">Store scope</label>
-                                <select
-                                  value={dcWccStoreScope}
-                                  onChange={(e) => setDcWccStoreScope(e.target.value)}
-                                  className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-slate-800 focus:outline-none focus:border-purple-500"
-                                >
-                                  <option value="">(default: estimate primary store)</option>
-                                  {sids.map(sid => {
-                                    const tStore = stores.find(s => s.id === Number(sid));
-                                    return <option key={sid} value={sid}>{tStore?.storeCode ? `${tStore.storeCode} — ` : ""}{tStore?.name || `Store ${sid}`}</option>;
-                                  })}
-                                </select>
-                              </div>
-                            );
-                          })()}
-                        </div>
+                        )}
 
-                        {/* Format-specific configurations */}
-                        {dcFormat === "ABFRL" ? (
-                          <div className="space-y-4 bg-purple-50/30 p-4 rounded-xl border border-purple-100">
-                            <h5 className="font-bold text-purple-800 text-xs uppercase tracking-wider">WCC Audit Parameters</h5>
-                            {/* City / state / contact auto-fill from the selected store — no manual Store Manager field. */}
-                            {(() => {
-                              const sid = dcWccStoreScope ? Number(dcWccStoreScope) : selectedEstimate.storeId;
-                              const tStore = stores.find(s => s.id === sid);
-                              if (!tStore) return null;
-                              return (
-                                <div className="bg-white p-3 rounded-lg border border-purple-100 text-[11px] text-slate-600 space-y-0.5">
-                                  <div><span className="font-bold">Store:</span> {tStore.name} {tStore.storeCode ? `(${tStore.storeCode})` : ""}</div>
-                                  <div><span className="font-bold">City / State:</span> {tStore.city || "—"} / {tStore.state || "—"}</div>
-                                  {tStore.contactPerson && <div><span className="font-bold">Auto-fill auth contact:</span> {tStore.contactPerson}{tStore.contactPhone ? ` (${tStore.contactPhone})` : ""}</div>}
-                                </div>
-                              );
-                            })()}
-                            <div>
-                              <label className="block font-bold text-slate-500 uppercase mb-1">Shortage &amp; mounting discrepancies notes</label>
-                              <textarea
-                                rows={2}
-                                value={wccShortageNotes}
-                                onChange={(e) => setWccShortageNotes(e.target.value)}
-                                className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-slate-800 focus:outline-none resize-none font-sans"
-                                placeholder="Mention minor shortage/damage. Write 'None' if perfectly mounted."
-                              />
+                        {/* 3. Prev / Next store buttons (arrow keys also work) */}
+                        {activeWccsForEditor.length > 1 && (
+                          <div className="space-y-1.5">
+                            <div className="text-[10px] font-bold text-slate-500 uppercase flex justify-between">
+                              <span>Navigate</span>
+                              {currentWccIndex >= 0 && (
+                                <span className="font-mono text-slate-400">{currentWccIndex + 1} / {activeWccsForEditor.length}</span>
+                              )}
                             </div>
-                            {/* Bottom-of-WCC checklist: matches the 5 rows in
-                                reference-docs/wcc/*.pdf (Window, In-Store, NSO,
-                                Repairing Services, Material Transfer). Persists
-                                onto dc.metadata.checklist. */}
-                            <div>
-                              <label className="block font-bold text-slate-500 uppercase mb-1">Job category checklist</label>
-                              <div className="space-y-1.5 text-[11px]">
-                                {([
-                                  { key: "window",           label: "WINDOW — Adaptation picture + Window category + Window size" },
-                                  { key: "inStore",          label: "IN STORE — Mannequin / Hanger / Easel / POSM / VM hardware" },
-                                  { key: "nso",              label: "NSO — Signage adaptation / negative area / in store branding" },
-                                  { key: "repairing",        label: "REPAIRING SERVICES — Before pictures + Description" },
-                                  { key: "materialTransfer", label: "MATERIAL TRANSFER — Picture / description" },
-                                ] as const).map(row => (
-                                  <label key={row.key} className="flex items-center gap-2 cursor-pointer">
-                                    <input
-                                      type="checkbox"
-                                      checked={!!wccChecklist[row.key]}
-                                      onChange={(e) => setWccChecklist({ ...wccChecklist, [row.key]: e.target.checked })}
-                                      className="accent-purple-600"
-                                    />
-                                    <span className="text-slate-700">{row.label}</span>
-                                  </label>
-                                ))}
-                              </div>
+                            <div className="flex gap-1.5">
+                              <button
+                                type="button"
+                                disabled={currentWccIndex <= 0}
+                                onClick={() => navigateWccEditor && navigateWccEditor(activeWccsForEditor[currentWccIndex - 1].id)}
+                                className="flex-1 px-2 py-1.5 text-[11px] font-bold rounded border border-slate-200 disabled:opacity-40 hover:bg-slate-50"
+                                title="← Prev store"
+                              >← Prev</button>
+                              <button
+                                type="button"
+                                disabled={currentWccIndex >= activeWccsForEditor.length - 1}
+                                onClick={() => navigateWccEditor && navigateWccEditor(activeWccsForEditor[currentWccIndex + 1].id)}
+                                className="flex-1 px-2 py-1.5 text-[11px] font-bold rounded border border-slate-200 disabled:opacity-40 hover:bg-slate-50"
+                                title="Next store →"
+                              >Next →</button>
                             </div>
-                            {/* Batch action for multi-store ABFRL estimates. */}
-                            {(() => {
-                              const sids = orderedSelectedStoreKeys;
-                              if (sids.length < 2) return null;
-                              return (
-                                <div className="space-y-2 border-t border-purple-100 pt-3">
-                                  <button
-                                    type="button"
-                                    onClick={() => { handleBatchGenerateWcc(); setShowDcModal(false); }}
-                                    className="w-full py-2 px-3 bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold rounded-lg transition shadow-sm"
-                                  >
-                                    Generate {sids.length} WCC drafts (one per store)
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={handleUseCurrentWccAsTemplateForRemainingStores}
-                                    className="w-full py-2 px-3 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-lg transition shadow-sm flex items-center justify-center gap-1.5"
-                                  >
-                                    <Copy className="w-3.5 h-3.5" />
-                                    Use Current WCC As Template For Remaining Stores
-                                  </button>
-                                  <div className="grid grid-cols-2 gap-2">
-                                    <button
-                                      type="button"
-                                      onClick={handleApplyCurrentPhotosToAllWccs}
-                                      disabled={dcPhotos.length === 0}
-                                      className="py-2 px-2 bg-white hover:bg-purple-50 disabled:opacity-45 border border-purple-200 text-purple-800 text-[10px] font-bold rounded-lg transition"
-                                    >
-                                      Apply Current Photos To All WCCs
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => handleApplyCurrentPhotosToSelectedWccs(bulkSelectedStoreIds)}
-                                      disabled={dcPhotos.length === 0 || bulkSelectedStoreIds.length === 0}
-                                      className="py-2 px-2 bg-white hover:bg-purple-50 disabled:opacity-45 border border-purple-200 text-purple-800 text-[10px] font-bold rounded-lg transition"
-                                    >
-                                      Apply To Selected Stores
-                                    </button>
-                                  </div>
-                                  <div className="space-y-1">
-                                    <div className="flex items-center justify-between gap-2">
-                                      <span className="text-[10px] font-bold uppercase text-slate-500">Selected Stores</span>
-                                      <button
-                                        type="button"
-                                        onClick={() => setBulkSelectedStoreIds(selectableStores.map((s: any) => s.id))}
-                                        className="text-[10px] font-bold text-purple-700 hover:text-purple-900"
-                                      >
-                                        Select all
-                                      </button>
-                                    </div>
-                                    <div className="max-h-24 overflow-y-auto rounded-lg border border-purple-100 bg-white p-2 space-y-1">
-                                      {selectableStores.map((store: any) => (
-                                        <label key={store.id} className="flex items-center gap-2 text-[10px] text-slate-700 cursor-pointer">
-                                          <input
-                                            type="checkbox"
-                                            checked={selectedStoreIdSet.has(store.id)}
-                                            onChange={() => toggleBulkStore(store.id)}
-                                            className="accent-purple-600"
-                                          />
-                                          <span className="truncate">{store.storeCode ? `${store.storeCode} - ` : ""}{store.name}</span>
-                                        </label>
-                                      ))}
-                                    </div>
-                                  </div>
-                                </div>
-                              );
-                            })()}
+                            {currentStoreTitle && <div className="text-[11px] font-bold text-slate-800 truncate">{currentStoreTitle}</div>}
                           </div>
-                        ) : null}
+                        )}
 
-                        {/* Photo Upload Board — multi-file, drag-drop, paste, drag/resize */}
-                        <div
-                          className="space-y-2 bg-slate-50 p-3 rounded-lg border border-dashed border-slate-300"
-                          onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
-                          onDrop={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            handleMultiPhotoUpload(e.dataTransfer.files);
-                          }}
-                          onPaste={(e) => {
-                            const items = e.clipboardData?.items || [];
-                            const blobs: File[] = [];
-                            for (let i = 0; i < items.length; i++) {
-                              const it = items[i];
-                              if (it.kind === "file" && it.type.startsWith("image/")) {
-                                const f = it.getAsFile();
-                                if (f) blobs.push(f);
-                              }
-                            }
-                            if (blobs.length > 0) handleMultiPhotoUpload(blobs);
-                          }}
-                          tabIndex={0}
-                        >
-                          <div className="flex justify-between items-center">
-                            <h5 className="font-bold text-slate-700 text-xs uppercase tracking-wider">Proof Photos</h5>
-                            <label className="flex items-center gap-1 py-1 px-2 bg-orange-600 hover:bg-orange-500 text-white text-[10px] font-bold rounded cursor-pointer transition">
-                              <Plus className="w-3 h-3" />
-                              Upload
-                              <input
-                                type="file"
-                                accept="image/*"
-                                multiple
-                                className="hidden"
-                                onChange={(e) => { handleMultiPhotoUpload(e.target.files); e.target.value = ""; }}
-                              />
-                            </label>
+                        {/* 4 + 5. Bulk actions — visible only for multi-store ABFRL estimates */}
+                        {dcFormat === "ABFRL" && orderedSelectedStoreKeys.length >= 2 && (
+                          <div className="space-y-2 pt-3 border-t border-slate-100">
+                            <button
+                              type="button"
+                              onClick={() => { handleBatchGenerateWcc(); setShowDcModal(false); }}
+                              disabled={activeWccsForEditor.length >= orderedSelectedStoreKeys.length}
+                              className="w-full py-2 px-3 bg-purple-600 hover:bg-purple-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-[11px] font-bold rounded-lg transition shadow-sm"
+                              title={activeWccsForEditor.length >= orderedSelectedStoreKeys.length ? "Already generated" : ""}
+                            >
+                              Generate All ({orderedSelectedStoreKeys.length} WCCs)
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (dcPhotos.length === 0) { alert("Add photos first."); return; }
+                                const remaining = Math.max(0, activeWccsForEditor.length - 1);
+                                if (remaining === 0) { alert("No other stores to apply to."); return; }
+                                if (!confirm(`Apply these ${dcPhotos.length} image${dcPhotos.length === 1 ? "" : "s"} to ${remaining} remaining store${remaining === 1 ? "" : "s"}?`)) return;
+                                handleApplyCurrentPhotosToAllWccs();
+                              }}
+                              disabled={dcPhotos.length === 0}
+                              className="w-full py-2 px-3 bg-white hover:bg-purple-50 disabled:opacity-40 border border-purple-200 text-purple-700 text-[11px] font-bold rounded-lg transition flex items-center justify-center gap-1.5"
+                            >
+                              <Copy className="w-3.5 h-3.5" />
+                              Apply Current Images To All
+                            </button>
                           </div>
-                          <p className="text-[9px] text-slate-400 leading-snug">
-                            Drag-drop multiple JPG / PNG files here, paste from clipboard (Cmd/Ctrl+V), or click <b>Upload</b>. Drag images inside the picture frame on the right to position them; grab the corner handle to resize.
-                          </p>
-                          {dcPhotos.length === 0 ? (
-                            <p className="text-[10px] text-slate-400 italic">No proofs yet.</p>
-                          ) : (
-                            <div className="space-y-1.5 max-h-[260px] overflow-y-auto pr-1">
-                              {dcPhotos.map((photo, pIdx) => (
-                                <div key={pIdx} className="bg-white p-2 rounded border border-slate-200 flex items-center gap-2 group">
-                                  <img src={photo.path} alt="" className="w-9 h-9 object-cover rounded border border-slate-200 flex-shrink-0" />
+                        )}
+
+                        {/* 6. Checklist (ABFRL only) */}
+                        {dcFormat === "ABFRL" && (
+                          <div className="pt-3 border-t border-slate-100">
+                            <label className="block font-bold text-slate-500 uppercase mb-2 text-[10px]">Job Category</label>
+                            <div className="space-y-1.5 text-[11px]">
+                              {([
+                                { key: "window",           label: "Window" },
+                                { key: "inStore",          label: "In-Store" },
+                                { key: "nso",              label: "NSO" },
+                                { key: "repairing",        label: "Repairing Services" },
+                                { key: "materialTransfer", label: "Material Transfer" },
+                              ] as const).map(row => (
+                                <label key={row.key} className="flex items-center gap-2 cursor-pointer">
                                   <input
-                                    type="text"
-                                    placeholder="Caption…"
-                                    value={photo.caption}
-                                    onChange={(e) => {
-                                      const updated = [...dcPhotos];
-                                      updated[pIdx] = { ...updated[pIdx], caption: e.target.value };
-                                      setDcPhotos(updated);
-                                    }}
-                                    className="flex-1 px-1.5 py-1 bg-slate-50 border border-slate-200 rounded text-[10px] focus:outline-none focus:bg-white min-w-0"
+                                    type="checkbox"
+                                    checked={!!wccChecklist[row.key]}
+                                    onChange={(e) => setWccChecklist({ ...wccChecklist, [row.key]: e.target.checked })}
+                                    className="accent-purple-600"
                                   />
-                                  <label
-                                    className="text-slate-400 hover:text-orange-600 p-1 rounded hover:bg-slate-50 cursor-pointer"
-                                    title={`Replace Photo #${pIdx + 1}`}
-                                  >
-                                    <ImagePlus className="w-3.5 h-3.5" />
-                                    <input
-                                      type="file"
-                                      accept="image/*"
-                                      className="hidden"
-                                      onChange={async (e) => {
-                                        const file = e.target.files?.[0];
-                                        if (file) await handleBulkReplacePhoto(pIdx, file, bulkSelectedStoreIds);
-                                        e.target.value = "";
-                                      }}
-                                    />
-                                  </label>
-                                  <button
-                                    type="button"
-                                    onClick={() => setDcPhotos(dcPhotos.filter((_, idx) => idx !== pIdx))}
-                                    className="text-slate-400 hover:text-red-500 p-1 rounded hover:bg-slate-50"
-                                    title="Remove"
-                                  >
-                                    <Trash className="w-3.5 h-3.5" />
-                                  </button>
-                                </div>
+                                  <span className="text-slate-700">{row.label}</span>
+                                </label>
                               ))}
                             </div>
-                          )}
-                        </div>
+                          </div>
+                        )}
 
+                        {/* Shortage notes (ABFRL only) */}
+                        {dcFormat === "ABFRL" && (
+                          <div>
+                            <label className="block font-bold text-slate-500 uppercase mb-1 text-[10px]">Shortage / Damage Notes</label>
+                            <textarea
+                              rows={2}
+                              value={wccShortageNotes}
+                              onChange={(e) => setWccShortageNotes(e.target.value)}
+                              className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-slate-800 focus:outline-none resize-none font-sans text-xs"
+                              placeholder="'None' if perfectly mounted."
+                            />
+                          </div>
+                        )}
+
+                        {/* 7. Notes / dispatch remarks */}
                         <div>
-                          <label className="block font-bold text-slate-500 uppercase mb-1">Dispatch Remarks</label>
+                          <label className="block font-bold text-slate-500 uppercase mb-1 text-[10px]">Notes</label>
                           <textarea
                             rows={2}
                             value={dcRemarks}
                             onChange={(e) => setDcRemarks(e.target.value)}
-                            className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-slate-800 focus:outline-none resize-none font-sans"
-                            placeholder="General remarks about delivery status..."
+                            className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-slate-800 focus:outline-none resize-none font-sans text-xs"
+                            placeholder="General remarks…"
                           />
                         </div>
+
+                        <p className="text-[10px] text-slate-400 leading-snug pt-1 border-t border-slate-100">
+                          <b>Shortcuts:</b> ← → navigate · Del delete image · Esc deselect · ⌘/Ctrl+V paste · ⌘/Ctrl+S save · Shift+drag = free resize.
+                        </p>
                       </div>
                     </div>
 
@@ -1152,33 +1168,82 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
                       <button
                         type="button"
                         onClick={() => { setWccPrintMode && setWccPrintMode("current"); window.print(); }}
-                        className="flex-1 h-9 px-4 border border-slate-200 bg-white hover:bg-slate-50 hover:border-slate-300 text-slate-700 text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2"
+                        className="flex-1 h-9 px-3 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-medium rounded-lg transition-all flex items-center justify-center gap-1.5"
                       >
                         <Printer className="w-4 h-4 text-slate-400" />
-                        Print Current Store
+                        Print
                       </button>
                       {activeWccsForEditor.length > 1 && (
                         <button
                           type="button"
                           onClick={printAllWccs}
-                          className="flex-1 h-9 px-4 border border-slate-200 bg-white hover:bg-slate-50 hover:border-slate-300 text-slate-700 text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2"
+                          className="flex-1 h-9 px-3 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-medium rounded-lg transition-all flex items-center justify-center gap-1.5"
                         >
                           <Printer className="w-4 h-4 text-slate-400" />
-                          Print All WCCs
+                          Print All
                         </button>
                       )}
                       <button
                         type="submit"
-                        className="flex-1 h-9 px-4 bg-orange-600 hover:bg-orange-700 active:bg-orange-800 text-white text-sm font-semibold rounded-lg transition-all shadow-sm flex items-center justify-center gap-2"
+                        className="flex-1 h-9 px-3 bg-orange-600 hover:bg-orange-700 text-white text-xs font-semibold rounded-lg transition-all shadow-sm"
                       >
-                        Save &amp; Close
+                        Save
                       </button>
                     </div>
                   </form>
 
                   {/* Right Live Canvas (A4 Page View) */}
-                  <div className="wcc-print-shell flex-1 bg-white p-8 overflow-y-auto flex items-start justify-center print:bg-white print:p-0 print:overflow-visible" data-print-document="true">
-                    <div className="wcc-print-root">
+                  <div className="flex-1 flex flex-col overflow-hidden">
+                    {/* Compact top header — dcFormat picker + secondary metadata + Add Photos.
+                        Hidden in print. Kept intentionally small so the A4 canvas dominates. */}
+                    <div className="bg-white border-b border-slate-200 px-4 py-2 flex flex-wrap items-center gap-2 print:hidden">
+                      <select
+                        value={dcFormat}
+                        onChange={(e) => setDcFormat(e.target.value)}
+                        className="px-2 py-1 bg-white border border-slate-200 rounded text-[11px] font-bold text-slate-700 focus:outline-none focus:border-orange-500"
+                      >
+                        <option value="normal">DC · Standard</option>
+                        <option value="ABFRL">WCC · ABLBL</option>
+                      </select>
+                      <input
+                        type="text"
+                        value={dcDeliveredBy || ""}
+                        onChange={(e) => setDcDeliveredBy && setDcDeliveredBy(e.target.value)}
+                        placeholder="Delivered by"
+                        className="px-2 py-1 bg-white border border-slate-200 rounded text-[11px] w-36 focus:outline-none focus:border-orange-500"
+                      />
+                      <input
+                        type="text"
+                        value={dcReceivedBy || ""}
+                        onChange={(e) => setDcReceivedBy && setDcReceivedBy(e.target.value)}
+                        placeholder="Received by"
+                        className="px-2 py-1 bg-white border border-slate-200 rounded text-[11px] w-36 focus:outline-none focus:border-orange-500"
+                      />
+                      {dcFormat === "ABFRL" && (
+                        <input
+                          type="text"
+                          value={props.wccAuthPerson || ""}
+                          onChange={(e) => setWccAuthPerson && setWccAuthPerson(e.target.value)}
+                          placeholder="Auth person (name + phone)"
+                          className="px-2 py-1 bg-white border border-slate-200 rounded text-[11px] w-52 focus:outline-none focus:border-purple-500"
+                        />
+                      )}
+                      <div className="ml-auto flex items-center gap-2">
+                        <label className="flex items-center gap-1 py-1 px-2 bg-orange-600 hover:bg-orange-500 text-white text-[11px] font-bold rounded cursor-pointer transition">
+                          <Plus className="w-3 h-3" />
+                          Add Photos
+                          <input
+                            type="file"
+                            accept="image/*"
+                            multiple
+                            className="hidden"
+                            onChange={(e) => { handleMultiPhotoUpload(e.target.files); e.target.value = ""; }}
+                          />
+                        </label>
+                      </div>
+                    </div>
+                    <div className="wcc-print-shell flex-1 bg-white p-6 overflow-y-auto flex items-start justify-center print:bg-white print:p-0 print:overflow-visible" data-print-document="true">
+                      <div className="wcc-print-root">
                     {wccPrintMode === "all" && activeWccsForEditor.length > 0
                       ? activeWccsForEditor.map((dc: any) => {
                           const linkedEst = estimates.find((e: any) => e.id === dc.estimateId) || selectedEstimate;
@@ -1218,6 +1283,7 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
                           selectedEstimate,
                           selectedEstimateItems
                         )}
+                      </div>
                     </div>
                   </div>
 

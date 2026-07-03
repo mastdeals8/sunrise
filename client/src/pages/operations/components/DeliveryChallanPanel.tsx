@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from "react";
 import { Pager, usePagedList } from "@/components/Pager";
-import { Edit3, Eye, Plus, Printer, Search, Trash2 } from "lucide-react";
+import { Edit3, Eye, Plus, Printer, RotateCcw, Search, Trash2 } from "lucide-react";
 import type { Client, DeliveryChallan, Estimate, Store } from "../types";
 import { displayFormatLabel, isAblblFormat } from "../../../../../shared/textFormat";
 import { isBoltMode, supabase } from "../../../lib/supabase";
@@ -70,11 +70,14 @@ const DeliveryChallanPanel: React.FC<DeliveryChallanPanelProps> = ({
 }) => {
   const [filter, setFilter] = useState<Filter>(initialFilter);
   const [search, setSearch] = useState("");
+  const [showDeleted, setShowDeleted] = useState(false);
 
+  const isDeletedRow = (c: DeliveryChallan) => c.status === "deleted" || !!c.metadata?.deleted;
   const activeChallans = useMemo(
-    () => challans.filter(c => c.status !== "deleted" && !c.metadata?.deleted),
-    [challans],
+    () => challans.filter(c => showDeleted ? true : !isDeletedRow(c)),
+    [challans, showDeleted],
   );
+  const deletedCount = useMemo(() => challans.filter(isDeletedRow).length, [challans]);
 
   const latestWccIds = useMemo(() => latestWccIdsByGroup(activeChallans), [activeChallans]);
   const duplicateWccRows = useMemo(
@@ -145,6 +148,37 @@ const DeliveryChallanPanel: React.FC<DeliveryChallanPanelProps> = ({
     }
   };
 
+  const restoreChallan = async (d: DeliveryChallan) => {
+    if (!token) return;
+    if (!confirm(`Restore ${d.dcNumber}?`)) return;
+    try {
+      const restoredMeta = { ...(d.metadata || {}), deleted: false };
+      // Clean up the tombstone markers so the row shows as an ordinary draft.
+      delete restoredMeta.deletedAt;
+      delete restoredMeta.deletedReason;
+      if (isBoltMode) {
+        const { error } = await supabase
+          .from("delivery_challans")
+          .update({ status: "draft", metadata: restoredMeta })
+          .eq("id", d.id);
+        if (error) throw new Error(error.message);
+      } else {
+        const r = await fetch(`/api/operations/delivery-challans/${d.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ status: "draft", metadata: restoredMeta }),
+        });
+        if (!r.ok) {
+          const j = await r.json().catch(() => ({}));
+          throw new Error(j.message || "Restore failed");
+        }
+      }
+      reload && reload();
+    } catch (err: any) {
+      alert(err?.message || "Restore failed");
+    }
+  };
+
   const deleteDuplicateWccs = async () => {
     if (!token || duplicateWccRows.length === 0) return;
     if (!confirm(`Delete ${duplicateWccRows.length} duplicate WCC record${duplicateWccRows.length === 1 ? "" : "s"}? Latest WCC per estimate/store will remain active.`)) return;
@@ -206,6 +240,15 @@ const DeliveryChallanPanel: React.FC<DeliveryChallanPanelProps> = ({
             <Search className="w-3.5 h-3.5 text-slate-400" />
             <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search DC / estimate / client" className="bg-transparent outline-none text-xs w-56" />
           </div>
+          <label className="flex items-center gap-1.5 px-2 py-1 border border-slate-200 rounded bg-white text-xs font-bold text-slate-600 cursor-pointer hover:bg-slate-50">
+            <input
+              type="checkbox"
+              checked={showDeleted}
+              onChange={(e) => setShowDeleted(e.target.checked)}
+              className="accent-slate-700"
+            />
+            Show deleted{deletedCount ? ` (${deletedCount})` : ""}
+          </label>
         </div>
         {onCreate && (
           <button
@@ -248,9 +291,10 @@ const DeliveryChallanPanel: React.FC<DeliveryChallanPanelProps> = ({
                 const store = stores.find(s => s.id === Number(d.metadata?.storeId || 0))
                   || (est ? stores.find(s => s.id === est.storeId) : null);
                 const ablbl = documentTypeForDc(d) === "wcc";
-                const isDuplicate = ablbl && !latestWccIds.has(d.id);
+                const deleted = isDeletedRow(d);
+                const isDuplicate = ablbl && !deleted && !latestWccIds.has(d.id);
                 return (
-                  <tr key={d.id} id={`dc-${d.id}`} className={`hover:bg-slate-50/60 transition ${isDuplicate ? "bg-red-50/40" : ""}`}>
+                  <tr key={d.id} id={`dc-${d.id}`} className={`hover:bg-slate-50/60 transition ${deleted ? "bg-slate-100 opacity-70" : isDuplicate ? "bg-red-50/40" : ""}`}>
                     <td className="px-3 py-1.5">
                       <span className="font-mono font-bold text-orange-600">{d.dcNumber}</span>
                       <span className={`px-1.5 py-0.5 mt-0.5 inline-block rounded text-[9px] uppercase font-black border ${ablbl ? "bg-purple-50 text-purple-700 border-purple-100" : "bg-blue-50 text-blue-700 border-blue-100"}`}>
@@ -267,9 +311,13 @@ const DeliveryChallanPanel: React.FC<DeliveryChallanPanelProps> = ({
                       {d.metadata?.storeName || store?.name || "—"}
                     </td>
                     <td className="px-3 py-1.5">
-                      <span className="px-1.5 py-0.5 rounded text-[9px] uppercase font-black border bg-emerald-50 text-emerald-700 border-emerald-100">
-                        {d.status === "completed" ? "Completed" : "Draft"}
-                      </span>
+                      {deleted ? (
+                        <span className="px-1.5 py-0.5 rounded text-[9px] uppercase font-black border bg-red-50 text-red-700 border-red-200">Deleted</span>
+                      ) : (
+                        <span className="px-1.5 py-0.5 rounded text-[9px] uppercase font-black border bg-emerald-50 text-emerald-700 border-emerald-100">
+                          {d.status === "completed" ? "Completed" : "Draft"}
+                        </span>
+                      )}
                     </td>
                     <td className="px-3 py-1.5 text-slate-500 font-mono">{(d as any).createdAt ? new Date((d as any).createdAt).toLocaleDateString("en-GB") : (d.deliveryDate ? new Date(d.deliveryDate).toLocaleDateString("en-GB") : "—")}</td>
                     <td className="px-3 py-1.5">
@@ -283,31 +331,53 @@ const DeliveryChallanPanel: React.FC<DeliveryChallanPanelProps> = ({
                     </td>
                     <td className="px-3 py-1.5 text-center" onClick={(e) => e.stopPropagation()}>
                       <div className="flex justify-center gap-1">
-                        <button
-                          onClick={() => onEdit && onEdit(d)}
-                          className="inline-flex items-center gap-1 py-1 px-2 bg-slate-50 border border-slate-200 text-slate-700 font-bold rounded hover:bg-slate-100 transition"
-                        >
-                          <Edit3 className="w-3 h-3" />
-                          Edit
-                        </button>
-                        <button
-                          onClick={() => {
-                            onPreview && onPreview(d);
-                          }}
-                          className="inline-flex items-center gap-1 py-1 px-2 bg-orange-50 border border-orange-200 text-orange-600 font-bold rounded hover:bg-orange-100 transition"
-                        >
-                          <Eye className="w-3 h-3" />
-                          View
-                        </button>
-                        <button
-                          onClick={() => onPrint && onPrint(d)}
-                          className="inline-flex items-center gap-1 py-1 px-2 bg-purple-50 border border-purple-200 text-purple-700 font-bold rounded hover:bg-purple-100 transition"
-                        >
-                          <Printer className="w-3 h-3" />
-                          Print
-                        </button>
-                        {token && (
-                          <button title={`Delete ${d.dcNumber}`} onClick={() => hardDelete(d)} className="inline-flex items-center gap-1 py-1 px-2 bg-red-50 border border-red-200 text-red-700 font-bold rounded hover:bg-red-100 transition"><Trash2 className="w-3 h-3" />Delete</button>
+                        {deleted ? (
+                          <>
+                            <button
+                              onClick={() => onPreview && onPreview(d)}
+                              className="inline-flex items-center gap-1 py-1 px-2 bg-orange-50 border border-orange-200 text-orange-600 font-bold rounded hover:bg-orange-100 transition"
+                            >
+                              <Eye className="w-3 h-3" />
+                              View
+                            </button>
+                            {token && (
+                              <button
+                                title={`Restore ${d.dcNumber}`}
+                                onClick={() => restoreChallan(d)}
+                                className="inline-flex items-center gap-1 py-1 px-2 bg-emerald-50 border border-emerald-200 text-emerald-700 font-bold rounded hover:bg-emerald-100 transition"
+                              >
+                                <RotateCcw className="w-3 h-3" />
+                                Restore
+                              </button>
+                            )}
+                          </>
+                        ) : (
+                          <>
+                            <button
+                              onClick={() => onEdit && onEdit(d)}
+                              className="inline-flex items-center gap-1 py-1 px-2 bg-slate-50 border border-slate-200 text-slate-700 font-bold rounded hover:bg-slate-100 transition"
+                            >
+                              <Edit3 className="w-3 h-3" />
+                              Edit
+                            </button>
+                            <button
+                              onClick={() => onPreview && onPreview(d)}
+                              className="inline-flex items-center gap-1 py-1 px-2 bg-orange-50 border border-orange-200 text-orange-600 font-bold rounded hover:bg-orange-100 transition"
+                            >
+                              <Eye className="w-3 h-3" />
+                              View
+                            </button>
+                            <button
+                              onClick={() => onPrint && onPrint(d)}
+                              className="inline-flex items-center gap-1 py-1 px-2 bg-purple-50 border border-purple-200 text-purple-700 font-bold rounded hover:bg-purple-100 transition"
+                            >
+                              <Printer className="w-3 h-3" />
+                              Print
+                            </button>
+                            {token && (
+                              <button title={`Delete ${d.dcNumber}`} onClick={() => hardDelete(d)} className="inline-flex items-center gap-1 py-1 px-2 bg-red-50 border border-red-200 text-red-700 font-bold rounded hover:bg-red-100 transition"><Trash2 className="w-3 h-3" />Delete</button>
+                            )}
+                          </>
                         )}
                       </div>
                     </td>

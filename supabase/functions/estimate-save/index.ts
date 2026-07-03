@@ -189,12 +189,21 @@ Deno.serve(async (req: Request) => {
 
     if (req.method === "POST") {
       // ---- CREATE PATH ----
-      const { estimate, items } = await req.json() as { estimate: Record<string, unknown>; items: unknown[] };
+      const { estimate: rawEstimate, items: rawItems } = await req.json() as { estimate: Record<string, unknown>; items: unknown[] };
 
-      if (!estimate) return errorResponse("Missing estimate", 400);
-      if (!Array.isArray(items) || items.length === 0) {
+      if (!rawEstimate) return errorResponse("Missing estimate", 400);
+      if (!Array.isArray(rawItems) || rawItems.length === 0) {
         return errorResponse("Estimate must contain at least one item", 400);
       }
+
+      // Normalize camelCase → snake_case for every field on the estimate and each item.
+      // The client (OperationsPage.tsx, api.ts createEstimate) sends camelCase; Supabase
+      // columns are snake_case. Mirrors the PATCH branch (line 114) which already normalizes.
+      // Without this, fields like abfrlProjectType, clientFormat, poNumber, taxAmount,
+      // totalAmount, billingTo, shippingTo, stateCode, vendorCode, packingPercent, etc.
+      // hit Supabase raw and produce "column does not exist" errors.
+      const estimate: Record<string, unknown> = normalizeKeys(rawEstimate);
+      const items: Record<string, unknown>[] = (rawItems as Record<string, unknown>[]).map((it) => normalizeKeys(it));
 
       // Billing profile snapshot
       if (estimate.billing_profile_id || estimate.billingProfileId) {
