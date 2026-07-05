@@ -3157,7 +3157,9 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     // silently replace the editor's array from under the user. Deep-copy the
     // photo objects so this editor owns its own array of its own objects.
     setDcPhotos(Array.isArray(meta.photos) ? meta.photos.map((p: WccPhoto) => ({ ...p })) : []);
-    setWccChecklist(meta.checklist || { window: true, inStore: false, nso: false, repairing: false, materialTransfer: false });
+    // Clone so wccChecklist state never aliases dc.metadata.checklist in the
+    // challans cache (same isolation guarantee applied to dcPhotos above).
+    setWccChecklist(meta.checklist ? { ...meta.checklist } : { window: true, inStore: false, nso: false, repairing: false, materialTransfer: false });
     setDcFormat(dc.clientFormat || (isAblblFormat(est.clientFormat) ? "ABFRL" : "normal"));
     setDcDeliveredBy(dc.deliveredBy || "Sunrise logistics team");
     setDcReceivedBy(dc.receivedBy || "");
