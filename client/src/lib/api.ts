@@ -996,9 +996,15 @@ async function attachPhotoSignedUrls<T extends { metadata?: any }>(rows: T[]): P
     const photos = row.metadata?.photos;
     if (!Array.isArray(photos)) continue;
     for (const p of photos) {
-      if (p?.path && typeof p.path === "string" && !/^https?:\/\//i.test(p.path)) {
-        paths.add(p.path);
-      }
+      if (!p?.path || typeof p.path !== "string") continue;
+      // http(s) URLs render as-is; skip.
+      if (/^https?:\/\//i.test(p.path)) continue;
+      // Legacy Express-mode paths ("/uploads/..." from /api/operations/upload)
+      // are not Supabase Storage keys — signing would 404. Leave them alone so
+      // the UI falls back to p.path (which will 404, correctly signaling that
+      // the photo needs to be re-uploaded now that we are on Bolt/Supabase).
+      if (p.path.startsWith("/uploads/") || p.path.startsWith("/api/")) continue;
+      paths.add(p.path);
     }
   }
   if (paths.size === 0) return rows;

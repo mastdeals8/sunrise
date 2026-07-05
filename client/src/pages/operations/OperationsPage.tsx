@@ -3151,7 +3151,12 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     setWccVisualBrief(meta.visualBrief || "");
     setWccShortageNotes(meta.shortageNotes || "");
     setWccAuthPerson(meta.authPerson || "");
-    setDcPhotos(Array.isArray(meta.photos) ? meta.photos : []);
+    // BUG-2 hardening: never alias dc.metadata.photos into dcPhotos state.
+    // A shared reference lets any in-place mutation on dcPhotos leak into the
+    // challan cache — and, symmetrically, lets an unrelated challan refresh
+    // silently replace the editor's array from under the user. Deep-copy the
+    // photo objects so this editor owns its own array of its own objects.
+    setDcPhotos(Array.isArray(meta.photos) ? meta.photos.map((p: WccPhoto) => ({ ...p })) : []);
     setWccChecklist(meta.checklist || { window: true, inStore: false, nso: false, repairing: false, materialTransfer: false });
     setDcFormat(dc.clientFormat || (isAblblFormat(est.clientFormat) ? "ABFRL" : "normal"));
     setDcDeliveredBy(dc.deliveredBy || "Sunrise logistics team");
