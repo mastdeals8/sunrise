@@ -1,5 +1,5 @@
 import React from "react";
-import { Copy, Plus, Printer, X } from "lucide-react";
+import { Copy, Download, Plus, Printer, X } from "lucide-react";
 import type { Estimate, WccPhoto } from "../types";
 import { isAblblFormat } from "../../../../../shared/textFormat";
 import { companyAssetUrl } from "../../../utils/companyAssets";
@@ -375,6 +375,81 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
     setDcReceivedBy,
     setWccAuthPerson,
   } = props;
+
+  // ── Bulk WCC → PDF export ─────────────────────────────────────────────
+  // Reuses the same DOM the "Print All" flow already renders (wccPrintMode='all'
+  // produces one `.wcc-print-page` per WCC). We swap to that mode, wait for
+  // React + paint, then html2canvas each page → jsPDF → JSZip → single .zip
+  // download. Filename per file: `<dcNumber> - <storeName>.pdf`. Dependencies
+  // are dynamically imported so the initial bundle isn't inflated for users
+  // who never trigger the export.
+  const [isExportingAll, setIsExportingAll] = React.useState(false);
+  const exportAllWccPdfs = async () => {
+    if (isExportingAll) return;
+    if (!activeWccsForEditor || activeWccsForEditor.length === 0) return;
+    const originalMode = wccPrintMode;
+    setIsExportingAll(true);
+    try {
+      if (setWccPrintMode) setWccPrintMode("all");
+      // Two rAFs (React commit + browser paint) plus a short settle for image decode.
+      await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
+      await new Promise<void>((r) => setTimeout(r, 400));
+
+      const pages = Array.from(document.querySelectorAll<HTMLElement>(".wcc-print-page"));
+      if (pages.length === 0) {
+        alert("No WCCs available to export.");
+        return;
+      }
+
+      const [{ default: html2canvas }, { default: jsPDF }, { default: JSZip }] = await Promise.all([
+        import("html2canvas"),
+        import("jspdf"),
+        import("jszip"),
+      ]);
+
+      const zip = new JSZip();
+      const usedNames = new Set<string>();
+      const sanitize = (s: string) => s.replace(/[\\/:*?"<>|]+/g, "_").trim() || "Unnamed";
+      for (let i = 0; i < pages.length; i++) {
+        const el = pages[i];
+        const dcNumber = sanitize(el.dataset.dcNumber || `WCC-${i + 1}`);
+        const storeName = sanitize(el.dataset.storeName || "Unknown Store");
+        let base = `${dcNumber} - ${storeName}`;
+        let filename = `${base}.pdf`;
+        let dup = 1;
+        while (usedNames.has(filename)) filename = `${base} (${++dup}).pdf`;
+        usedNames.add(filename);
+
+        const canvas = await html2canvas(el, {
+          scale: 2,
+          useCORS: true,
+          backgroundColor: "#ffffff",
+          logging: false,
+        });
+        const imgData = canvas.toDataURL("image/jpeg", 0.92);
+        // renderA4ChallanCanvas emits 210x297mm pages (A4 portrait).
+        const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+        pdf.addImage(imgData, "JPEG", 0, 0, 210, 297);
+        zip.file(filename, pdf.output("blob"));
+      }
+
+      const zipBlob = await zip.generateAsync({ type: "blob" });
+      const url = URL.createObjectURL(zipBlob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `WCCs-${new Date().toISOString().slice(0, 10)}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("Bulk WCC PDF export failed:", err);
+      alert("Bulk PDF export failed. Check console for details.");
+    } finally {
+      if (setWccPrintMode) setWccPrintMode(originalMode);
+      setIsExportingAll(false);
+    }
+  };
 
   // ── Editor-wide selection (single-photo) ──────────────────────────────
   // Lives at the modal level so keyboard shortcuts (Delete / Esc) can act on it.
@@ -1183,6 +1258,18 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
                           Print All
                         </button>
                       )}
+                      {activeWccsForEditor.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={exportAllWccPdfs}
+                          disabled={isExportingAll}
+                          title="Download every WCC as a separate PDF (packaged as one ZIP)"
+                          className="flex-1 h-9 px-3 border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed text-slate-700 text-xs font-medium rounded-lg transition-all flex items-center justify-center gap-1.5"
+                        >
+                          <Download className="w-4 h-4 text-slate-400" />
+                          {isExportingAll ? `Exporting ${activeWccsForEditor.length}…` : "Export All PDFs"}
+                        </button>
+                      )}
                       <button
                         type="submit"
                         className="flex-1 h-9 px-3 bg-orange-600 hover:bg-orange-700 text-white text-xs font-semibold rounded-lg transition-all shadow-sm"
@@ -1250,7 +1337,12 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
                           if (!linkedEst) return null;
                           const dcItemsList = Array.isArray(dc.items) ? dc.items : [];
                           return (
-                            <div key={dc.id} className="wcc-print-page">
+                            <div
+                              key={dc.id}
+                              className="wcc-print-page"
+                              data-dc-number={dc.dcNumber || ""}
+                              data-store-name={dc.metadata?.storeName || ""}
+                            >
                               {renderA4ChallanCanvas(
                                 dc.clientFormat,
                                 dc.dcNumber,
@@ -1376,7 +1468,12 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
                         ? siblingDcs.map((dc: any) => {
                             const est = estimates.find((e: any) => e.id === dc.estimateId) || linkedEst;
                             return (
-                              <div key={dc.id} className="wcc-print-page">
+                              <div
+                                key={dc.id}
+                                className="wcc-print-page"
+                                data-dc-number={dc.dcNumber || ""}
+                                data-store-name={dc.metadata?.storeName || ""}
+                              >
                                 {renderA4ChallanCanvas(
                                   dc.clientFormat,
                                   dc.dcNumber,
