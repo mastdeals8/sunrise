@@ -966,21 +966,56 @@ export async function createInvoice(
 
 // ─── Delivery Challans ────────────────────────────────────────────────────────
 
+const isLegacyWccPhotoPath = (value: string) =>
+  value.startsWith("/uploads/") || value.startsWith("/api/");
+
+const isDisplayUrl = (value: string) =>
+  /^https?:\/\//i.test(value) || value.startsWith("blob:") || value.startsWith("data:");
+
+export function isValidWccPhotoPath(photo: any): boolean {
+  if (!photo || typeof photo !== "object") return false;
+  const path = typeof photo.path === "string" ? photo.path.trim() : "";
+  const url = typeof photo.url === "string" ? photo.url.trim() : "";
+  const storagePath = typeof photo.storagePath === "string" ? photo.storagePath.trim() : "";
+  const primary = path || storagePath || url;
+  if (!primary) return false;
+  if (isLegacyWccPhotoPath(primary)) return false;
+  if (primary.startsWith("/")) return false;
+  return Boolean(path || storagePath || isDisplayUrl(url));
+}
+
+export function normalizeWccPhotos(photos: any): any[] {
+  if (!Array.isArray(photos)) return [];
+  const seen = new Set<string>();
+  const clean: any[] = [];
+  for (const photo of photos) {
+    if (!isValidWccPhotoPath(photo)) continue;
+    const { signedUrl, _signedUrl, ...rest } = photo;
+    const path = typeof rest.path === "string" ? rest.path.trim() : "";
+    const storagePath = typeof rest.storagePath === "string" ? rest.storagePath.trim() : "";
+    const url = typeof rest.url === "string" ? rest.url.trim() : "";
+    const id = rest.id != null ? String(rest.id) : "";
+    const name = typeof rest.name === "string" ? rest.name.trim() : "";
+    const key = path || storagePath || url || id || name;
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    clean.push({ ...rest, ...(storagePath && !path ? { path: storagePath } : {}) });
+  }
+  return clean;
+}
+
+export const dedupeWccPhotos = normalizeWccPhotos;
+
 /**
  * WCC/DC photos live inside metadata.photos[] as JSONB. Persist ONLY the raw
  * storage path — never the (short-lived) signed URL. `signedUrl` is a transient
  * field attached on read; strip it before every write. Also strips any legacy
- * `_signedUrl` fields from older builds.
+ * `_signedUrl` fields from older builds and drops legacy Express upload paths.
  */
 function stripPhotoTransients(payload: Record<string, unknown>): Record<string, unknown> {
   const meta = (payload as any)?.metadata;
-  if (!meta || !Array.isArray(meta.photos) || meta.photos.length === 0) return payload;
-  const cleanPhotos = meta.photos.map((p: any) => {
-    if (!p || typeof p !== "object") return p;
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { signedUrl, _signedUrl, ...rest } = p;
-    return rest;
-  });
+  if (!meta || !Array.isArray(meta.photos)) return payload;
+  const cleanPhotos = normalizeWccPhotos(meta.photos);
   return { ...payload, metadata: { ...meta, photos: cleanPhotos } };
 }
 
@@ -999,15 +1034,17 @@ async function attachPhotoSignedUrls<T extends { metadata?: any }>(rows: T[]): P
       if (!p?.path || typeof p.path !== "string") continue;
       // http(s) URLs render as-is; skip.
       if (/^https?:\/\//i.test(p.path)) continue;
-      // Legacy Express-mode paths ("/uploads/..." from /api/operations/upload)
-      // are not Supabase Storage keys — signing would 404. Leave them alone so
-      // the UI falls back to p.path (which will 404, correctly signaling that
-      // the photo needs to be re-uploaded now that we are on Bolt/Supabase).
       if (p.path.startsWith("/uploads/") || p.path.startsWith("/api/")) continue;
       paths.add(p.path);
     }
   }
-  if (paths.size === 0) return rows;
+  if (paths.size === 0) {
+    return rows.map((row) => {
+      const photos = row.metadata?.photos;
+      if (!Array.isArray(photos)) return row;
+      return { ...row, metadata: { ...row.metadata, photos: normalizeWccPhotos(photos) } };
+    });
+  }
   const hitMap = new Map<string, string>();
   const stale: string[] = [];
   for (const p of paths) {
@@ -1032,12 +1069,13 @@ async function attachPhotoSignedUrls<T extends { metadata?: any }>(rows: T[]): P
   }
   return rows.map((row) => {
     const photos = row.metadata?.photos;
-    if (!Array.isArray(photos) || photos.length === 0) return row;
+    const normalized = normalizeWccPhotos(photos);
+    if (normalized.length === 0) return { ...row, metadata: { ...row.metadata, photos: [] } };
     return {
       ...row,
       metadata: {
         ...row.metadata,
-        photos: photos.map((p: any) => (p?.path && hitMap.has(p.path) ? { ...p, signedUrl: hitMap.get(p.path) } : p)),
+        photos: normalized.map((p: any) => (p?.path && hitMap.has(p.path) ? { ...p, signedUrl: hitMap.get(p.path) } : p)),
       },
     };
   });

@@ -46,7 +46,7 @@ import ProjectWorkspace from "./components/ProjectWorkspace";
 import WccDcEditor from "./components/WccDcEditor";
 import { useOperationsData, type Invoice } from "./hooks/useOperationsData";
 import { isBoltMode, supabase } from "../../lib/supabase";
-import { createEstimate, updateEstimate, createDeliveryChallan, updateDeliveryChallan, fetchEstimateItems, fetchDeliveryChallansForEstimate, fetchBillingProfiles as apiFetchBillingProfiles, fetchCompanySettings, createInvoice, createPayment, fetchClientLedger, masterDataSave, uploadToStorage, registerExecutionDocument, deleteExecutionDocument, deleteWccPhotoArtifacts } from "../../lib/api";
+import { createEstimate, updateEstimate, createDeliveryChallan, updateDeliveryChallan, fetchEstimateItems, fetchDeliveryChallansForEstimate, fetchBillingProfiles as apiFetchBillingProfiles, fetchCompanySettings, createInvoice, createPayment, fetchClientLedger, masterDataSave, uploadToStorage, registerExecutionDocument, deleteExecutionDocument, deleteWccPhotoArtifacts, normalizeWccPhotos } from "../../lib/api";
 import { useEstimateBuilder } from "./hooks/useEstimateBuilder";
 import { useInvoiceWorkflow } from "./hooks/useInvoiceWorkflow";
 import { useWccDcEditor } from "./hooks/useWccDcEditor";
@@ -2518,7 +2518,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
       }
 
       if (uploaded.length > 0) {
-        setDcPhotos(prev => [...prev, ...uploaded]);
+        setDcPhotos(prev => normalizeWccPhotos([...prev, ...uploaded]) as WccPhoto[]);
         showSuccess(`${uploaded.length} image${uploaded.length > 1 ? "s" : ""} uploaded.`);
       }
     } catch (err) {
@@ -2528,7 +2528,8 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     }
   };
 
-  const cloneWccPhotos = (photos: WccPhoto[]): WccPhoto[] => photos.map((photo) => ({ ...photo }));
+  const cloneWccPhotos = (photos: WccPhoto[]): WccPhoto[] =>
+    (normalizeWccPhotos(photos) as WccPhoto[]).map((photo) => ({ ...photo }));
 
   const reloadSelectedChallans = async () => {
     if (!selectedEstimate || !token) return;
@@ -2842,6 +2843,11 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
   // Open DC modal to create a new WCC for a specific store (from ProjectWorkspace drawer)
   const handleGenerateWccForStore = async (storeCode: string, storeId?: number | null) => {
     if (!selectedEstimate) return;
+    const existing = await findActiveExistingWccForStore(selectedEstimate.id, storeCode, storeId);
+    if (existing) {
+      await openDcForEdit(existing, "WCC already exists for this store");
+      return;
+    }
     setShowPoModal(false);
     setShowDcPreviewModal(false);
     setSelectedDcForPreview(null);
@@ -2905,14 +2911,29 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     setShowDcModal(true);
   };
 
-  const findExistingWccForStore = (estimateId: number, storeCode: string | null | undefined, storeId?: number | null) => {
-    return challans.find((dc) => {
-      if (dc.estimateId !== estimateId || !isAblblFormat(dc.clientFormat)) return false;
+  const findExistingWccForStore = (estimateId: number, storeCode: string | null | undefined, storeId?: number | null, source: DeliveryChallan[] = challans) => {
+    const normalizedStoreCode = String(storeCode || "").trim().toLowerCase();
+    return source.find((dc) => {
+      if (dc.estimateId !== estimateId || !isAblblFormat(dc.clientFormat) || dc.status === "deleted") return false;
       const meta = dc.metadata || {};
-      if (storeCode && String(meta.storeCode || "").trim() === String(storeCode).trim()) return true;
+      const rowStoreCode = String(meta.storeCode || (dc as any).storeCode || "").trim().toLowerCase();
+      if (normalizedStoreCode && rowStoreCode === normalizedStoreCode) return true;
       if (storeId && Number(meta.storeId || 0) === Number(storeId)) return true;
       return false;
     });
+  };
+
+  const findActiveExistingWccForStore = async (estimateId: number, storeCode: string | null | undefined, storeId?: number | null) => {
+    const cached = findExistingWccForStore(estimateId, storeCode, storeId);
+    if (cached) return cached;
+    if (!token) return null;
+    try {
+      const fresh = await fetchDeliveryChallansForEstimate(token, estimateId);
+      return findExistingWccForStore(estimateId, storeCode, storeId, fresh);
+    } catch (err) {
+      console.warn("Could not verify existing WCC before create:", err);
+      return null;
+    }
   };
 
   // Batch-generate one WCC per store group for an ABFRL multi-store estimate.
@@ -2933,10 +2954,16 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     // collide with itself or with anything created concurrently.
 
     let createdCount = 0;
+    let activeWccs = challans;
+    try {
+      activeWccs = await fetchDeliveryChallansForEstimate(token, selectedEstimate.id);
+    } catch (err) {
+      console.warn("Could not refresh WCC list before batch generate:", err);
+    }
     for (let i = 0; i < sids.length; i++) {
       const sid = sids[i];
       const tStore = stores.find(s => s.id === Number(sid));
-      const existing = findExistingWccForStore(selectedEstimate.id, tStore?.storeCode, tStore?.id);
+      const existing = findExistingWccForStore(selectedEstimate.id, tStore?.storeCode, tStore?.id, activeWccs);
       if (existing) continue;
       const group = sg[sid] || [];
       const itemSls: number[] = Array.isArray(group) ? group : (group.itemSls || []);
@@ -2984,7 +3011,11 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
           body: JSON.stringify(payload),
         });
       }
-      if (dcRes.ok) createdCount++;
+      if (dcRes.ok) {
+        createdCount++;
+        const created = await dcRes.clone().json().catch(() => null);
+        if (created) activeWccs = [created, ...activeWccs];
+      }
     }
     showSuccess(`Generated ${createdCount} of ${sids.length} WCC drafts.`);
     await reloadSelectedChallans();
@@ -3010,12 +3041,13 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
       const scopedStoreId = dcWccStoreScope ? Number(dcWccStoreScope) : selectedEstimate.storeId;
       const scopedStore = stores.find(s => s.id === scopedStoreId);
       if (isAblblFormat(dcFormat) && !editingDcId) {
-        const existing = findExistingWccForStore(selectedEstimate.id, scopedStore?.storeCode, scopedStore?.id);
+        const existing = await findActiveExistingWccForStore(selectedEstimate.id, scopedStore?.storeCode, scopedStore?.id);
         if (existing) {
           await openDcForEdit(existing, "WCC already exists for this store");
           return false;
         }
       }
+      const cleanDcPhotos = normalizeWccPhotos(dcPhotos) as WccPhoto[];
 
       const formattedItems = selectedEstimateItems.map(item => ({
         sl: item.sl,
@@ -3038,10 +3070,10 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
         remarks: dcRemarks || null,
         clientFormat: dcFormat,
         metadata: {
-          visualBrief: wccVisualBrief || (dcPhotos.length > 0 ? dcPhotos[0].path : null),
+          visualBrief: wccVisualBrief || (cleanDcPhotos.length > 0 ? cleanDcPhotos[0].path : null),
           shortageNotes: wccShortageNotes || null,
           authPerson: wccAuthPerson || null,
-          photos: dcPhotos,
+          photos: cleanDcPhotos,
           storeCode: scopedStore?.storeCode || "LP-01",
           storeId: scopedStore?.id || null,
           storeName: scopedStore?.name || "",
@@ -3156,7 +3188,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     // challan cache — and, symmetrically, lets an unrelated challan refresh
     // silently replace the editor's array from under the user. Deep-copy the
     // photo objects so this editor owns its own array of its own objects.
-    setDcPhotos(Array.isArray(meta.photos) ? meta.photos.map((p: WccPhoto) => ({ ...p })) : []);
+    setDcPhotos(Array.isArray(meta.photos) ? (normalizeWccPhotos(meta.photos) as WccPhoto[]).map((p: WccPhoto) => ({ ...p })) : []);
     // Clone so wccChecklist state never aliases dc.metadata.checklist in the
     // challans cache (same isolation guarantee applied to dcPhotos above).
     setWccChecklist(meta.checklist ? { ...meta.checklist } : { window: true, inStore: false, nso: false, repairing: false, materialTransfer: false });

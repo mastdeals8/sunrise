@@ -3,6 +3,7 @@ import { Copy, Plus, Printer, X } from "lucide-react";
 import type { Estimate, WccPhoto } from "../types";
 import { isAblblFormat } from "../../../../../shared/textFormat";
 import { companyAssetUrl } from "../../../utils/companyAssets";
+import { normalizeWccPhotos } from "../../../lib/api";
 import { orderedStoreKeysFromItems } from "../utils/estimateOrdering";
 
 // ============================================================
@@ -513,7 +514,9 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
             ?? (metadata?.storeCode ? (stores.find(s => s.storeCode === metadata.storeCode)?.id) : undefined)
             ?? est.storeId;
           const targetStore = stores.find(s => s.id === scopedStoreId);
-          const photosList = metadata?.photos || (metadata?.visualBrief ? [{ path: metadata.visualBrief, widthPct: 100, objectFit: 'cover', objectPosition: 'center center', caption: 'Storefront proof' }] : []);
+          const photosList = normalizeWccPhotos(
+            metadata?.photos || (metadata?.visualBrief ? [{ path: metadata.visualBrief, widthPct: 100, objectFit: 'cover', objectPosition: 'center center', caption: 'Storefront proof' }] : [])
+          );
           const authPersonVal = metadata?.authPerson || targetStore?.contactPerson || "";
           const shortageNotesVal = metadata?.shortageNotes || "";
           const storeCodeVal = metadata?.storeCode || targetStore?.storeCode || "LP-01";
@@ -678,7 +681,7 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
                 <WccPictureArea
                   photos={photosList}
                   editable={!!metadata?.__editable}
-                  onChange={(next) => { if (metadata?.__editable) setDcPhotos(next); }}
+                  onChange={(next) => { if (metadata?.__editable) setDcPhotos(normalizeWccPhotos(next)); }}
                   onFiles={handleMultiPhotoUpload}
                   selectedIdx={metadata?.__editable ? selectedPhotoIdx : null}
                   setSelectedIdx={metadata?.__editable ? setSelectedPhotoIdx : undefined}

@@ -630,7 +630,11 @@ const StoreDrawer: React.FC<{
                     <button type="button" onClick={() => onOpenWcc(dc)} className="p-1 text-slate-400 hover:text-slate-700" title="Edit">
                       <Upload className="w-3.5 h-3.5" />
                     </button>
-                    {!isBoltMode && (
+                    {isBoltMode ? (
+                      <button type="button" onClick={() => onPreviewWcc(dc)} className="p-1 text-slate-400 hover:text-slate-700" title="Print">
+                        <Printer className="w-3.5 h-3.5" />
+                      </button>
+                    ) : (
                       <a
                         href={`/api/operations/wcc-preview/${dc.id}`}
                         target="_blank"
@@ -1014,7 +1018,9 @@ const WccTab: React.FC<{
   const handleCreateWcc = () => {
     if (stores.length === 0) return;
     if (stores.length === 1) {
-      onGenerateWcc(stores[0].storeCode, stores[0].storeId ?? null);
+      const existing = stores[0].wccRecords[0] || stores[0].dcRecords[0];
+      if (existing) onOpenWcc(existing);
+      else onGenerateWcc(stores[0].storeCode, stores[0].storeId ?? null);
       return;
     }
     setWccPickerOpen(v => !v);
@@ -1047,16 +1053,19 @@ const WccTab: React.FC<{
                   <button
                     key={s.storeCode}
                     type="button"
-                    onClick={() => {
-                      setWccPickerOpen(false);
-                      onGenerateWcc(s.storeCode, s.storeId ?? null);
-                    }}
-                    className="w-full text-left px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 flex items-center gap-2"
-                  >
-                    <MapPin className="w-3 h-3 text-orange-400 shrink-0" />
-                    <span>{s.storeName || s.storeCode}</span>
-                    <Chip label={s.storeCode} />
-                  </button>
+                  onClick={() => {
+                    setWccPickerOpen(false);
+                    const existing = s.wccRecords[0] || s.dcRecords[0];
+                    if (existing) onOpenWcc(existing);
+                    else onGenerateWcc(s.storeCode, s.storeId ?? null);
+                  }}
+                  className="w-full text-left px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 flex items-center gap-2"
+                >
+                  <MapPin className="w-3 h-3 text-orange-400 shrink-0" />
+                  <span>{s.storeName || s.storeCode}</span>
+                  <Chip label={s.storeCode} />
+                  {(s.wccRecords.length > 0 || s.dcRecords.length > 0) && <span className="ml-auto text-[10px] text-blue-600 font-black">Edit</span>}
+                </button>
                 ))}
               </div>
             )}
@@ -1122,7 +1131,11 @@ const WccTab: React.FC<{
                           <button type="button" onClick={() => onOpenWcc(dc)} className="p-1 text-slate-400 hover:text-slate-700" title="Edit">
                             <Upload className="w-3.5 h-3.5" />
                           </button>
-                          {!isBoltMode && (
+                          {isBoltMode ? (
+                            <button type="button" onClick={() => onPreviewWcc(dc)} className="p-1 text-slate-400 hover:text-slate-700" title="Print">
+                              <Printer className="w-3.5 h-3.5" />
+                            </button>
+                          ) : (
                             <a
                               href={`/api/operations/wcc-preview/${dc.id}`}
                               target="_blank"
@@ -1741,15 +1754,18 @@ const QuickActionBar: React.FC<{
   data: ProjectData | null;
   onOpenUpload: (mode: UploadMode) => void;
   onGenerateWcc: (storeCode: string, storeId?: number | null) => void;
+  onOpenWcc: (dc: DeliveryChallan, msg?: string) => void;
   onOpenInvoice: () => void;
-}> = ({ estimate, data, onOpenUpload, onGenerateWcc, onOpenInvoice }) => {
+}> = ({ estimate, data, onOpenUpload, onGenerateWcc, onOpenWcc, onOpenInvoice }) => {
   const [wccPickerOpen, setWccPickerOpen] = React.useState(false);
   const stores = data?.stores ?? [];
 
   const handleCreateWcc = () => {
     if (stores.length === 0) return;
     if (stores.length === 1) {
-      onGenerateWcc(stores[0].storeCode, stores[0].storeId ?? null);
+      const existing = stores[0].wccRecords[0] || stores[0].dcRecords[0];
+      if (existing) onOpenWcc(existing);
+      else onGenerateWcc(stores[0].storeCode, stores[0].storeId ?? null);
       return;
     }
     setWccPickerOpen(v => !v);
@@ -1812,13 +1828,16 @@ const QuickActionBar: React.FC<{
                 type="button"
                 onClick={() => {
                   setWccPickerOpen(false);
-                  onGenerateWcc(s.storeCode, s.storeId ?? null);
+                  const existing = s.wccRecords[0] || s.dcRecords[0];
+                  if (existing) onOpenWcc(existing);
+                  else onGenerateWcc(s.storeCode, s.storeId ?? null);
                 }}
                 className="w-full text-left px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 flex items-center gap-2"
               >
                 <MapPin className="w-3 h-3 text-orange-400 shrink-0" />
                 <span className="flex-1 truncate">{s.storeName || s.storeCode}</span>
                 <Chip label={s.storeCode} />
+                {(s.wccRecords.length > 0 || s.dcRecords.length > 0) && <span className="ml-auto text-[10px] text-blue-600 font-black">Edit</span>}
               </button>
             ))}
           </div>
@@ -1966,6 +1985,7 @@ const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({
         data={data}
         onOpenUpload={mode => setUploadModal(mode)}
         onGenerateWcc={onGenerateWcc}
+        onOpenWcc={onOpenWcc}
         onOpenInvoice={() => onOpenInvoice({ estimateId: estimate.id, invoiceId: data?.invoices[0]?.id ?? null })}
       />
 
