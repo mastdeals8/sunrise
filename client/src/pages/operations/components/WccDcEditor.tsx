@@ -1,5 +1,5 @@
 import React from "react";
-import { Copy, Download, Plus, Printer, X } from "lucide-react";
+import { Copy, Plus, Printer, X } from "lucide-react";
 import type { Estimate, WccPhoto } from "../types";
 import { isAblblFormat } from "../../../../../shared/textFormat";
 import { companyAssetUrl } from "../../../utils/companyAssets";
@@ -375,35 +375,6 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
     setDcReceivedBy,
     setWccAuthPerson,
   } = props;
-
-  const [isExportingAll, setIsExportingAll] = React.useState(false);
-  const exportAllWccPdfs = async () => {
-    if (isExportingAll) return;
-    if (!activeWccsForEditor || activeWccsForEditor.length === 0) return;
-    const originalMode = wccPrintMode;
-    setIsExportingAll(true);
-    try {
-      if (setWccPrintMode) setWccPrintMode("all");
-      await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
-      await new Promise<void>((resolve) => setTimeout(resolve, 400));
-
-      const pages = Array.from(document.querySelectorAll<HTMLElement>(".wcc-print-page"));
-      if (pages.length === 0) {
-        alert("No WCCs available to export.");
-        return;
-      }
-
-      // Keep the PDF libraries out of the editor startup path; load them only after click.
-      const { exportWccPagesToZip } = await import("../utils/wccPdfExport");
-      await exportWccPagesToZip(pages);
-    } catch (err) {
-      console.error("Bulk WCC PDF export failed:", err);
-      alert("Bulk PDF export failed. Check console for details.");
-    } finally {
-      if (setWccPrintMode) setWccPrintMode(originalMode);
-      setIsExportingAll(false);
-    }
-  };
 
   // ── Editor-wide selection (single-photo) ──────────────────────────────
   // Lives at the modal level so keyboard shortcuts (Delete / Esc) can act on it.
@@ -1210,18 +1181,6 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
                         >
                           <Printer className="w-4 h-4 text-slate-400" />
                           Print All
-                        </button>
-                      )}
-                      {activeWccsForEditor.length > 1 && (
-                        <button
-                          type="button"
-                          onClick={exportAllWccPdfs}
-                          disabled={isExportingAll}
-                          title="Download every WCC as a separate PDF (packaged as one ZIP)"
-                          className="flex-1 h-9 px-3 border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed text-slate-700 text-xs font-medium rounded-lg transition-all flex items-center justify-center gap-1.5"
-                        >
-                          <Download className="w-4 h-4 text-slate-400" />
-                          {isExportingAll ? `Exporting ${activeWccsForEditor.length}...` : "Export All PDFs"}
                         </button>
                       )}
                       <button
