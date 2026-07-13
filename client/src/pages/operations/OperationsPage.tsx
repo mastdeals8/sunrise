@@ -3382,6 +3382,31 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     if (next) await openDcForEdit(next);
   };
 
+  // Called when the store dropdown selects a store with NO existing WCC.
+  // Saves the current WCC first (if dirty), then resets the editor to a clean
+  // slate scoped to the new store — never carries over photos or metadata.
+  const handleNewStoreScope = async (newScopeVal: string) => {
+    if (editingDcId && isWccDirty) {
+      const ok = await handleDcSubmit({ preventDefault: () => {} }, { keepOpen: true });
+      if (!ok) {
+        const proceed = window.confirm("Could not save the current WCC. Switch anyway and discard changes?");
+        if (!proceed) return;
+      }
+    }
+    setEditingDcId(null);
+    setDcPhotos([]);
+    setDcNumberVal("");
+    setWccVisualBrief("");
+    setWccShortageNotes("");
+    setWccAuthPerson("");
+    setDcRemarks("");
+    setDcDeliveredBy("Sunrise logistics team");
+    setDcReceivedBy("");
+    setWccChecklist({ window: true, inStore: false, nso: false, repairing: false, materialTransfer: false });
+    setDcWccStoreScope(newScopeVal);
+    markWccPristine();
+  };
+
   const printAllWccs = () => {
     if (activeWccsForEditor.length === 0) return;
     setWccPrintMode("all");
@@ -4330,6 +4355,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
           editingDcId,
           activeWccsForEditor,
           navigateWccEditor,
+          handleNewStoreScope,
           printAllWccs,
           wccPrintMode,
           setWccPrintMode,
