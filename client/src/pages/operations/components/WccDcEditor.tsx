@@ -462,20 +462,49 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
   }, [showDcModal, activeWccsForEditor, editingDcId, selectedPhotoIdx, navigateWccEditor, handleRemovePhoto, handleMultiPhotoUpload, handleDcSubmit]);
 
   // ── Print isolation ────────────────────────────────────────────────────
-  // When the user clicks Print inside the WCC editor, add "wcc-printing" to
-  // <body> so the @media print CSS below can target .wcc-print-root directly
-  // without fighting the fixed/overflow ancestors of the modal.
+  // Print reliability was broken because the WCC/DC canvas lives deep inside a
+  // position:fixed, overflow:hidden modal, and the old fallback set
+  // `body.wcc-printing > * { display:none }` — which hides #root, an ANCESTOR of
+  // the print root, so a descendant .wcc-print-root can never re-show itself
+  // (display:none on an ancestor cannot be overridden by a child). Result: blank
+  // page. The display:contents path is likewise unreliable inside Bolt's iframe.
+  //
+  // Robust fix: while printing, clone the live A4 canvas node into a container
+  // portalled directly onto <body> (a sibling of #root), then hide #root. Because
+  // the clone is NOT a descendant of any hidden/fixed/overflow ancestor, it
+  // renders at true A4 size. Native window.print() is unchanged.
   React.useEffect(() => {
-    const before = () => { if (showDcModal) document.body.classList.add("wcc-printing"); };
-    const after  = () => document.body.classList.remove("wcc-printing");
+    const anyModalOpen = showDcModal || showDcPreviewModal;
+    const before = () => {
+      if (!anyModalOpen) return;
+      // Grab the on-screen print root (the exact canvas the user sees).
+      const src = document.querySelector(".wcc-print-root") as HTMLElement | null;
+      if (!src) return;
+      let holder = document.getElementById("wcc-print-portal");
+      if (!holder) {
+        holder = document.createElement("div");
+        holder.id = "wcc-print-portal";
+        document.body.appendChild(holder);
+      }
+      holder.innerHTML = "";
+      holder.appendChild(src.cloneNode(true));
+      document.body.classList.add("wcc-printing");
+    };
+    const after = () => {
+      document.body.classList.remove("wcc-printing");
+      const holder = document.getElementById("wcc-print-portal");
+      if (holder) holder.innerHTML = "";
+    };
     window.addEventListener("beforeprint", before);
-    window.addEventListener("afterprint",  after);
+    window.addEventListener("afterprint", after);
     return () => {
       window.removeEventListener("beforeprint", before);
-      window.removeEventListener("afterprint",  after);
+      window.removeEventListener("afterprint", after);
       document.body.classList.remove("wcc-printing");
+      const holder = document.getElementById("wcc-print-portal");
+      if (holder) holder.innerHTML = "";
     };
-  }, [showDcModal]);
+  }, [showDcModal, showDcPreviewModal]);
 
   const orderedSelectedStoreKeys = React.useMemo(
     () => orderedStoreKeysFromItems(selectedEstimateItems || [], selectedEstimate?.storeGrouping as Record<string, any>),
@@ -595,20 +624,19 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
                        fills the entire A4 sheet edge to edge. */
                     @page { size: A4 portrait; margin: 0; }
                     html, body { width: 210mm; margin: 0 !important; padding: 0 !important; background: #fff !important; }
-                    body * { visibility: hidden !important; }
-                    body { width: 210mm !important; height: auto !important; min-height: 0 !important; margin: 0 !important; padding: 0 !important; overflow: visible !important; background: #fff !important; }
-                    #root, .app-shell, .app-main, .app-main-scroll, .operations-print-root,
-                    .wcc-modal-backdrop, .wcc-modal-panel, .wcc-print-shell {
-                      display: contents !important;
-                      position: static !important;
-                    }
-                    .operations-print-root > :not(.wcc-modal-backdrop),
-                    .wcc-modal-panel > :not(.wcc-print-shell),
-                    .wcc-print-root > :not(#dc-print-canvas):not(.wcc-print-page) {
-                      display: none !important;
-                    }
-                    .wcc-print-root, .wcc-print-root * { visibility: visible !important; }
-                    .wcc-print-root {
+                    /* The beforeprint handler clones the live canvas into
+                       #wcc-print-portal (a direct child of <body>) and adds
+                       body.wcc-printing. Hide the app root entirely and show only
+                       the portal — the portal is NOT nested under any fixed /
+                       overflow:hidden / display:none ancestor, so it always
+                       renders at true A4 size. This replaces the old
+                       display:contents + ancestor-hiding rules that produced a
+                       blank page inside the Bolt iframe. */
+                    body.wcc-printing > #root { display: none !important; }
+                    body.wcc-printing > #wcc-print-portal { display: block !important; }
+                    #wcc-print-portal { display: none; }
+                    #wcc-print-portal, #wcc-print-portal * { visibility: visible !important; }
+                    #wcc-print-portal .wcc-print-root {
                       display: block !important;
                       position: static !important;
                       width: 210mm !important;
@@ -618,11 +646,6 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
                       overflow: visible !important;
                       background: #fff !important;
                     }
-                    /* body.wcc-printing: simpler selector for Bolt iframe environments
-                       where display:contents on fixed ancestors may not dissolve correctly */
-                    body.wcc-printing > * { display: none !important; visibility: hidden !important; }
-                    body.wcc-printing .wcc-print-root { display: block !important; position: static !important; width: 210mm !important; }
-                    body.wcc-printing .wcc-print-root, body.wcc-printing .wcc-print-root * { visibility: visible !important; }
                     .wcc-print-page { page-break-after: always !important; break-after: page !important; width: 210mm !important; height: 297mm !important; overflow: hidden !important; }
                     .wcc-print-page:last-child { page-break-after: auto !important; break-after: auto !important; }
                     #dc-print-canvas {
@@ -811,20 +834,15 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
                 <style dangerouslySetInnerHTML={{ __html: `
                   @media print {
                     @page { size: A4 portrait; margin: 0; }
-                    html, body { width: 210mm; height: 297mm; margin: 0 !important; padding: 0 !important; background: #fff !important; }
-                    body * { visibility: hidden !important; }
-                    body { width: 210mm !important; height: auto !important; min-height: 0 !important; margin: 0 !important; padding: 0 !important; overflow: visible !important; background: #fff !important; }
-                    #root, .app-shell, .app-main, .app-main-scroll, .operations-print-root,
-                    .wcc-modal-backdrop, .wcc-modal-panel, .wcc-print-shell {
-                      display: contents !important;
-                    }
-                    .operations-print-root > :not(.wcc-modal-backdrop),
-                    .wcc-modal-panel > :not(.wcc-print-shell),
-                    .wcc-print-root > :not(#dc-print-canvas):not(.wcc-print-page) {
-                      display: none !important;
-                    }
-                    .wcc-print-root, .wcc-print-root * { visibility: visible !important; }
-                    .wcc-print-root {
+                    html, body { width: 210mm; margin: 0 !important; padding: 0 !important; background: #fff !important; }
+                    /* Portal-based isolation — see the WCC block for the full
+                       rationale. Hide #root, show the cloned canvas in
+                       #wcc-print-portal (a direct <body> child). */
+                    body.wcc-printing > #root { display: none !important; }
+                    body.wcc-printing > #wcc-print-portal { display: block !important; }
+                    #wcc-print-portal { display: none; }
+                    #wcc-print-portal, #wcc-print-portal * { visibility: visible !important; }
+                    #wcc-print-portal .wcc-print-root {
                       display: block !important;
                       position: static !important;
                       width: 210mm !important;

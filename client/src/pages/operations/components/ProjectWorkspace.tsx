@@ -11,6 +11,7 @@ import {
 import { StatusBadge } from "@/components/ui-kit";
 import type { Client, Brand, Store, Estimate, DeliveryChallan } from "../types";
 import ProjectUploadModal, { type UploadMode } from "./ProjectUploadModal";
+import { isAblblFormat } from "../../../../../shared/textFormat";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -270,9 +271,26 @@ const loadProjectDataFallback = async (estimate: Estimate, authHeader: Record<st
       const photoDocs = storeDocs.filter((d: any) => d.documentType === "photo");
       const signedDocs = storeDocs.filter((d: any) => d.documentType === "signed_wcc" || d.documentType === "signed_dc");
       const otherDocs = storeDocs.filter((d: any) => !["photo", "signed_wcc", "signed_dc"].includes(d.documentType));
-      const storeChallans = allChallans.filter((c: any) => c.storeCode === sc);
-      const wccRecords = storeChallans.filter((c: any) => c.documentType === "wcc");
-      const dcRecords = storeChallans.filter((c: any) => c.documentType === "dc");
+      // Match how the save path actually writes challans: the store code lives in
+      // metadata.storeCode (the top-level store_code column is never populated),
+      // and WCCs are identified by their ABFRL/ABLBL clientFormat — not by a
+      // document_type set only on the edge-function create path. Grouping on the
+      // bare store_code column left every saved WCC unmatched → "Pending WCC".
+      const challanStoreCode = (c: any): string =>
+        String(c?.metadata?.storeCode ?? c?.storeCode ?? "").trim();
+      const isWccChallan = (c: any): boolean =>
+        isAblblFormat(c?.clientFormat) || c?.documentType === "wcc";
+      const storeChallans = allChallans.filter((c: any) => {
+        if (c?.status === "deleted" || c?.metadata?.deleted) return false;
+        const code = challanStoreCode(c);
+        if (code) return code === String(sc || "").trim();
+        // Legacy rows with neither metadata.storeCode nor store_code: fall back to
+        // matching by storeId so a single-store estimate still resolves.
+        if (store.storeId != null && Number(c?.metadata?.storeId || 0) === Number(store.storeId)) return true;
+        return false;
+      });
+      const wccRecords = storeChallans.filter((c: any) => isWccChallan(c));
+      const dcRecords = storeChallans.filter((c: any) => !isWccChallan(c));
       return {
         ...store,
         wccRecords,
