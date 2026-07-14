@@ -2430,21 +2430,45 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
           return Number.isFinite(a) && a > 0 ? a : 1;
         } catch { return 1; }
       };
-      // Place each photo respecting its natural aspect ratio.
-      // First photo (tileIndex=0) is centred at max 90%×80%; subsequent photos tile in a 2-col grid at max 44%×40%.
+      // Measure the WCC picture-area container in pixels. The frame's width/height
+      // are expressed as PERCENTAGES of this non-square container (~190mm × ~85mm),
+      // so equal percentages of width vs height are NOT equal pixels. To make the
+      // rendered frame match the image's true proportions we must divide the image
+      // aspect by the container aspect (W/H in px). Falls back to the A4 content
+      // ratio if the element can't be measured yet.
+      const measureContainerAspect = (): number => {
+        try {
+          const el = document.querySelector('[data-wcc-picture-area="1"]') as HTMLElement | null;
+          if (el) {
+            const r = el.getBoundingClientRect();
+            if (r.width > 0 && r.height > 0) return r.width / r.height;
+          }
+        } catch { /* ignore */ }
+        // ~190mm wide × ~85mm tall picture area.
+        return 190 / 85;
+      };
+      const containerAspect = measureContainerAspect();
+
+      // Place each photo respecting its natural aspect ratio. Because the frame is
+      // sized in % of a non-square container, convert the image aspect into
+      // percentage-space: ratioPct = imageAspect / containerAspect. Sizing w/h in %
+      // with ratioPct makes the rendered pixel proportions equal the image's.
+      // First photo (tileIndex=0) is centred at max 90%×80%; subsequent photos tile
+      // in a 2-col grid at max 44%×40%.
       const placementFromAspect = (aspect: number, tileIndex: number): { x: number; y: number; w: number; h: number } => {
+        const ratioPct = Number.isFinite(aspect) && aspect > 0 ? aspect / containerAspect : 1;
         if (tileIndex === 0) {
           const maxW = 90, maxH = 80;
-          let w = maxW, h = w / aspect;
-          if (h > maxH) { h = maxH; w = h * aspect; }
-          if (w > maxW) { w = maxW; h = w / aspect; }
+          let w = maxW, h = w / ratioPct;
+          if (h > maxH) { h = maxH; w = h * ratioPct; }
+          if (w > maxW) { w = maxW; h = w / ratioPct; }
           if (!Number.isFinite(w) || w <= 0 || h <= 0) { w = 80; h = 60; }
           return { x: (100 - w) / 2, y: (100 - h) / 2, w, h };
         }
         const maxW = 44, maxH = 40;
-        let w = maxW, h = w / aspect;
-        if (h > maxH) { h = maxH; w = h * aspect; }
-        if (w > maxW) { w = maxW; h = w / aspect; }
+        let w = maxW, h = w / ratioPct;
+        if (h > maxH) { h = maxH; w = h * ratioPct; }
+        if (w > maxW) { w = maxW; h = w / ratioPct; }
         if (!Number.isFinite(w) || w <= 0 || h <= 0) { w = 40; h = 36; }
         const col = (tileIndex - 1) % 2;
         const row = Math.floor((tileIndex - 1) / 2);

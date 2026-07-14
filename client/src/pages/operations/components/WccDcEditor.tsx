@@ -196,6 +196,7 @@ export const WccPictureArea: React.FC<{
   return (
     <div
       ref={frameRef}
+      data-wcc-picture-area="1"
       className="flex-1 wcc-cell relative overflow-hidden"
       style={{ minHeight: "85mm", background: "#fff" }}
       onDragOver={(e) => { if (editable) e.preventDefault(); }}
