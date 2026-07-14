@@ -2452,9 +2452,26 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
 
       if (isBoltMode) {
         const eid = (selectedEstimate?.id) || (editingDcId ? challans.find(c => c.id === editingDcId)?.estimateId : null) || (selectedDcForPreview?.estimateId) || 0;
-        const sc = selectedDcForPreview
-          ? String((selectedDcForPreview as any).metadata?.storeCode || (selectedDcForPreview as any).storeCode || "wcc")
-          : "wcc";
+        const sc = (() => {
+          if (editingDcId) {
+            const editingChallan = challans.find(c => c.id === editingDcId);
+            const code = editingChallan?.metadata?.storeCode || (editingChallan as any)?.storeCode;
+            if (code) return String(code);
+            // Fall back to the scope dropdown (stores the store's numeric id → look up storeCode)
+            if (dcWccStoreScope) {
+              const store = stores.find((s: any) => s.id === Number(dcWccStoreScope));
+              if (store?.storeCode) return String(store.storeCode);
+            }
+          }
+          if (selectedDcForPreview) {
+            return String((selectedDcForPreview as any).metadata?.storeCode || (selectedDcForPreview as any).storeCode || "wcc");
+          }
+          if (dcWccStoreScope) {
+            const store = stores.find((s: any) => s.id === Number(dcWccStoreScope));
+            if (store?.storeCode) return String(store.storeCode);
+          }
+          return "wcc";
+        })();
         for (let i = 0; i < arr.length; i++) {
           const safeName = arr[i].name.replace(/[^a-zA-Z0-9._-]/g, "_");
           const storagePath = `estimate-${eid}/${sc}/${Date.now()}-${safeName}`;
