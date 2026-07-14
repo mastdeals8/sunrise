@@ -173,7 +173,8 @@ Deno.serve(async (req: Request) => {
       // _shared/numbering.ts helper as estimate-save, so numbering is
       // authoritative on the server and consistent across single/bulk creates.
       const rawDc = String(payload.dc_number ?? "").trim();
-      const legacyPlaceholder = /^DC-\d+(-.*)?$/i.test(rawDc);
+      // Replace client-side placeholders (DC-<ts> or WCC-<ts>) with a proper server number.
+      const legacyPlaceholder = /^(DC|WCC)-\d+(-.*)?$/i.test(rawDc);
       if (!rawDc || legacyPlaceholder) {
         payload.dc_number = await nextDocumentNumber(db, "dc");
       }

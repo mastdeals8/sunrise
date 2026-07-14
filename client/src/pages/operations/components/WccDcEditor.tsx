@@ -460,6 +460,22 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
     };
   }, [showDcModal, activeWccsForEditor, editingDcId, selectedPhotoIdx, navigateWccEditor, handleRemovePhoto, handleMultiPhotoUpload, handleDcSubmit]);
 
+  // ── Print isolation ────────────────────────────────────────────────────
+  // When the user clicks Print inside the WCC editor, add "wcc-printing" to
+  // <body> so the @media print CSS below can target .wcc-print-root directly
+  // without fighting the fixed/overflow ancestors of the modal.
+  React.useEffect(() => {
+    const before = () => { if (showDcModal) document.body.classList.add("wcc-printing"); };
+    const after  = () => document.body.classList.remove("wcc-printing");
+    window.addEventListener("beforeprint", before);
+    window.addEventListener("afterprint",  after);
+    return () => {
+      window.removeEventListener("beforeprint", before);
+      window.removeEventListener("afterprint",  after);
+      document.body.classList.remove("wcc-printing");
+    };
+  }, [showDcModal]);
+
   const orderedSelectedStoreKeys = React.useMemo(
     () => orderedStoreKeysFromItems(selectedEstimateItems || [], selectedEstimate?.storeGrouping as Record<string, any>),
     [selectedEstimate, selectedEstimateItems],
@@ -577,12 +593,13 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
                     /* Kill the browser's default page margins so the WCC
                        fills the entire A4 sheet edge to edge. */
                     @page { size: A4 portrait; margin: 0; }
-                    html, body { width: 210mm; height: 297mm; margin: 0 !important; padding: 0 !important; background: #fff !important; }
+                    html, body { width: 210mm; margin: 0 !important; padding: 0 !important; background: #fff !important; }
                     body * { visibility: hidden !important; }
                     body { width: 210mm !important; height: auto !important; min-height: 0 !important; margin: 0 !important; padding: 0 !important; overflow: visible !important; background: #fff !important; }
                     #root, .app-shell, .app-main, .app-main-scroll, .operations-print-root,
                     .wcc-modal-backdrop, .wcc-modal-panel, .wcc-print-shell {
                       display: contents !important;
+                      position: static !important;
                     }
                     .operations-print-root > :not(.wcc-modal-backdrop),
                     .wcc-modal-panel > :not(.wcc-print-shell),
@@ -600,6 +617,11 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
                       overflow: visible !important;
                       background: #fff !important;
                     }
+                    /* body.wcc-printing: simpler selector for Bolt iframe environments
+                       where display:contents on fixed ancestors may not dissolve correctly */
+                    body.wcc-printing > * { display: none !important; visibility: hidden !important; }
+                    body.wcc-printing .wcc-print-root { display: block !important; position: static !important; width: 210mm !important; }
+                    body.wcc-printing .wcc-print-root, body.wcc-printing .wcc-print-root * { visibility: visible !important; }
                     .wcc-print-page { page-break-after: always !important; break-after: page !important; width: 210mm !important; height: 297mm !important; overflow: hidden !important; }
                     .wcc-print-page:last-child { page-break-after: auto !important; break-after: auto !important; }
                     #dc-print-canvas {

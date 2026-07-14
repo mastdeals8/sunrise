@@ -676,6 +676,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
   const [standaloneDcEditor, setStandaloneDcEditor] = useState(false);
   const [estimatePreviewMode, setEstimatePreviewMode] = useState<"estimate" | "project">("estimate");
   const [projectDashboardInitialTab, setProjectDashboardInitialTab] = useState<"overview" | "po" | "execution" | "documents" | "invoice">("overview");
+  const [wccSaveKey, setWccSaveKey] = useState(0);
   
   // PO Upload Panel State
   const [showPoModal, setShowPoModal] = useState(false);
@@ -2486,7 +2487,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
             path: saved,
             signedUrl: displayUrl,
             widthPct: 100,
-            objectFit: "fill",
+            objectFit: "contain",
             objectPosition: "center center",
             caption: "",
             xPct: x,
@@ -2525,7 +2526,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
           uploaded.push({
             path: data.filePath,
             widthPct: 100,
-            objectFit: "fill",
+            objectFit: "contain",
             objectPosition: "center center",
             caption: "",
             xPct: x,
@@ -3130,6 +3131,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
         markWccPristine();
         await reloadSelectedChallans();
         fetchData();
+        setWccSaveKey(k => k + 1);
         return true;
       }
       return false;
@@ -4143,6 +4145,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
             await fetchData();
             await fetchLedgerData();
           }}
+          externalRefreshKey={wccSaveKey}
           initialTab={projectDashboardInitialTab as any}
         />
       )}

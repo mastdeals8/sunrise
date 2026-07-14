@@ -106,6 +106,7 @@ interface ProjectWorkspaceProps {
   onPoUpload: (est: Estimate) => void;
   onRefresh: () => void;
   initialTab?: ProjectTab;
+  externalRefreshKey?: number;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -1882,6 +1883,7 @@ const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({
   onPoUpload,
   onRefresh,
   initialTab = "overview",
+  externalRefreshKey = 0,
 }) => {
   const [activeTab, setActiveTab] = React.useState<ProjectTab>(initialTab);
   const [data, setData] = React.useState<ProjectData | null>(null);
@@ -1914,7 +1916,7 @@ const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({
     } finally {
       setLoading(false);
     }
-  }, [estimate?.id, token, refreshKey]);
+  }, [estimate?.id, token, refreshKey, externalRefreshKey]);
 
   React.useEffect(() => { load(); }, [load]);
 
