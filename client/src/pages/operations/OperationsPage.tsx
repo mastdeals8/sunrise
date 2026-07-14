@@ -3188,7 +3188,10 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     // challan cache — and, symmetrically, lets an unrelated challan refresh
     // silently replace the editor's array from under the user. Deep-copy the
     // photo objects so this editor owns its own array of its own objects.
-    setDcPhotos(Array.isArray(meta.photos) ? (normalizeWccPhotos(meta.photos) as WccPhoto[]).map((p: WccPhoto) => ({ ...p })) : []);
+    // Deep-copy photos into editor state. normalizeWccPhotos would strip signedUrl
+    // (correct for saves), but here we want to KEEP it so photos display immediately
+    // without a second round-trip — attachPhotoSignedUrls already signed them on load.
+    setDcPhotos(Array.isArray(meta.photos) ? meta.photos.filter((p: any) => p?.path).map((p: WccPhoto) => ({ ...p })) : []);
     // Clone so wccChecklist state never aliases dc.metadata.checklist in the
     // challans cache (same isolation guarantee applied to dcPhotos above).
     setWccChecklist(meta.checklist ? { ...meta.checklist } : { window: true, inStore: false, nso: false, repairing: false, materialTransfer: false });
