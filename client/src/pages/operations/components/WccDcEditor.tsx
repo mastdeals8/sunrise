@@ -242,7 +242,7 @@ export const WccPictureArea: React.FC<{
                   alt={p.caption || `proof ${idx + 1}`}
                   draggable={false}
                   className="w-full h-full"
-                  style={{ objectFit: (p.objectFit as any) || "fill", objectPosition: p.objectPosition || "center", pointerEvents: "none" }}
+                  style={{ objectFit: p.objectFit || "cover", objectPosition: p.objectPosition || "center", pointerEvents: "none" }}
                 />
                 {isSelected && (
                   <>
@@ -465,7 +465,6 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
     [selectedEstimate, selectedEstimateItems],
   );
   const [bulkSelectedStoreIds, setBulkSelectedStoreIds] = React.useState<number[]>([]);
-  const [copyToSearch, setCopyToSearch] = React.useState("");
   const selectedStoreIdSet = React.useMemo(() => new Set(bulkSelectedStoreIds), [bulkSelectedStoreIds]);
   const selectableStores = React.useMemo(
     () => orderedSelectedStoreKeys
@@ -473,12 +472,6 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
       .filter(Boolean),
     [orderedSelectedStoreKeys, stores],
   );
-  const filteredCopyStores = React.useMemo(() => {
-    const q = copyToSearch.trim().toLowerCase();
-    return selectableStores.filter((s: any) =>
-      !q || s.name?.toLowerCase().includes(q) || s.storeCode?.toLowerCase().includes(q) || s.city?.toLowerCase().includes(q)
-    );
-  }, [selectableStores, copyToSearch]);
   React.useEffect(() => {
     setBulkSelectedStoreIds((prev) => prev.filter((id) => selectableStores.some((s: any) => s.id === id)));
   }, [selectableStores]);
@@ -1045,35 +1038,13 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
                             <label className="block font-bold text-slate-500 uppercase mb-1 text-[10px]">Store</label>
                             <select
                               value={dcWccStoreScope}
-                              onChange={(e) => {
-                                const newScopeVal = e.target.value;
-                                const storeId = newScopeVal ? Number(newScopeVal) : null;
-                                const existingWcc = storeId
-                                  ? activeWccsForEditor.find((dc: any) => {
-                                      const metaStoreId = Number(dc.metadata?.storeId || 0);
-                                      const targetStore = stores.find((s: any) => s.id === storeId);
-                                      return metaStoreId === storeId ||
-                                        (targetStore?.storeCode && dc.metadata?.storeCode === targetStore.storeCode);
-                                    })
-                                  : null;
-                                if (existingWcc && navigateWccEditor) {
-                                  navigateWccEditor(existingWcc.id);
-                                } else if (props.handleNewStoreScope) {
-                                  props.handleNewStoreScope(newScopeVal);
-                                } else {
-                                  setDcWccStoreScope(newScopeVal);
-                                }
-                              }}
+                              onChange={(e) => setDcWccStoreScope(e.target.value)}
                               className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-slate-800 focus:outline-none focus:border-purple-500 text-xs font-bold"
                             >
                               <option value="">(estimate primary store)</option>
                               {orderedSelectedStoreKeys.map(sid => {
                                 const tStore = stores.find(s => s.id === Number(sid));
-                                const hasWcc = activeWccsForEditor.some((dc: any) =>
-                                  Number(dc.metadata?.storeId || 0) === Number(sid) ||
-                                  (tStore?.storeCode && dc.metadata?.storeCode === tStore.storeCode)
-                                );
-                                return <option key={sid} value={sid}>{tStore?.storeCode ? `${tStore.storeCode} — ` : ""}{tStore?.name || `Store ${sid}`}{hasWcc ? " ✓" : ""}</option>;
+                                return <option key={sid} value={sid}>{tStore?.storeCode ? `${tStore.storeCode} — ` : ""}{tStore?.name || `Store ${sid}`}</option>;
                               })}
                             </select>
                           </div>
@@ -1108,7 +1079,7 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
                           </div>
                         )}
 
-                        {/* 4. Generate All + store selection list for Copy To */}
+                        {/* 4 + 5. Bulk actions — visible only for multi-store ABFRL estimates */}
                         {dcFormat === "ABFRL" && orderedSelectedStoreKeys.length >= 2 && (
                           <div className="space-y-2 pt-3 border-t border-slate-100">
                             <button
@@ -1120,31 +1091,21 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
                             >
                               Generate All ({orderedSelectedStoreKeys.length} WCCs)
                             </button>
-                            <div>
-                              <label className="block font-bold text-slate-500 uppercase text-[10px] mb-1">Select Stores to Copy To</label>
-                              <div className="max-h-28 overflow-y-auto border border-slate-200 rounded divide-y divide-slate-100">
-                                {filteredCopyStores.length === 0 ? (
-                                  <div className="px-2 py-2 text-[10px] text-slate-400 italic">No stores match</div>
-                                ) : filteredCopyStores.map((s: any) => {
-                                  const isCurrentStore = Number(dcWccStoreScope || 0) === s.id;
-                                  return (
-                                    <label key={s.id} className={`flex items-center gap-2 px-2 py-1 text-[11px] cursor-pointer ${isCurrentStore ? "opacity-30 pointer-events-none" : "hover:bg-purple-50"}`}>
-                                      <input
-                                        type="checkbox"
-                                        checked={selectedStoreIdSet.has(s.id)}
-                                        onChange={() => toggleBulkStore(s.id)}
-                                        disabled={isCurrentStore}
-                                        className="accent-purple-600 flex-shrink-0"
-                                      />
-                                      <span className="truncate">{s.storeCode ? `${s.storeCode} — ` : ""}{s.name}</span>
-                                      {activeWccsForEditor.some((dc: any) => Number(dc.metadata?.storeId) === s.id) && (
-                                        <span className="ml-auto text-[9px] text-emerald-600 font-bold flex-shrink-0">✓</span>
-                                      )}
-                                    </label>
-                                  );
-                                })}
-                              </div>
-                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (dcPhotos.length === 0) { alert("Add photos first."); return; }
+                                const remaining = Math.max(0, activeWccsForEditor.length - 1);
+                                if (remaining === 0) { alert("No other stores to apply to."); return; }
+                                if (!confirm(`Apply these ${dcPhotos.length} image${dcPhotos.length === 1 ? "" : "s"} to ${remaining} remaining store${remaining === 1 ? "" : "s"}?`)) return;
+                                handleApplyCurrentPhotosToAllWccs();
+                              }}
+                              disabled={dcPhotos.length === 0}
+                              className="w-full py-2 px-3 bg-white hover:bg-purple-50 disabled:opacity-40 border border-purple-200 text-purple-700 text-[11px] font-bold rounded-lg transition flex items-center justify-center gap-1.5"
+                            >
+                              <Copy className="w-3.5 h-3.5" />
+                              Apply Current Images To All
+                            </button>
                           </div>
                         )}
 
@@ -1206,64 +1167,31 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
                       </div>
                     </div>
 
-                    <div className="space-y-2 pt-3 border-t border-slate-100 bg-white print:hidden">
-                      {dcFormat === "ABFRL" && orderedSelectedStoreKeys.length >= 2 && (
-                        <div className="space-y-1.5">
-                          <input
-                            type="text"
-                            value={copyToSearch}
-                            onChange={(e) => setCopyToSearch(e.target.value)}
-                            placeholder="Search stores to copy to…"
-                            className="w-full px-2 py-1.5 border border-slate-200 rounded text-[11px] focus:outline-none focus:border-purple-400"
-                          />
-                          <div className="flex gap-1.5">
-                            <button
-                              type="button"
-                              disabled={dcPhotos.length === 0 || bulkSelectedStoreIds.length === 0}
-                              onClick={() => {
-                                if (!dcPhotos.length) { alert("Add photos first."); return; }
-                                if (!bulkSelectedStoreIds.length) { alert("Select stores above."); return; }
-                                handleApplyCurrentPhotosToSelectedWccs && handleApplyCurrentPhotosToSelectedWccs(bulkSelectedStoreIds);
-                              }}
-                              className="flex-1 h-8 border border-purple-200 bg-white hover:bg-purple-50 disabled:opacity-40 text-purple-700 text-[10px] font-bold rounded-lg transition flex items-center justify-center gap-1"
-                            >
-                              <Copy className="w-3 h-3" />
-                              Copy To Selected ({bulkSelectedStoreIds.length})
-                            </button>
-                            <button
-                              type="button"
-                              disabled={dcPhotos.length === 0}
-                              onClick={() => {
-                                if (!dcPhotos.length) { alert("Add photos first."); return; }
-                                const others = Math.max(0, activeWccsForEditor.length - 1);
-                                if (!others) { alert("No other stores to copy to."); return; }
-                                if (!confirm(`Copy to ALL ${others} other store${others === 1 ? "" : "s"}?`)) return;
-                                handleApplyCurrentPhotosToAllWccs && handleApplyCurrentPhotosToAllWccs();
-                              }}
-                              className="flex-1 h-8 border border-purple-200 bg-white hover:bg-purple-50 disabled:opacity-40 text-purple-700 text-[10px] font-bold rounded-lg transition flex items-center justify-center gap-1"
-                            >
-                              <Copy className="w-3 h-3" />
-                              Copy To All
-                            </button>
-                          </div>
-                        </div>
-                      )}
-                      <div className="flex gap-2">
+                    <div className="flex gap-2 pt-4 border-t border-slate-100 bg-white print:hidden">
+                      <button
+                        type="button"
+                        onClick={() => { setWccPrintMode && setWccPrintMode("current"); window.print(); }}
+                        className="flex-1 h-9 px-3 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-medium rounded-lg transition-all flex items-center justify-center gap-1.5"
+                      >
+                        <Printer className="w-4 h-4 text-slate-400" />
+                        Print
+                      </button>
+                      {activeWccsForEditor.length > 1 && (
                         <button
                           type="button"
-                          onClick={() => { setWccPrintMode && setWccPrintMode("current"); window.print(); }}
-                          className="h-9 px-3 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-medium rounded-lg transition-all flex items-center gap-1.5"
+                          onClick={printAllWccs}
+                          className="flex-1 h-9 px-3 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-medium rounded-lg transition-all flex items-center justify-center gap-1.5"
                         >
                           <Printer className="w-4 h-4 text-slate-400" />
-                          Print
+                          Print All
                         </button>
-                        <button
-                          type="submit"
-                          className="flex-1 h-9 px-3 bg-orange-600 hover:bg-orange-700 text-white text-xs font-semibold rounded-lg transition-all shadow-sm"
-                        >
-                          Save WCC
-                        </button>
-                      </div>
+                      )}
+                      <button
+                        type="submit"
+                        className="flex-1 h-9 px-3 bg-orange-600 hover:bg-orange-700 text-white text-xs font-semibold rounded-lg transition-all shadow-sm"
+                      >
+                        Save
+                      </button>
                     </div>
                   </form>
 

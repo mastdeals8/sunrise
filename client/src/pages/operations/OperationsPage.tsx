@@ -2429,25 +2429,14 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
           return Number.isFinite(a) && a > 0 ? a : 1;
         } catch { return 1; }
       };
-      // Place each photo respecting its natural aspect ratio.
-      // First photo (tileIndex=0) is centred at max 90%×80%; subsequent photos tile in a 2-col grid at max 44%×40%.
-      const placementFromAspect = (aspect: number, tileIndex: number): { x: number; y: number; w: number; h: number } => {
-        if (tileIndex === 0) {
-          const maxW = 90, maxH = 80;
-          let w = maxW, h = w / aspect;
-          if (h > maxH) { h = maxH; w = h * aspect; }
-          if (w > maxW) { w = maxW; h = w / aspect; }
-          if (!Number.isFinite(w) || w <= 0 || h <= 0) { w = 80; h = 60; }
-          return { x: (100 - w) / 2, y: (100 - h) / 2, w, h };
-        }
-        const maxW = 44, maxH = 40;
-        let w = maxW, h = w / aspect;
-        if (h > maxH) { h = maxH; w = h * aspect; }
-        if (w > maxW) { w = maxW; h = w / aspect; }
-        if (!Number.isFinite(w) || w <= 0 || h <= 0) { w = 40; h = 36; }
-        const col = (tileIndex - 1) % 2;
-        const row = Math.floor((tileIndex - 1) / 2);
-        return { x: 2 + col * 50, y: 2 + row * 46, w, h };
+      // Pick w/h to match a target width while respecting the natural aspect ratio.
+      const sizeFromAspect = (aspect: number): { w: number; h: number } => {
+        const targetW = 46;
+        let w = targetW;
+        let h = targetW / aspect;
+        if (h > 60) { h = 60; w = h * aspect; }
+        if (w > 60) { w = 60; h = w / aspect; }
+        return { w, h };
       };
 
       if (isBoltMode) {
@@ -2459,21 +2448,25 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
           const safeName = arr[i].name.replace(/[^a-zA-Z0-9._-]/g, "_");
           const storagePath = `estimate-${eid}/${sc}/${Date.now()}-${safeName}`;
           const aspect = await readAspect(arr[i]);
-          const tileIndex = startCount + i;
-          const { x, y, w, h } = placementFromAspect(aspect, tileIndex);
+          const { w, h } = sizeFromAspect(aspect);
           const { storagePath: saved, displayUrl } = await uploadToStorage("execution-documents", storagePath, arr[i]);
+          // Tile new photos in a soft grid so they don't all stack on top of each other.
+          const tileIndex = startCount + i;
+          const cols = 2;
+          const col = tileIndex % cols;
+          const row = Math.floor(tileIndex / cols);
           // Persist the raw storage path — never the signed URL (expires in 1h).
           // displayUrl is kept only as a transient signedUrl so the just-uploaded
           // image renders immediately without a round-trip to createSignedUrls.
           uploaded.push({
             path: saved,
             signedUrl: displayUrl,
-            widthPct: 100,
-            objectFit: "fill",
+            widthPct: 50,
+            objectFit: "cover",
             objectPosition: "center center",
             caption: "",
-            xPct: x,
-            yPct: y,
+            xPct: 2 + col * 49,
+            yPct: 2 + row * 49,
             wPct: w,
             hPct: h,
             z: tileIndex + 1,
@@ -2503,16 +2496,20 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
           if (!res.ok) continue;
           const data = await res.json();
           const aspect = await readAspect(arr[i]);
+          const { w, h } = sizeFromAspect(aspect);
+          // Tile new photos in a soft grid so they don't all stack on top of each other.
           const tileIndex = startCount + i;
-          const { x, y, w, h } = placementFromAspect(aspect, tileIndex);
+          const cols = 2;
+          const col = tileIndex % cols;
+          const row = Math.floor(tileIndex / cols);
           uploaded.push({
             path: data.filePath,
-            widthPct: 100,
-            objectFit: "fill",
+            widthPct: 50,
+            objectFit: "cover",
             objectPosition: "center center",
             caption: "",
-            xPct: x,
-            yPct: y,
+            xPct: 2 + col * 49,
+            yPct: 2 + row * 49,
             wPct: w,
             hPct: h,
             z: tileIndex + 1,
@@ -2521,7 +2518,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
       }
 
       if (uploaded.length > 0) {
-        setDcPhotos(prev => [...(normalizeWccPhotos(prev) as WccPhoto[]), ...uploaded]);
+        setDcPhotos(prev => normalizeWccPhotos([...prev, ...uploaded]) as WccPhoto[]);
         showSuccess(`${uploaded.length} image${uploaded.length > 1 ? "s" : ""} uploaded.`);
       }
     } catch (err) {
@@ -3383,28 +3380,6 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     }
     const next = activeWccsForEditor.find(dc => dc.id === dcId) || challans.find(dc => dc.id === dcId);
     if (next) await openDcForEdit(next);
-  };
-
-  const handleNewStoreScope = async (newScopeVal: string) => {
-    if (editingDcId && isWccDirty) {
-      const ok = await handleDcSubmit({ preventDefault: () => {} }, { keepOpen: true });
-      if (!ok) {
-        const proceed = window.confirm("Could not save the current WCC. Switch anyway?");
-        if (!proceed) return;
-      }
-    }
-    setEditingDcId(null);
-    setDcPhotos([]);
-    setDcNumberVal("");
-    setWccVisualBrief("");
-    setWccShortageNotes("");
-    setWccAuthPerson("");
-    setDcRemarks("");
-    setDcDeliveredBy("Sunrise logistics team");
-    setDcReceivedBy("");
-    setWccChecklist({ window: true, inStore: false, nso: false, repairing: false, materialTransfer: false });
-    setDcWccStoreScope(newScopeVal);
-    markWccPristine();
   };
 
   const printAllWccs = () => {
@@ -4355,7 +4330,6 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
           editingDcId,
           activeWccsForEditor,
           navigateWccEditor,
-          handleNewStoreScope,
           printAllWccs,
           wccPrintMode,
           setWccPrintMode,
