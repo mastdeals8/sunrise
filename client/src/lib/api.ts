@@ -1116,23 +1116,13 @@ export async function updateDeliveryChallan(
     if (!res.ok) throw new Error((await res.json()).message ?? "Failed to update delivery challan");
     return res.json();
   }
-  // Bolt mode: Supabase gateway returns 405 for path-suffixed edge function calls
-  // (e.g. /functions/v1/dc-save/6). Write directly via PostgREST instead.
-  const toSnake = (s: string) => s.replace(/([A-Z])/g, "_$1").toLowerCase();
-  const updates: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(cleaned)) {
-    updates[toSnake(k)] = v;
-  }
-  if (!updates.delivery_date) updates.delivery_date = new Date().toISOString();
-  const { data: updated, error } = await supabase
-    .from("delivery_challans")
-    .update(updates)
-    .eq("id", id)
-    .select()
-    .single();
-  if (error) throw new Error(error.message ?? "Failed to update delivery challan");
-  if (!updated) throw new Error("Delivery challan not found");
-  return toCamel(updated);
+  const res = await edgeFetch("dc-save", token, {
+    method: "PATCH",
+    pathSuffix: `/${id}`,
+    body: JSON.stringify(cleaned),
+  });
+  if (!res.ok) throw new Error((await res.json()).message ?? "Failed to update delivery challan");
+  return res.json();
 }
 
 // ─── Master Data (clients / brands / stores / products / billing-profiles) ────
