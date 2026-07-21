@@ -35,7 +35,7 @@ Deno.serve(async (req: Request) => {
 
     // URL pattern: /master-data-save/{entity}[/{id}]
     const url = new URL(req.url);
-    const parts = url.pathname.replace(/^\/functions\/v1\/master-data-save\/?/, "").split("/").filter(Boolean);
+    const parts = url.pathname.replace(/^\/(functions\/v1\/)?master-data-save\/?/, "").split("/").filter(Boolean);
     const entity = parts[0] ?? "";
     const id = parts[1] ? parseInt(parts[1], 10) : null;
     const method = req.method;
