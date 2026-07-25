@@ -3,11 +3,12 @@ import { formatCurrency } from "@/utils/format";
 import { useAuth } from "../contexts/AuthContext";
 import { isAblblFormat } from "../../../shared/textFormat";
 import { companyAssetUrl } from "../utils/companyAssets";
-import { Package, Search, Printer, ChevronUp, ChevronDown, Check, Download } from "lucide-react";
+import { Package, Search, Printer, Check, FileArchive, Loader2 } from "lucide-react";
+import { zipSync, strToU8 } from "fflate";
 import EstimateDocument from "../components/EstimateDocument";
 import type { Client, Brand, Product, Store } from "./operations/types";
 import { isBoltMode } from "../lib/supabase";
-import { fetchInvoices, fetchCompanySettings, fetchEstimateById, fetchEstimateItems, fetchDeliveryChallansForEstimate, fetchPaymentsForInvoice, fetchClients, fetchStores, fetchProducts, fetchExecutionDocuments, getExecutionDocumentSignedUrl, openExecutionDocument } from "../lib/api";
+import { fetchInvoices, fetchCompanySettings, fetchEstimateById, fetchEstimateItems, fetchDeliveryChallansForEstimate, fetchPaymentsForInvoice, fetchClients, fetchStores, fetchProducts, fetchExecutionDocuments, getExecutionDocumentSignedUrl } from "../lib/api";
 
 interface Invoice {
   id: number;
@@ -257,15 +258,51 @@ const InvoicePacketPage: React.FC = () => {
 
   const doPrint = () => window.print();
 
-  const downloadPage = (page: PacketPage) => {
-    if (page.storagePath && packet?.estimate?.id) {
-      void openExecutionDocument(page.storagePath, true, packet.estimate.id, page.kind === "po").catch(error => alert(page.kind === "po" ? "Purchase Order not found" : error.message));
-    } else if (page.kind === "invoice" || page.kind === "estimate") {
-      const url = new URL(window.location.href);
-      url.searchParams.set("pdfMode", page.kind);
-      window.open(url.toString(), "_blank", "noopener,noreferrer");
-    } else {
-      alert("Use Print Packet and select this page to save the generated document as PDF.");
+  const [zipping, setZipping] = useState(false);
+
+  const downloadZip = async () => {
+    const filePages = included.filter(p => p.filePath);
+    if (filePages.length === 0) {
+      alert("No downloadable files in this packet. Use Print Packet for generated ERP pages (invoice / estimate / DC).");
+      return;
+    }
+    setZipping(true);
+    try {
+      const files: Record<string, Uint8Array> = {};
+      let n = 0;
+      const manifest: string[] = [`Invoice Packet — ${packet?.invoice?.invoiceNumber || selectedId}`, "", "Contents (in business order):", ""];
+      for (const p of filePages) {
+        n += 1;
+        const res = await fetch(p.filePath!);
+        if (!res.ok) { manifest.push(`${String(n).padStart(2, "0")}. [SKIPPED — fetch failed] ${p.label}`); continue; }
+        const buf = new Uint8Array(await res.arrayBuffer());
+        const ext = (p.mimeType === "application/pdf" || /\.pdf$/i.test(p.filePath!)) ? ".pdf"
+          : /\.(png|jpe?g|gif|webp)$/i.test(p.filePath!) ? "." + (p.filePath!.split(".").pop() || "jpg")
+          : "";
+        const safe = p.label.replace(/[^a-zA-Z0-9-_ ]/g, "").replace(/\s+/g, "_").slice(0, 50);
+        const name = `${String(n).padStart(2, "0")}_${safe}${ext}`;
+        files[name] = buf;
+        manifest.push(`${String(n).padStart(2, "0")}. ${p.label}`);
+      }
+      // Generated (print-only) pages noted in manifest
+      const printOnly = included.filter(p => !p.filePath);
+      if (printOnly.length) {
+        manifest.push("", "Generated ERP pages (use Print Packet → Save as PDF):", "");
+        for (const p of printOnly) { n += 1; manifest.push(`${String(n).padStart(2, "0")}. ${p.label}`); }
+      }
+      files["00_PACKET_CONTENTS.txt"] = strToU8(manifest.join("\n"));
+      const zipped = zipSync(files);
+      const blob = new Blob([zipped], { type: "application/zip" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `Invoice_Packet_${packet?.invoice?.invoiceNumber || selectedId}.zip`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      alert("ZIP download failed: " + (err?.message || err));
+    } finally {
+      setZipping(false);
     }
   };
 
@@ -343,16 +380,17 @@ const InvoicePacketPage: React.FC = () => {
               <div className="px-4 py-2 border-b border-slate-200 bg-slate-50 flex items-center justify-between gap-2">
                 <h3 className="font-bold text-sm shrink-0">Packet Pages ({included.length})</h3>
                 <div className="flex gap-1.5">
-                  <button onClick={doPrint} className="flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold border border-slate-200">
-                    <Printer className="w-3 h-3" /> Print
+                  <button onClick={doPrint} className="flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold">
+                    <Printer className="w-3 h-3" /> Print / Save PDF
                   </button>
                   <button
-                    onClick={() => document.getElementById("packet-download-list")?.scrollIntoView({ behavior: "smooth" })}
-                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-orange-600 hover:bg-orange-700 text-white text-xs font-semibold"
-                    title="Download packet documents individually"
+                    onClick={downloadZip}
+                    disabled={zipping}
+                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-orange-600 hover:bg-orange-700 disabled:opacity-60 text-white text-xs font-semibold"
+                    title="Download all packet files as a ZIP in business order"
                   >
-                    <Download className="w-3 h-3" />
-                    Download Documents
+                    {zipping ? <Loader2 className="w-3 h-3 animate-spin" /> : <FileArchive className="w-3 h-3" />}
+                    Download ZIP
                   </button>
                 </div>
               </div>
@@ -365,7 +403,6 @@ const InvoicePacketPage: React.FC = () => {
                     <div className="flex-1 text-xs truncate" title={p.label}>{idx + 1}. {p.label}</div>
                     <button onClick={() => movePage(p.id, -1)} className="text-slate-400 hover:text-slate-900"><ChevronUp className="w-3 h-3" /></button>
                     <button onClick={() => movePage(p.id, 1)} className="text-slate-400 hover:text-slate-900"><ChevronDown className="w-3 h-3" /></button>
-                    <button onClick={() => downloadPage(p)} title={`Download ${p.label}`} className="text-blue-500 hover:text-blue-800"><Download className="w-3 h-3" /></button>
                   </div>
                 ))}
               </div>
@@ -399,11 +436,6 @@ const InvoicePacketPage: React.FC = () => {
                   </div>
                 </div>
               ))}
-              <div id="packet-download-list" className="print:hidden bg-white border border-slate-200 rounded-lg p-4">
-                <h3 className="font-bold text-sm">Download Documents</h3>
-                <p className="text-xs text-slate-500 mb-3">Original files use verified keys and fresh signed URLs. Generated ERP pages open in the same A4 print pipeline.</p>
-                <div className="grid sm:grid-cols-2 gap-2">{included.map(page => <button key={`download-${page.id}`} onClick={() => downloadPage(page)} className="text-left px-3 py-2 border rounded text-xs hover:bg-slate-50 flex items-center gap-2"><Download className="w-3 h-3 text-blue-600"/><span className="truncate">{page.label}</span></button>)}</div>
-              </div>
             </div>
           )}
         </div>
