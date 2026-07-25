@@ -5,7 +5,7 @@ import { isAblblFormat } from "../../../shared/textFormat";
 import { isServiceLineType } from "./operations/utils/estimateCalculations";
 import { companyAssetUrl } from "../utils/companyAssets";
 import { Package, Search, Printer, Loader as Loader2, FileDown, TriangleAlert as AlertTriangle } from "lucide-react";
-import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
+import { PDFDocument } from "pdf-lib";
 import html2canvas from "html2canvas";
 import EstimateDocument from "../components/EstimateDocument";
 import type { Client, Brand, Product, Store } from "./operations/types";
@@ -218,7 +218,6 @@ const InvoicePacketPage: React.FC = () => {
             const storeCode = storeCodeFor(dc);
             const store = (data.stores || []).find((s: any) => String(s.code || s.storeCode || "") === storeCode);
             const storeLabel = store?.name ? `${store.name}${storeCode ? ` (${storeCode})` : ""}` : (storeCode || "Project");
-            list.push({ id: `dc-${dc.id}`, label: `${storeLabel} — DC / WCC ${dc.dcNumber}`, kind: "dc", storeCode, included: true });
             const owned = docs.filter((d: any) => Number(d.deliveryChallanId) === Number(dc.id) || (storeCode && storeCodeFor(d) === storeCode));
             const legacy = [
               dc.signedChallanPath && { id: `legacy-signed-${dc.id}`, documentType: isAblblFormat(dc.clientFormat) ? "signed_wcc" : "signed_dc", storagePath: dc.signedChallanPath },
@@ -273,10 +272,9 @@ const InvoicePacketPage: React.FC = () => {
     if (!pages.some(p => p.kind === "po" && p.filePath)) coreMissing.push("Purchase Order");
     if (!pages.some(p => p.kind === "estimate")) coreMissing.push("Estimate");
     if (coreMissing.length) gaps.push({ store: "Project-level", missing: coreMissing });
-    const dcPages = pages.filter(p => p.kind === "dc");
-    for (const dc of dcPages) {
-      const sc = dc.storeCode;
-      const storeLabel = dc.label.split(" — ")[0] || sc || "Store";
+    const storeCodes = new Set(pages.filter(p => p.storeCode).map(p => p.storeCode));
+    for (const sc of storeCodes) {
+      const storeLabel = pages.find(p => p.storeCode === sc)?.label?.split(" — ")[0] || sc || "Store";
       const storeMissing: string[] = [];
       if (!pages.some(p => p.storeCode === sc && p.kind === "photo" && p.filePath)) storeMissing.push("Installation Photos");
       if (!pages.some(p => p.storeCode === sc && p.kind === "extra" && p.filePath && /signed/i.test(p.label))) storeMissing.push("Signed WCC");
@@ -300,27 +298,10 @@ const InvoicePacketPage: React.FC = () => {
       const A4_W = 595.28;
       const A4_H = 841.89;
       const MARGIN = 24;
-      const helv = await pdf.embedFont(StandardFonts.Helvetica);
-      const helvBold = await pdf.embedFont(StandardFonts.HelveticaBold);
       const invNum = packet.invoice?.invoiceNumber || String(selectedId);
-      const projNum = packet.estimate?.estimateNumber || packet.estimate?.projectNumber || "—";
-
-      let lastStoreCode: string | null = null;
-      const separatorIndices: number[] = [];
 
       for (const p of included) {
         try {
-          if (p.kind === "dc" && p.storeCode && p.storeCode !== lastStoreCode) {
-            lastStoreCode = p.storeCode;
-            const sepPage = pdf.addPage([A4_W, A4_H]);
-            const sepLabel = p.label.split(" — ")[0] || p.storeCode || "Store";
-            sepPage.drawRectangle({ x: 0, y: A4_H / 2 - 40, width: A4_W, height: 80, color: rgb(0.95, 0.95, 0.95) });
-            sepPage.drawText("STORE", { x: A4_W / 2 - helvBold.widthOfTextAtSize("STORE", 14) / 2, y: A4_H / 2 + 10, size: 14, font: helvBold, color: rgb(0.3, 0.3, 0.3) });
-            const labelText = sepLabel.length > 60 ? sepLabel.slice(0, 60) : sepLabel;
-            sepPage.drawText(labelText, { x: A4_W / 2 - helvBold.widthOfTextAtSize(labelText, 12) / 2, y: A4_H / 2 - 15, size: 12, font: helvBold, color: rgb(0.2, 0.2, 0.2) });
-            separatorIndices.push(pdf.getPageCount() - 1);
-          }
-
           if (p.filePath) {
             const res = await fetch(p.filePath);
             if (!res.ok) continue;
@@ -347,20 +328,30 @@ const InvoicePacketPage: React.FC = () => {
             const el = document.querySelector(`[data-packet-page="${p.id}"]`) as HTMLElement | null;
             if (!el) continue;
             const canvas = await html2canvas(el, {
-              scale: 2,
+              scale: 3,
               useCORS: true,
               backgroundColor: "#ffffff",
               logging: false,
+              windowWidth: 794,
+              onclone: (doc: Document) => {
+                const node = doc.querySelector(`[data-packet-page="${p.id}"]`) as HTMLElement | null;
+                if (!node) return;
+                node.style.width = "794px";
+                node.style.padding = "0";
+                node.style.margin = "0";
+                node.style.maxWidth = "none";
+                node.style.overflow = "visible";
+                const sheet = node.querySelector(".a4-sheet") as HTMLElement | null;
+                if (sheet) { sheet.style.width = "794px"; sheet.style.minHeight = "1123px"; }
+              },
             });
             const pngBytes = canvas.toDataURL("image/png");
             const img = await pdf.embedPng(pngBytes);
-            const maxW = A4_W - MARGIN * 2;
-            const maxH = A4_H - MARGIN * 2;
-            const scale = Math.min(maxW / img.width, maxH / img.height);
+            const scale = Math.min(A4_W / img.width, A4_H / img.height);
             const drawW = img.width * scale;
             const drawH = img.height * scale;
             const page = pdf.addPage([A4_W, A4_H]);
-            page.drawImage(img, { x: (A4_W - drawW) / 2, y: (A4_H - drawH) / 2, width: drawW, height: drawH });
+            page.drawImage(img, { x: (A4_W - drawW) / 2, y: A4_H - drawH, width: drawW, height: drawH });
           }
         } catch (err) {
           console.warn(`[packet-pdf] Failed to add page ${p.label}:`, err);
@@ -371,20 +362,6 @@ const InvoicePacketPage: React.FC = () => {
         alert("No pages could be assembled into a PDF. Check that documents are loaded.");
         return;
       }
-
-      const totalPages = pdf.getPageCount();
-      const skip = new Set(separatorIndices);
-      pdf.getPages().forEach((page, i) => {
-        if (skip.has(i)) return;
-        const w = page.getWidth();
-        const h = page.getHeight();
-        const headerText = `Invoice ${invNum}  |  Project ${projNum}`;
-        const footerText = `Page ${i + 1} of ${totalPages}`;
-        try {
-          page.drawText(headerText, { x: MARGIN, y: h - 14, size: 7, font: helv, color: rgb(0.5, 0.5, 0.5) });
-          page.drawText(footerText, { x: w - MARGIN - helv.widthOfTextAtSize(footerText, 7), y: 10, size: 7, font: helv, color: rgb(0.5, 0.5, 0.5) });
-        } catch { /* embedded PDF page with incompatible encoding */ }
-      });
 
       const pdfBytes = await pdf.save();
       const blob = new Blob([pdfBytes as BlobPart], { type: "application/pdf" });
@@ -535,7 +512,6 @@ const InvoicePacketPage: React.FC = () => {
                   <div className="p-6 print:p-0" data-packet-page={p.id}>
                     {p.kind === "invoice" && <InvoiceFrontPage packet={packet} sellerProfile={sellerProfile} assetToken={token} />}
                     {p.kind === "estimate" && <EstimateSummary packet={packet} sellerProfile={sellerProfile} assetToken={token} />}
-                    {p.kind === "dc" && <DcSummary packet={packet} dcId={parseInt(p.id.split("-")[1], 10)} sellerProfile={sellerProfile} assetToken={token} />}
                     {(p.kind === "po" || p.kind === "photo" || p.kind === "transport" || p.kind === "extra") && (
                       <DocumentPreview label={p.label} filePath={p.filePath} mimeType={p.mimeType} isPurchaseOrder={p.kind === "po"} />
                     )}
@@ -640,47 +616,6 @@ const EstimateSummary: React.FC<{ packet: PacketData; sellerProfile: any; assetT
       sellerProfile={sellerProfile}
       assetToken={assetToken}
     />
-  );
-};
-
-const DcSummary: React.FC<{ packet: PacketData; dcId: number; sellerProfile: any; assetToken?: string | null }> = ({ packet, dcId, sellerProfile, assetToken }) => {
-  const dc = packet.challans.find(c => c.id === dcId);
-  if (!dc) return <div className="text-center text-slate-500">DC not found.</div>;
-  const isWcc = isAblblFormat(dc.clientFormat);
-  const companyName = sellerProfile?.name || "Sunrise Media";
-  const logoSrc = companyAssetUrl(sellerProfile?.logoPath, assetToken);
-  const signatureStampSrc = companyAssetUrl(sellerProfile?.signatureStampPath, assetToken);
-  return (
-    <div className="text-slate-900 text-sm">
-      <div className="border-b-2 border-orange-600 pb-2 mb-3 flex items-center justify-between">
-        {logoSrc ? (
-          <img src={logoSrc} alt={companyName} className="h-7 w-auto max-w-[180px] object-contain" />
-        ) : (
-          <div className="text-sm font-black uppercase">{companyName}</div>
-        )}
-        <h2 className="text-sm font-bold uppercase tracking-wider text-slate-600">
-          {isWcc ? "Work Completion Certificate" : "Delivery Challan"}
-        </h2>
-      </div>
-      <h2 className="text-lg font-bold mb-2">
-        {isWcc ? "WORK COMPLETION CERTIFICATE" : "DELIVERY CHALLAN"}: <span className="font-mono">{dc.dcNumber}</span>
-      </h2>
-      <div className="grid grid-cols-2 gap-3 text-xs mb-3">
-        <div><span className="text-slate-500">Date:</span> {dc.deliveryDate ? new Date(dc.deliveryDate).toLocaleDateString("en-GB") : "—"}</div>
-        <div><span className="text-slate-500">Status:</span> {dc.status}</div>
-        <div><span className="text-slate-500">Delivered By:</span> {dc.deliveredBy || "—"}</div>
-        <div><span className="text-slate-500">Received By:</span> {dc.receivedBy || "—"}</div>
-      </div>
-      {dc.remarks && <p className="text-xs text-slate-600 mb-2"><b>Remarks:</b> {dc.remarks}</p>}
-      <p className="text-xs text-slate-500 italic">Signed challan, install photos, transport receipts attached as following pages.</p>
-      <div className="mt-6 text-right text-xs">
-        <div className="font-bold">For {companyName.toUpperCase()}</div>
-        <div className="h-14 flex items-center justify-end">
-          {signatureStampSrc && <img src={signatureStampSrc} alt="Signature and stamp" className="max-h-12 max-w-[150px] object-contain" />}
-        </div>
-        <div className="font-bold">Authorised Signatory</div>
-      </div>
-    </div>
   );
 };
 
