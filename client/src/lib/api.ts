@@ -357,35 +357,35 @@ export async function fetchExecutionDocuments(
   });
   if (!docs.length) return docs;
 
-  // Replace raw storage paths with 2-hour signed URLs so they can render in <img>/<a>.
-  // Reuse cached signed URLs (valid for up to 60 min past generation) to avoid
-  // generating unique URLs on every call — unique URLs bypass CDN cache.
-  const paths = docs.map((d: any) => d.filePath).filter(Boolean) as string[];
-  if (paths.length === 0) return docs;
-  try {
-    const stale: string[] = [];
-    const hitMap = new Map<string, string>();
-    for (const p of paths) {
-      const cached = _cachedSignedUrl(p);
-      if (cached) hitMap.set(p, cached);
-      else stale.push(p);
-    }
-    if (stale.length > 0) {
-      const { data: signed } = await supabase.storage
-        .from("execution-documents")
-        .createSignedUrls(stale, SIGNED_URL_TTL_S);
-      if (signed) {
-        for (const s of signed) {
-          if (s.path && s.signedUrl) {
-            _cacheSignedUrl(s.path, s.signedUrl);
-            hitMap.set(s.path, s.signedUrl);
-          }
-        }
-      }
-    }
-    return docs.map((d: any) => ({ ...d, storagePath: d.filePath, signedUrl: hitMap.get(d.filePath), filePath: hitMap.get(d.filePath) ?? d.filePath }));
-  } catch { /* return raw paths as fallback */ }
-  return docs;
+  // Never send historical URLs, local /uploads paths, or missing keys to the
+  // signing endpoint. Keep the raw value separately for repair/download flows.
+  const candidates = docs.map((doc: any) => ({ doc, raw: String(doc.filePath || ""), key: storageKeyFromValue(String(doc.filePath || "")) }));
+  const folders = new Map<string, Set<string>>();
+  for (const { key } of candidates) {
+    if (!key || key.startsWith("uploads/")) continue;
+    const slash = key.lastIndexOf("/");
+    const folder = slash >= 0 ? key.slice(0, slash) : "";
+    const name = slash >= 0 ? key.slice(slash + 1) : key;
+    if (!folders.has(folder)) folders.set(folder, new Set());
+    folders.get(folder)!.add(name);
+  }
+  const verified = new Set<string>();
+  await Promise.all(Array.from(folders.entries()).map(async ([folder, wanted]) => {
+    const { data, error } = await supabase.storage.from("execution-documents").list(folder, { limit: 1000 });
+    if (error) return;
+    for (const object of data || []) if (wanted.has(object.name)) verified.add(folder ? `${folder}/${object.name}` : object.name);
+  }));
+  const stale = Array.from(new Set(candidates.map(item => item.key).filter((key): key is string => Boolean(key && verified.has(key) && !_cachedSignedUrl(key)))));
+  const signedMap = new Map<string, string>();
+  if (stale.length) {
+    const { data } = await supabase.storage.from("execution-documents").createSignedUrls(stale, SIGNED_URL_TTL_S);
+    for (const item of data || []) if (item.path && item.signedUrl) { signedMap.set(item.path, item.signedUrl); _cacheSignedUrl(item.path, item.signedUrl); }
+  }
+  return candidates.map(({ doc, raw, key }) => {
+    if (!key || !verified.has(key)) return { ...doc, storagePath: raw, filePath: raw, documentMissing: true };
+    const signedUrl = _cachedSignedUrl(key) || signedMap.get(key);
+    return signedUrl ? { ...doc, storagePath: key, signedUrl, filePath: signedUrl } : { ...doc, storagePath: key, filePath: key, documentMissing: true };
+  });
 }
 
 export async function fetchExecutionStores(
@@ -1061,7 +1061,7 @@ async function attachPhotoSignedUrls<T extends { metadata?: any }>(rows: T[]): P
   for (const p of Array.from(paths)) {
     const cached = _cachedSignedUrl(p);
     if (cached) hitMap.set(p, cached);
-    else stale.push(p);
+    else if (await storageObjectExists(p)) stale.push(p);
   }
   if (stale.length > 0) {
     try {
@@ -1264,14 +1264,7 @@ export async function uploadExecutionDocument(
 
 /** Generate a 2-hour signed URL for a private execution-documents storage path. */
 export async function getExecutionDocumentDisplayUrl(storagePath: string): Promise<string> {
-  const cached = _cachedSignedUrl(storagePath);
-  if (cached) return cached;
-  const { data, error } = await supabase.storage
-    .from("execution-documents")
-    .createSignedUrl(storagePath, SIGNED_URL_TTL_S);
-  if (error) throw new Error(error.message);
-  _cacheSignedUrl(storagePath, data!.signedUrl);
-  return data!.signedUrl;
+  return getExecutionDocumentSignedUrl(storagePath);
 }
 
 function storageKeyFromValue(value: string): string | null {
@@ -1303,14 +1296,14 @@ async function storageObjectExists(key: string): Promise<boolean> {
   return Boolean(data?.some(object => object.name === fileName));
 }
 
-async function resolveExecutionDocumentKey(value: string, estimateId?: number): Promise<string | null> {
+async function resolveExecutionDocumentKey(value: string, estimateId?: number, recoverHistoricalPo = false): Promise<string | null> {
   const storedKey = storageKeyFromValue(value);
   if (storedKey && !storedKey.startsWith("uploads/") && await storageObjectExists(storedKey)) return storedKey;
 
   // Legacy Express paths (/uploads/file-...) were local disk paths, never
   // Supabase keys. Recover only through an existing PO registry row owned by
   // this estimate; do not guess filenames or sign a key that was not verified.
-  if (estimateId) {
+  if (estimateId && recoverHistoricalPo) {
     const { data: rows } = await supabase.from("execution_documents").select("file_path")
       .eq("estimate_id", estimateId).eq("status", "active")
       .in("document_type", ["po", "client_po"]).order("created_at", { ascending: false });
@@ -1322,9 +1315,9 @@ async function resolveExecutionDocumentKey(value: string, estimateId?: number): 
   return null;
 }
 
-/** Resolve and verify a storage object, then generate a new URL at click time. */
-export async function openExecutionDocument(storageValue: string, download = false, estimateId?: number): Promise<void> {
-  const storagePath = await resolveExecutionDocumentKey(storageValue, estimateId);
+/** Resolve and verify a storage object, then generate a new URL at access time. */
+export async function getExecutionDocumentSignedUrl(storageValue: string, download = false, estimateId?: number, recoverHistoricalPo = false): Promise<string> {
+  const storagePath = await resolveExecutionDocumentKey(storageValue, estimateId, recoverHistoricalPo);
   if (!storagePath) throw new Error("Document not found. Please replace or re-upload this attachment.");
 
   if (estimateId && storageValue.trim() !== storagePath) {
@@ -1335,7 +1328,12 @@ export async function openExecutionDocument(storageValue: string, download = fal
   const options = download ? { download: storagePath.split("/").pop() || true } : undefined;
   const { data, error } = await supabase.storage.from("execution-documents").createSignedUrl(storagePath, SIGNED_URL_TTL_S, options);
   if (error || !data?.signedUrl) throw new Error(error?.message || "Could not open document");
-  window.open(data.signedUrl, "_blank", "noopener,noreferrer");
+  return data.signedUrl;
+}
+
+export async function openExecutionDocument(storageValue: string, download = false, estimateId?: number, recoverHistoricalPo = false): Promise<void> {
+  const signedUrl = await getExecutionDocumentSignedUrl(storageValue, download, estimateId, recoverHistoricalPo);
+  window.open(signedUrl, "_blank", "noopener,noreferrer");
 }
 
 /**

@@ -3,11 +3,11 @@ import { formatCurrency } from "@/utils/format";
 import { useAuth } from "../contexts/AuthContext";
 import { isAblblFormat } from "../../../shared/textFormat";
 import { companyAssetUrl } from "../utils/companyAssets";
-import { Package, Search, Printer, FileDown, ChevronUp, ChevronDown, Check, Loader2 } from "lucide-react";
+import { Package, Search, Printer, ChevronUp, ChevronDown, Check, Download } from "lucide-react";
 import EstimateDocument from "../components/EstimateDocument";
 import type { Client, Brand, Product, Store } from "./operations/types";
 import { isBoltMode } from "../lib/supabase";
-import { fetchInvoices, fetchCompanySettings, fetchEstimateById, fetchEstimateItems, fetchDeliveryChallansForEstimate, fetchPaymentsForInvoice, fetchClients, fetchStores, fetchProducts } from "../lib/api";
+import { fetchInvoices, fetchCompanySettings, fetchEstimateById, fetchEstimateItems, fetchDeliveryChallansForEstimate, fetchPaymentsForInvoice, fetchClients, fetchStores, fetchProducts, fetchExecutionDocuments, getExecutionDocumentSignedUrl, openExecutionDocument } from "../lib/api";
 
 interface Invoice {
   id: number;
@@ -21,6 +21,10 @@ interface Invoice {
   estimateId?: number | null;
   clientId?: number | null;
   remarks?: string | null;
+  amount?: number;
+  taxAmount?: number;
+  lineItems?: any[];
+  poNumber?: string | null;
 }
 
 interface PacketData {
@@ -33,6 +37,7 @@ interface PacketData {
   stores?: Store[];
   clients?: Client[];
   products?: Product[];
+  executionDocuments?: any[];
 }
 
 interface PacketPage {
@@ -40,7 +45,35 @@ interface PacketPage {
   label: string;
   kind: "invoice" | "po" | "estimate" | "dc" | "photo" | "transport" | "extra";
   filePath?: string | null;
+  storagePath?: string | null;
+  mimeType?: string | null;
+  storeCode?: string | null;
   included: boolean;
+}
+
+const docTypeLabel = (type: string) => ({
+  photo: "Installation Photo", installation_photo: "Installation Photo", execution_photo: "Execution Photo",
+  signed_wcc: "Signed WCC", signed_dc: "Signed Delivery Challan", transport_receipt: "Transport Receipt",
+  lr_copy: "LR Copy", courier_receipt: "Courier Receipt", gate_pass: "Gate Pass", eway_bill: "E-Way Bill",
+  extra: "Other Project Document", field_upload: "Project Document", client_po: "Purchase Order", po: "Purchase Order",
+} as Record<string, string>)[type] || type.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+
+const storeCodeFor = (value: any) => String(value?.storeCode || value?.metadata?.storeCode || "").trim();
+const isProjectScope = (value: any) => ["", "misc", "project", "all"].includes(storeCodeFor(value).toLowerCase());
+const isPhotoType = (type: string) => ["photo", "installation_photo", "execution_photo", "wcc_photo"].includes(type);
+const isPoType = (type: string) => ["po", "client_po"].includes(type);
+const isSignedType = (type: string) => ["signed_wcc", "signed_dc"].includes(type);
+
+async function signPacketDocument(doc: any, estimateId: number): Promise<PacketPage | null> {
+  const storagePath = String(doc.storagePath || doc.filePath || "");
+  if (!storagePath) return null;
+  try {
+    const filePath = await getExecutionDocumentSignedUrl(storagePath, false, estimateId, doc.kind === "po");
+    return { ...doc, filePath, storagePath } as PacketPage;
+  } catch (error) {
+    console.warn("[invoice-packet] document unavailable", storagePath, error);
+    return { ...doc, filePath: null, storagePath } as PacketPage;
+  }
 }
 
 
@@ -74,7 +107,6 @@ const InvoicePacketPage: React.FC = () => {
   const [fromUrl, setFromUrl] = useState(false);
   // pdfMode is the value of ?pdfMode= URL param: "invoice" | "estimate" | null
   const [pdfMode, setPdfMode] = useState<string | null>(null);
-  const [generatingPdf, setGeneratingPdf] = useState(false);
 
   useEffect(() => {
     const u = new URLSearchParams(window.location.search);
@@ -122,7 +154,7 @@ const InvoicePacketPage: React.FC = () => {
           const inv = invoices.find((i: any) => i.id === selectedId);
           if (!inv) return;
           const estimateId = inv.estimateId ?? null;
-          const [estimate, estimateItems, challans, payments, clients, stores, products] = await Promise.all([
+          const [estimate, estimateItems, challans, payments, clients, stores, products, executionDocuments] = await Promise.all([
             estimateId ? fetchEstimateById(token, estimateId) : Promise.resolve(null),
             estimateId ? fetchEstimateItems(token, estimateId) : Promise.resolve([]),
             estimateId ? fetchDeliveryChallansForEstimate(token, estimateId) : Promise.resolve([]),
@@ -130,26 +162,57 @@ const InvoicePacketPage: React.FC = () => {
             fetchClients(token),
             fetchStores(token),
             fetchProducts(token),
+            estimateId ? fetchExecutionDocuments(token, estimateId) : Promise.resolve([]),
           ]);
           const client = clients.find((c: any) => c.id === inv.clientId);
-          data = { invoice: inv, estimate, estimateItems, challans, client, payments, stores, clients, products };
+          data = { invoice: inv, estimate, estimateItems, challans, client, payments, stores, clients, products, executionDocuments };
         } else {
           const res = await fetch(`/api/finance/invoice-packet/${selectedId}`, { headers: { Authorization: `Bearer ${token}` } });
           if (res.ok) data = await res.json();
         }
         if (data) {
           setPacket(data);
-          const list: PacketPage[] = [];
-          list.push({ id: "inv", label: "Invoice Front Page", kind: "invoice", included: true });
-          if (data.estimate?.poFilePath) list.push({ id: "po", label: `Purchase Order (${data.estimate.poNumber || "PO"})`, kind: "po", filePath: data.estimate.poFilePath, included: true });
-          if (data.estimate) list.push({ id: "est", label: `Estimate ${data.estimate.estimateNumber}`, kind: "estimate", included: true });
-          (data.challans || []).forEach((c: any) => {
-            list.push({ id: `dc-${c.id}`, label: `DC / WCC ${c.dcNumber}`, kind: "dc", included: true });
-            if (c.signedChallanPath) list.push({ id: `dc-${c.id}-signed`, label: `Signed Challan (${c.dcNumber})`, kind: "extra", filePath: c.signedChallanPath, included: true });
-            if (c.photoPath) list.push({ id: `dc-${c.id}-photo`, label: `Installation Photo (${c.dcNumber})`, kind: "photo", filePath: c.photoPath, included: true });
-            if (c.transportReceiptPath) list.push({ id: `dc-${c.id}-trn`, label: `Transport Receipt (${c.dcNumber})`, kind: "transport", filePath: c.transportReceiptPath, included: true });
-            if (c.extraDocPath) list.push({ id: `dc-${c.id}-extra`, label: `Extra Doc (${c.dcNumber})`, kind: "extra", filePath: c.extraDocPath, included: true });
-          });
+          const estimateId = Number(data.estimate?.id || 0);
+          const docs = (data.executionDocuments || []).filter((d: any) => d.status !== "deleted" && d.status !== "replaced");
+          const seen = new Set<string>();
+          const list: PacketPage[] = [{ id: "inv", label: "1. Invoice", kind: "invoice", included: true }];
+          const addFile = async (page: Omit<PacketPage, "included">) => {
+            const raw = String(page.storagePath || page.filePath || "");
+            if (!raw || seen.has(raw)) return;
+            seen.add(raw);
+            const signed = await signPacketDocument({ ...page, included: true }, estimateId);
+            if (signed) list.push(signed);
+          };
+
+          if (data.estimate?.poFilePath) await addFile({ id: "po", label: `2. Purchase Order (${data.estimate.poNumber || "PO"})`, kind: "po", storagePath: data.estimate.poFilePath });
+          if (data.estimate) list.push({ id: "est", label: `3. Estimate ${data.estimate.estimateNumber}`, kind: "estimate", included: true });
+
+          // Project-level documents retain upload order and precede store execution.
+          const activeStoreCodes = new Set((data.challans || []).map(storeCodeFor).filter(Boolean));
+          const projectDocs = docs.filter((d: any) => !isPoType(d.documentType) && !d.deliveryChallanId && (isProjectScope(d) || !activeStoreCodes.has(storeCodeFor(d))));
+          for (const doc of [...projectDocs].sort((a: any, b: any) => new Date(a.uploadedAt || a.createdAt).getTime() - new Date(b.uploadedAt || b.createdAt).getTime())) {
+            await addFile({ id: `doc-${doc.id}`, label: docTypeLabel(doc.documentType), kind: "extra", storagePath: doc.storagePath || doc.filePath, mimeType: doc.mimeType });
+          }
+
+          const challans = [...(data.challans || [])].sort((a: any, b: any) => storeCodeFor(a).localeCompare(storeCodeFor(b)) || Number(a.id) - Number(b.id));
+          for (const dc of challans) {
+            const storeCode = storeCodeFor(dc);
+            const store = (data.stores || []).find((s: any) => String(s.code || s.storeCode || "") === storeCode);
+            const storeLabel = store?.name ? `${store.name}${storeCode ? ` (${storeCode})` : ""}` : (storeCode || "Project");
+            list.push({ id: `dc-${dc.id}`, label: `${storeLabel} — DC / WCC ${dc.dcNumber}`, kind: "dc", storeCode, included: true });
+            const owned = docs.filter((d: any) => Number(d.deliveryChallanId) === Number(dc.id) || (storeCode && storeCodeFor(d) === storeCode));
+            const legacy = [
+              dc.signedChallanPath && { id: `legacy-signed-${dc.id}`, documentType: isAblblFormat(dc.clientFormat) ? "signed_wcc" : "signed_dc", storagePath: dc.signedChallanPath },
+              dc.photoPath && { id: `legacy-photo-${dc.id}`, documentType: "photo", storagePath: dc.photoPath },
+              dc.transportReceiptPath && { id: `legacy-transport-${dc.id}`, documentType: "transport_receipt", storagePath: dc.transportReceiptPath },
+              dc.extraDocPath && { id: `legacy-extra-${dc.id}`, documentType: "extra", storagePath: dc.extraDocPath },
+            ].filter(Boolean) as any[];
+            const ordered = [...owned, ...legacy].sort((a: any, b: any) => {
+              const rank = (d: any) => isSignedType(d.documentType) ? 0 : isPhotoType(d.documentType) ? 1 : 2;
+              return rank(a) - rank(b) || new Date(a.uploadedAt || a.createdAt).getTime() - new Date(b.uploadedAt || b.createdAt).getTime();
+            });
+            for (const doc of ordered) await addFile({ id: `exec-${doc.id}`, label: `${storeLabel} — ${docTypeLabel(doc.documentType)}`, kind: isPhotoType(doc.documentType) ? "photo" : "extra", storagePath: doc.storagePath || doc.filePath, mimeType: doc.mimeType, storeCode });
+          }
           setPages(list);
         }
       } catch (err) {
@@ -194,40 +257,15 @@ const InvoicePacketPage: React.FC = () => {
 
   const doPrint = () => window.print();
 
-  const downloadPdf = async () => {
-    if (!selectedId) return;
-    if (isBoltMode) {
-      window.print();
-      return;
-    }
-    setGeneratingPdf(true);
-    try {
-      const res = await fetch(`/api/finance/invoice-packet/${selectedId}/pdf`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({}),
-      });
-
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ message: "PDF generation failed" }));
-        alert(err.message || "PDF generation failed");
-        return;
-      }
-
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `invoice-packet-${selectedId}.pdf`;
-      a.click();
-      URL.revokeObjectURL(url);
-    } catch (err: any) {
-      alert(err.message || "PDF generation failed");
-    } finally {
-      setGeneratingPdf(false);
+  const downloadPage = (page: PacketPage) => {
+    if (page.storagePath && packet?.estimate?.id) {
+      void openExecutionDocument(page.storagePath, true, packet.estimate.id, page.kind === "po").catch(error => alert(page.kind === "po" ? "Purchase Order not found" : error.message));
+    } else if (page.kind === "invoice" || page.kind === "estimate") {
+      const url = new URL(window.location.href);
+      url.searchParams.set("pdfMode", page.kind);
+      window.open(url.toString(), "_blank", "noopener,noreferrer");
+    } else {
+      alert("Use Print Packet and select this page to save the generated document as PDF.");
     }
   };
 
@@ -309,13 +347,12 @@ const InvoicePacketPage: React.FC = () => {
                     <Printer className="w-3 h-3" /> Print
                   </button>
                   <button
-                    onClick={downloadPdf}
-                    disabled={generatingPdf}
-                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-orange-600 hover:bg-orange-700 disabled:opacity-60 text-white text-xs font-semibold"
-                    title={isBoltMode ? "Print / Save as PDF" : "Download full packet as a single PDF (includes all pages and attachments)"}
+                    onClick={() => document.getElementById("packet-download-list")?.scrollIntoView({ behavior: "smooth" })}
+                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-orange-600 hover:bg-orange-700 text-white text-xs font-semibold"
+                    title="Download packet documents individually"
                   >
-                    {generatingPdf ? <Loader2 className="w-3 h-3 animate-spin" /> : <FileDown className="w-3 h-3" />}
-                    {generatingPdf ? "Building…" : isBoltMode ? "Print / PDF" : "Download PDF"}
+                    <Download className="w-3 h-3" />
+                    Download Documents
                   </button>
                 </div>
               </div>
@@ -328,6 +365,7 @@ const InvoicePacketPage: React.FC = () => {
                     <div className="flex-1 text-xs truncate" title={p.label}>{idx + 1}. {p.label}</div>
                     <button onClick={() => movePage(p.id, -1)} className="text-slate-400 hover:text-slate-900"><ChevronUp className="w-3 h-3" /></button>
                     <button onClick={() => movePage(p.id, 1)} className="text-slate-400 hover:text-slate-900"><ChevronDown className="w-3 h-3" /></button>
+                    <button onClick={() => downloadPage(p)} title={`Download ${p.label}`} className="text-blue-500 hover:text-blue-800"><Download className="w-3 h-3" /></button>
                   </div>
                 ))}
               </div>
@@ -345,22 +383,27 @@ const InvoicePacketPage: React.FC = () => {
           ) : !packet ? (
             <div className="glass-panel p-8 text-center text-slate-500">Loading packet…</div>
           ) : (
-            <div className="space-y-6" data-print-document="true">
+            <div className="space-y-6 packet-print-root" data-print-document="true">
               {included.map((p, idx) => (
-                <div key={p.id} className="bg-white border border-slate-200 print:border-0 rounded-lg shadow-sm print:shadow-none print:break-after-page">
+                <div key={p.id} className={`packet-page bg-white border border-slate-200 print:border-0 rounded-lg shadow-sm print:shadow-none ${idx < included.length - 1 ? "packet-page-break" : ""}`}>
                   <div className="px-4 py-2 border-b border-slate-100 bg-slate-50 text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center justify-between print:hidden">
                     <span>Page {idx + 1}: {p.label}</span>
                   </div>
-                  <div className="p-6 print:p-8">
+                  <div className="p-6 print:p-0">
                     {p.kind === "invoice" && <InvoiceFrontPage packet={packet} sellerProfile={sellerProfile} assetToken={token} />}
                     {p.kind === "estimate" && <EstimateSummary packet={packet} sellerProfile={sellerProfile} assetToken={token} />}
                     {p.kind === "dc" && <DcSummary packet={packet} dcId={parseInt(p.id.split("-")[1], 10)} sellerProfile={sellerProfile} assetToken={token} />}
                     {(p.kind === "po" || p.kind === "photo" || p.kind === "transport" || p.kind === "extra") && (
-                      <DocumentPreview label={p.label} filePath={p.filePath} />
+                      <DocumentPreview label={p.label} filePath={p.filePath} mimeType={p.mimeType} isPurchaseOrder={p.kind === "po"} />
                     )}
                   </div>
                 </div>
               ))}
+              <div id="packet-download-list" className="print:hidden bg-white border border-slate-200 rounded-lg p-4">
+                <h3 className="font-bold text-sm">Download Documents</h3>
+                <p className="text-xs text-slate-500 mb-3">Original files use verified keys and fresh signed URLs. Generated ERP pages open in the same A4 print pipeline.</p>
+                <div className="grid sm:grid-cols-2 gap-2">{included.map(page => <button key={`download-${page.id}`} onClick={() => downloadPage(page)} className="text-left px-3 py-2 border rounded text-xs hover:bg-slate-50 flex items-center gap-2"><Download className="w-3 h-3 text-blue-600"/><span className="truncate">{page.label}</span></button>)}</div>
+              </div>
             </div>
           )}
         </div>
@@ -370,47 +413,77 @@ const InvoicePacketPage: React.FC = () => {
         @media print {
           body { background: white !important; }
           aside, header, nav, .print\\:hidden { display: none !important; }
+          .packet-print-root { margin: 0 !important; padding: 0 !important; }
+          .packet-page { width: 100% !important; min-height: 279mm !important; margin: 0 !important; padding: 0 !important; overflow: visible !important; }
+          .packet-page-break { break-after: page !important; page-break-after: always !important; }
+          .a4-sheet { width: 100% !important; min-height: 270mm !important; }
           .doc-preview-frame {
-            height: 100vh !important;
+            height: 270mm !important;
             width: 100% !important;
             border: none !important;
             display: block;
           }
+          .document-image { width: 100% !important; height: 270mm !important; object-fit: contain !important; }
         }
+        .a4-sheet { width: 210mm; min-height: 297mm; padding: 12mm; box-sizing: border-box; }
+        .invoice-lines { border-collapse: collapse; }
+        .invoice-lines th, .invoice-lines td { border: 1px solid #cbd5e1; padding: 6px; text-align: center; vertical-align: top; }
+        .invoice-lines th { background: #f1f5f9; font-weight: 800; }
+        @media print { .invoice-lines thead { display: table-header-group; } .invoice-lines tr { break-inside: avoid; page-break-inside: avoid; } }
+        .summary-table > div { display: flex; justify-content: space-between; gap: 16px; padding: 5px 8px; border: 1px solid #cbd5e1; border-bottom: 0; }
+        .summary-table > div:last-child { border-bottom: 1px solid #cbd5e1; }
+        .summary-table .grand { font-size: 14px; background: #f1f5f9; border-top: 2px solid #0f172a; }
       `}</style>
     </div>
   );
 };
 
-// Invoice front page — renders the shared A4 template with the linked
-// estimate's items, but stamped with the invoice number/date and a TAX
-// INVOICE banner. Falls back to a placeholder if no estimate is linked.
 const InvoiceFrontPage: React.FC<{ packet: PacketData; sellerProfile: any; assetToken?: string | null }> = ({ packet, sellerProfile, assetToken }) => {
   const inv = packet.invoice;
   const est = packet.estimate;
-  if (!est) {
-    return (
-      <div className="p-6 text-center text-slate-500 text-sm">
-        <p className="font-semibold mb-2">Invoice {inv.invoiceNumber} has no linked estimate.</p>
-        <p className="text-xs">Total: {formatCurrency(inv.totalAmount)} · Date: {inv.date ? new Date(inv.date).toLocaleDateString("en-GB") : "—"}</p>
-        <p className="text-xs mt-2 italic">Link this invoice to an estimate to render the full TAX INVOICE document.</p>
-      </div>
-    );
-  }
+  const lines = (inv.lineItems?.length ? inv.lineItems : packet.estimateItems || []) as any[];
+  const taxable = Number(inv.amount ?? lines.reduce((sum, row) => sum + Number(row.amount ?? Number(row.quantity || 0) * Number(row.rate || 0)), 0));
+  const totalTax = Number(inv.taxAmount ?? Math.max(0, Number(inv.totalAmount || 0) - taxable));
+  const estIgst = Number(est?.igstAmount || 0);
+  const igst = estIgst > 0 ? totalTax : 0;
+  const cgst = igst ? 0 : Number(est?.cgstAmount ?? totalTax / 2);
+  const sgst = igst ? 0 : Number(est?.sgstAmount ?? totalTax - cgst);
+  const beforeRound = taxable + cgst + sgst + igst;
+  const roundOff = Number((Number(inv.totalAmount || beforeRound) - beforeRound).toFixed(2));
+  const companyName = sellerProfile?.name || sellerProfile?.companyName || "Sunrise Media";
+  const logoSrc = companyAssetUrl(sellerProfile?.logoPath, assetToken);
   return (
-    <EstimateDocument
-      estimate={est}
-      items={packet.estimateItems || []}
-      stores={packet.stores || []}
-      clients={packet.clients || (packet.client ? [packet.client] : [])}
-      products={packet.products || []}
-      docKind="invoice"
-      docNumber={inv.invoiceNumber}
-      docDate={inv.date}
-      subjectOverride={est.subject || est.title || inv.remarks || undefined}
-      sellerProfile={sellerProfile}
-      assetToken={assetToken}
-    />
+    <article className="gst-invoice a4-sheet bg-white text-slate-900 mx-auto">
+      <header className="flex justify-between gap-6 border-b-2 border-slate-900 pb-4">
+        <div className="flex gap-3 items-start">
+          {logoSrc && <img src={logoSrc} alt={companyName} className="h-14 w-auto max-w-[180px] object-contain" />}
+          <div><h1 className="text-lg font-black uppercase">{companyName}</h1><p className="text-[10px] whitespace-pre-line">{sellerProfile?.address || sellerProfile?.registeredAddress || ""}</p><p className="text-[10px]">GSTIN: {sellerProfile?.gstin || "—"}</p></div>
+        </div>
+        <div className="text-right"><h2 className="text-2xl font-black tracking-widest">TAX INVOICE</h2><p className="font-mono font-bold mt-2">{inv.invoiceNumber}</p><p className="text-xs">Date: {inv.date ? new Date(inv.date).toLocaleDateString("en-GB") : "—"}</p></div>
+      </header>
+      <section className="grid grid-cols-2 gap-6 py-4 border-b border-slate-300 text-xs">
+        <div><p className="text-[10px] uppercase font-bold text-slate-500">Bill To</p><p className="font-bold text-sm">{inv.partyName}</p><p className="whitespace-pre-line">{est?.billingAddressSnapshot || packet.client?.address || ""}</p><p>GSTIN: {est?.billingGstinSnapshot || packet.client?.gstin || "—"}</p></div>
+        <div className="grid grid-cols-2 gap-x-3 content-start"><span className="text-slate-500">PO Number</span><b>{inv.poNumber || est?.poNumber || "—"}</b><span className="text-slate-500">Due Date</span><b>{inv.dueDate ? new Date(inv.dueDate).toLocaleDateString("en-GB") : "—"}</b><span className="text-slate-500">Place of Supply</span><b>{est?.billingStateSnapshot || packet.client?.state || "—"}</b></div>
+      </section>
+      <table className="w-full text-[11px] invoice-lines mt-4">
+        <thead><tr><th>#</th><th>Product Code</th><th className="text-left">Product Description</th><th>HSN</th><th>Qty</th><th>Unit</th><th>Rate</th><th>Amount</th></tr></thead>
+        <tbody>{lines.map((row, index) => {
+          const qty = Number(row.quantity || 0); const rate = Number(row.rate || 0); const amount = Number(row.amount ?? qty * rate);
+          return <tr key={row.id || index}><td>{index + 1}</td><td>{row.productCode || row.materialCode || row.itemCode || "—"}</td><td className="text-left"><b>{row.itemName || row.productName || "Item"}</b>{row.description && <div className="font-normal whitespace-pre-wrap mt-0.5">{row.description}</div>}</td><td>{row.hsn || row.hsnCode || "—"}</td><td>{qty}</td><td>{row.unit || "Nos"}</td><td className="text-right">{formatCurrency(rate)}</td><td className="text-right font-semibold">{formatCurrency(amount)}</td></tr>;
+        })}</tbody>
+      </table>
+      <section className="ml-auto mt-4 w-full max-w-sm text-xs summary-table">
+        <div><span>Taxable Value</span><b>{formatCurrency(taxable)}</b></div>
+        {cgst > 0 && <div><span>CGST</span><b>{formatCurrency(cgst)}</b></div>}
+        {sgst > 0 && <div><span>SGST</span><b>{formatCurrency(sgst)}</b></div>}
+        {igst > 0 && <div><span>IGST</span><b>{formatCurrency(igst)}</b></div>}
+        <div><span>Round Off</span><b>{formatCurrency(roundOff)}</b></div>
+        <div className="grand"><span>Grand Total</span><b>{formatCurrency(inv.totalAmount || beforeRound + roundOff)}</b></div>
+      </section>
+      <p className="mt-4 border-t border-slate-300 pt-3 text-xs"><b>Amount in words:</b> {amountInWords(inv.totalAmount || 0)}</p>
+      {inv.remarks && <p className="mt-2 text-xs"><b>Remarks:</b> {inv.remarks}</p>}
+      <footer className="mt-12 text-right text-xs"><p>For <b>{companyName.toUpperCase()}</b></p><div className="h-12"/><p className="font-bold">Authorised Signatory</p></footer>
+    </article>
   );
 };
 
@@ -473,15 +546,17 @@ const DcSummary: React.FC<{ packet: PacketData; dcId: number; sellerProfile: any
   );
 };
 
-const DocumentPreview: React.FC<{ label: string; filePath?: string | null }> = ({ label, filePath }) => {
-  if (!filePath) return <div className="text-center text-slate-500 text-sm p-4 border border-dashed border-slate-200 rounded">{label}: no file attached.</div>;
-  const isImage = /\.(png|jpe?g|gif|webp)$/i.test(filePath);
-  const isPdf = /\.pdf$/i.test(filePath);
+const DocumentPreview: React.FC<{ label: string; filePath?: string | null; mimeType?: string | null; isPurchaseOrder?: boolean }> = ({ label, filePath, mimeType, isPurchaseOrder }) => {
+  if (!filePath) return <div className="text-center text-slate-500 text-sm p-4 border border-dashed border-slate-200 rounded">{isPurchaseOrder ? "Purchase Order not found" : `${label}: Document not found`}</div>;
+  let pathname = filePath;
+  try { pathname = decodeURIComponent(new URL(filePath).pathname); } catch { /* storage key */ }
+  const isImage = Boolean(mimeType?.startsWith("image/") || /\.(png|jpe?g|gif|webp)$/i.test(pathname));
+  const isPdf = Boolean(mimeType === "application/pdf" || /\.pdf$/i.test(pathname));
   return (
     <div className="text-center">
       <p className="text-xs font-semibold uppercase text-slate-500 mb-2 print:hidden">{label}</p>
       {isImage ? (
-        <img src={filePath} alt={label} className="max-h-[80vh] mx-auto border border-slate-200 rounded print:max-h-none print:w-full" />
+        <img src={filePath} alt={label} className="document-image max-h-[80vh] max-w-full object-contain mx-auto border border-slate-200 rounded" />
       ) : isPdf ? (
         <iframe
           src={filePath}

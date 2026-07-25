@@ -1551,7 +1551,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
 	                            <td className="px-3 py-2 font-mono text-purple-700">
                               {e.poNumber ? (
                                 e.poFilePath ? (
-                                  <button type="button" onClick={() => openExecutionDocument(e.poFilePath!, false, e.id).catch(err => alert(err.message))} className="hover:underline">{e.poNumber}</button>
+                                  <button type="button" onClick={() => openExecutionDocument(e.poFilePath!, false, e.id, true).catch(() => alert("Purchase Order not found"))} className="hover:underline">{e.poNumber}</button>
                                 ) : (
                                   <span>{e.poNumber}</span>
                                 )

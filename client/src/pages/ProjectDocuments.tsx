@@ -295,10 +295,10 @@ const ProjectDocumentsPage: React.FC = () => {
                       </td>
                       <td className="px-4 py-3 text-xs text-slate-500">{d.date ? new Date(d.date).toLocaleDateString("en-GB") : "—"}</td>
                       <td className="px-4 py-3 text-right">
-                        <button type="button" onClick={() => openExecutionDocument(d.filePath, false, d.estimateId).catch(err => alert(err.message))} className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline">
+                        <button type="button" onClick={() => openExecutionDocument(d.filePath, false, d.estimateId, d.type === "PO" || d.type === "po" || d.type === "client_po").catch(err => alert((d.type === "PO" || d.type === "po" || d.type === "client_po") ? "Purchase Order not found" : err.message))} className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline">
                           View <ExternalLink className="w-3 h-3" />
                         </button>
-                        <button type="button" onClick={() => openExecutionDocument(d.filePath, true, d.estimateId).catch(err => alert(err.message))} className="ml-3 inline-flex items-center gap-1 text-xs text-slate-600 hover:text-slate-900">
+                        <button type="button" onClick={() => openExecutionDocument(d.filePath, true, d.estimateId, d.type === "PO" || d.type === "po" || d.type === "client_po").catch(err => alert((d.type === "PO" || d.type === "po" || d.type === "client_po") ? "Purchase Order not found" : err.message))} className="ml-3 inline-flex items-center gap-1 text-xs text-slate-600 hover:text-slate-900">
                           <Download className="w-3 h-3" /> Download
                         </button>
                       </td>
@@ -446,7 +446,7 @@ const DocumentViewer: React.FC<{
             </p>
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            <button type="button" onClick={() => openExecutionDocument(doc.filePath, false, doc.estimateId).catch(err => alert(err.message))} className="inline-flex items-center gap-1 px-3 py-1.5 bg-slate-50 border border-slate-200 text-slate-700 text-xs font-bold rounded hover:bg-slate-100">
+            <button type="button" onClick={() => openExecutionDocument(doc.filePath, false, doc.estimateId, doc.type === "PO" || doc.type === "po" || doc.type === "client_po").catch(err => alert((doc.type === "PO" || doc.type === "po" || doc.type === "client_po") ? "Purchase Order not found" : err.message))} className="inline-flex items-center gap-1 px-3 py-1.5 bg-slate-50 border border-slate-200 text-slate-700 text-xs font-bold rounded hover:bg-slate-100">
               Open <ExternalLink className="w-3 h-3" />
             </button>
             {doc.id && (
@@ -467,7 +467,7 @@ const DocumentViewer: React.FC<{
                 </button>
               </>
             )}
-            <button type="button" onClick={() => openExecutionDocument(doc.filePath, true, doc.estimateId).catch(err => alert(err.message))} className="inline-flex items-center gap-1 px-3 py-1.5 bg-orange-50 border border-orange-200 text-orange-700 text-xs font-bold rounded hover:bg-orange-100">
+            <button type="button" onClick={() => openExecutionDocument(doc.filePath, true, doc.estimateId, doc.type === "PO" || doc.type === "po" || doc.type === "client_po").catch(err => alert((doc.type === "PO" || doc.type === "po" || doc.type === "client_po") ? "Purchase Order not found" : err.message))} className="inline-flex items-center gap-1 px-3 py-1.5 bg-orange-50 border border-orange-200 text-orange-700 text-xs font-bold rounded hover:bg-orange-100">
               <Download className="w-3 h-3" /> Download
             </button>
             <button type="button" onClick={onClose} className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded">
