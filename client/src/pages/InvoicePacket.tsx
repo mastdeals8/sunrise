@@ -63,10 +63,12 @@ const docTypeLabel = (type: string) => ({
 } as Record<string, string>)[type] || type.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
 
 const storeCodeFor = (value: any) => String(value?.storeCode || value?.metadata?.storeCode || "").trim();
-const isProjectScope = (value: any) => ["", "misc", "project", "all"].includes(storeCodeFor(value).toLowerCase());
 const isPhotoType = (type: string) => ["photo", "installation_photo", "execution_photo", "wcc_photo"].includes(type);
 const isPoType = (type: string) => ["po", "client_po"].includes(type);
 const isSignedType = (type: string) => ["signed_wcc", "signed_dc"].includes(type);
+const isTransportType = (type: string) => ["transport_receipt", "lr_copy", "courier_receipt", "gate_pass", "eway_bill"].includes(type);
+// Documents that belong in the per-store block: only signed WCC/challan + installation photos.
+const isStoreScopeDoc = (type: string) => isSignedType(type) || isPhotoType(type);
 
 async function signPacketDocument(doc: any, estimateId: number): Promise<PacketPage | null> {
   const storagePath = String(doc.storagePath || doc.filePath || "");
@@ -192,10 +194,21 @@ const InvoicePacketPage: React.FC = () => {
           if (data.estimate?.poFilePath) await addFile({ id: "po", label: `2. Purchase Order (${data.estimate.poNumber || "PO"})`, kind: "po", storagePath: data.estimate.poFilePath });
           if (data.estimate) list.push({ id: "est", label: `3. Estimate ${data.estimate.estimateNumber}`, kind: "estimate", included: true });
 
-          // Project-level documents retain upload order and precede store execution.
-          const activeStoreCodes = new Set((data.challans || []).map(storeCodeFor).filter(Boolean));
-          const projectDocs = docs.filter((d: any) => !isPoType(d.documentType) && !d.deliveryChallanId && (isProjectScope(d) || !activeStoreCodes.has(storeCodeFor(d))));
-          for (const doc of [...projectDocs].sort((a: any, b: any) => new Date(a.uploadedAt || a.createdAt).getTime() - new Date(b.uploadedAt || b.createdAt).getTime())) {
+          // Section 4: Transportation / Other Project Documents.
+          // Collect every transport receipt, LR, courier, gate pass, e-way bill, and any
+          // other uploaded project document (non-PO, non-store-scope) in upload order.
+          const projectDocs = docs.filter((d: any) => {
+            if (isPoType(d.documentType)) return false;
+            if (isStoreScopeDoc(d.documentType)) return false;
+            return true;
+          });
+          const legacyProject: any[] = [];
+          for (const dc of (data.challans || [])) {
+            if (dc.transportReceiptPath) legacyProject.push({ id: `legacy-transport-${dc.id}`, documentType: "transport_receipt", storagePath: dc.transportReceiptPath });
+            if (dc.extraDocPath) legacyProject.push({ id: `legacy-extra-${dc.id}`, documentType: "extra", storagePath: dc.extraDocPath });
+          }
+          const allProjectDocs = [...projectDocs, ...legacyProject];
+          for (const doc of [...allProjectDocs].sort((a: any, b: any) => new Date(a.uploadedAt || a.createdAt || 0).getTime() - new Date(b.uploadedAt || b.createdAt || 0).getTime())) {
             await addFile({ id: `doc-${doc.id}`, label: docTypeLabel(doc.documentType), kind: "extra", storagePath: doc.storagePath || doc.filePath, mimeType: doc.mimeType });
           }
 
@@ -218,17 +231,14 @@ const InvoicePacketPage: React.FC = () => {
             const storeCode = storeCodeFor(dc);
             const store = (data.stores || []).find((s: any) => String(s.code || s.storeCode || "") === storeCode);
             const storeLabel = store?.name ? `${store.name}${storeCode ? ` (${storeCode})` : ""}` : (storeCode || "Project");
-            const owned = docs.filter((d: any) => Number(d.deliveryChallanId) === Number(dc.id) || (storeCode && storeCodeFor(d) === storeCode));
+            const owned = docs.filter((d: any) => (Number(d.deliveryChallanId) === Number(dc.id) || (storeCode && storeCodeFor(d) === storeCode)) && isStoreScopeDoc(d.documentType));
             const legacy = [
               dc.signedChallanPath && { id: `legacy-signed-${dc.id}`, documentType: isAblblFormat(dc.clientFormat) ? "signed_wcc" : "signed_dc", storagePath: dc.signedChallanPath },
               dc.photoPath && { id: `legacy-photo-${dc.id}`, documentType: "photo", storagePath: dc.photoPath },
-              dc.transportReceiptPath && { id: `legacy-transport-${dc.id}`, documentType: "transport_receipt", storagePath: dc.transportReceiptPath },
-              dc.extraDocPath && { id: `legacy-extra-${dc.id}`, documentType: "extra", storagePath: dc.extraDocPath },
             ].filter(Boolean) as any[];
-            // Inside each store block: Installation Photos first, then Signed WCC,
-            // then any other extras — matching client submission order.
+            // Per store: Signed WCC first, then Installation Photos (in upload order).
             const ordered = [...owned, ...legacy].sort((a: any, b: any) => {
-              const rank = (d: any) => isPhotoType(d.documentType) ? 0 : isSignedType(d.documentType) ? 1 : 2;
+              const rank = (d: any) => isSignedType(d.documentType) ? 0 : isPhotoType(d.documentType) ? 1 : 2;
               return rank(a) - rank(b) || new Date(a.uploadedAt || a.createdAt).getTime() - new Date(b.uploadedAt || b.createdAt).getTime();
             });
             for (const doc of ordered) await addFile({ id: `exec-${doc.id}`, label: `${storeLabel} — ${docTypeLabel(doc.documentType)}`, kind: isPhotoType(doc.documentType) ? "photo" : "extra", storagePath: doc.storagePath || doc.filePath, mimeType: doc.mimeType, storeCode });
@@ -276,8 +286,8 @@ const InvoicePacketPage: React.FC = () => {
     for (const sc of storeCodes) {
       const storeLabel = pages.find(p => p.storeCode === sc)?.label?.split(" — ")[0] || sc || "Store";
       const storeMissing: string[] = [];
-      if (!pages.some(p => p.storeCode === sc && p.kind === "photo" && p.filePath)) storeMissing.push("Installation Photos");
       if (!pages.some(p => p.storeCode === sc && p.kind === "extra" && p.filePath && /signed/i.test(p.label))) storeMissing.push("Signed WCC");
+      if (!pages.some(p => p.storeCode === sc && p.kind === "photo" && p.filePath)) storeMissing.push("Installation Photos");
       if (storeMissing.length) gaps.push({ store: storeLabel, missing: storeMissing });
     }
     return gaps;
