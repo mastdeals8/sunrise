@@ -3,8 +3,10 @@ import { formatCurrency } from "@/utils/format";
 import { useAuth } from "../contexts/AuthContext";
 import { isAblblFormat } from "../../../shared/textFormat";
 import { companyAssetUrl } from "../utils/companyAssets";
-import { Package, Search, Printer, Check, FileArchive, Loader2 } from "lucide-react";
+import { Package, Search, Printer, Check, FileArchive, Loader as Loader2, FileDown } from "lucide-react";
 import { zipSync, strToU8 } from "fflate";
+import { PDFDocument } from "pdf-lib";
+import html2canvas from "html2canvas";
 import EstimateDocument from "../components/EstimateDocument";
 import type { Client, Brand, Product, Store } from "./operations/types";
 import { isBoltMode } from "../lib/supabase";
@@ -259,6 +261,83 @@ const InvoicePacketPage: React.FC = () => {
   const doPrint = () => window.print();
 
   const [zipping, setZipping] = useState(false);
+  const [building, setBuilding] = useState(false);
+
+  const downloadCombinedPdf = async () => {
+    if (!packet) return;
+    setBuilding(true);
+    try {
+      const pdf = await PDFDocument.create();
+      const A4_W = 595.28;
+      const A4_H = 841.89;
+      const MARGIN = 24;
+
+      for (const p of included) {
+        try {
+          if (p.filePath) {
+            const res = await fetch(p.filePath);
+            if (!res.ok) continue;
+            const buf = new Uint8Array(await res.arrayBuffer());
+            const isPdf = p.mimeType === "application/pdf" || /\.pdf$/i.test(p.filePath);
+            const isPng = /\.png$/i.test(p.filePath);
+            const isJpg = /\.(jpe?g)$/i.test(p.filePath);
+
+            if (isPdf) {
+              const srcDoc = await PDFDocument.load(buf, { ignoreEncryption: true });
+              const copied = await pdf.copyPages(srcDoc, srcDoc.getPageIndices());
+              copied.forEach(page => pdf.addPage(page));
+            } else if (isPng || isJpg) {
+              const img = isPng ? await pdf.embedPng(buf) : await pdf.embedJpg(buf);
+              const maxW = A4_W - MARGIN * 2;
+              const maxH = A4_H - MARGIN * 2;
+              const scale = Math.min(maxW / img.width, maxH / img.height);
+              const drawW = img.width * scale;
+              const drawH = img.height * scale;
+              const page = pdf.addPage([A4_W, A4_H]);
+              page.drawImage(img, { x: (A4_W - drawW) / 2, y: (A4_H - drawH) / 2, width: drawW, height: drawH });
+            }
+          } else {
+            const el = document.querySelector(`[data-packet-page="${p.id}"]`) as HTMLElement | null;
+            if (!el) continue;
+            const canvas = await html2canvas(el, {
+              scale: 2,
+              useCORS: true,
+              backgroundColor: "#ffffff",
+              logging: false,
+            });
+            const pngBytes = canvas.toDataURL("image/png");
+            const img = await pdf.embedPng(pngBytes);
+            const maxW = A4_W - MARGIN * 2;
+            const maxH = A4_H - MARGIN * 2;
+            const scale = Math.min(maxW / img.width, maxH / img.height);
+            const drawW = img.width * scale;
+            const drawH = img.height * scale;
+            const page = pdf.addPage([A4_W, A4_H]);
+            page.drawImage(img, { x: (A4_W - drawW) / 2, y: (A4_H - drawH) / 2, width: drawW, height: drawH });
+          }
+        } catch (err) {
+          console.warn(`[packet-pdf] Failed to add page ${p.label}:`, err);
+        }
+      }
+
+      if (pdf.getPageCount() === 0) {
+        alert("No pages could be assembled into a PDF. Check that documents are loaded.");
+        return;
+      }
+      const pdfBytes = await pdf.save();
+      const blob = new Blob([pdfBytes as BlobPart], { type: "application/pdf" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `Invoice_Packet_${packet.invoice?.invoiceNumber || selectedId}.pdf`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      alert("Combined PDF build failed: " + (err?.message || err));
+    } finally {
+      setBuilding(false);
+    }
+  };
 
   const downloadZip = async () => {
     const filePages = included.filter(p => p.filePath);
@@ -379,9 +458,18 @@ const InvoicePacketPage: React.FC = () => {
             <div className="glass-panel overflow-hidden">
               <div className="px-4 py-2 border-b border-slate-200 bg-slate-50 flex items-center justify-between gap-2">
                 <h3 className="font-bold text-sm shrink-0">Packet Pages ({included.length})</h3>
-                <div className="flex gap-1.5">
+                <div className="flex gap-1.5 flex-wrap">
                   <button onClick={doPrint} className="flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold">
-                    <Printer className="w-3 h-3" /> Print / Save PDF
+                    <Printer className="w-3 h-3" /> Print
+                  </button>
+                  <button
+                    onClick={downloadCombinedPdf}
+                    disabled={building}
+                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-xs font-semibold"
+                    title="Download everything as a single combined PDF"
+                  >
+                    {building ? <Loader2 className="w-3 h-3 animate-spin" /> : <FileDown className="w-3 h-3" />}
+                    Combined PDF
                   </button>
                   <button
                     onClick={downloadZip}
@@ -390,7 +478,7 @@ const InvoicePacketPage: React.FC = () => {
                     title="Download all packet files as a ZIP in business order"
                   >
                     {zipping ? <Loader2 className="w-3 h-3 animate-spin" /> : <FileArchive className="w-3 h-3" />}
-                    Download ZIP
+                    ZIP
                   </button>
                 </div>
               </div>
@@ -426,7 +514,7 @@ const InvoicePacketPage: React.FC = () => {
                   <div className="px-4 py-2 border-b border-slate-100 bg-slate-50 text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center justify-between print:hidden">
                     <span>Page {idx + 1}: {p.label}</span>
                   </div>
-                  <div className="p-6 print:p-0">
+                  <div className="p-6 print:p-0" data-packet-page={p.id}>
                     {p.kind === "invoice" && <InvoiceFrontPage packet={packet} sellerProfile={sellerProfile} assetToken={token} />}
                     {p.kind === "estimate" && <EstimateSummary packet={packet} sellerProfile={sellerProfile} assetToken={token} />}
                     {p.kind === "dc" && <DcSummary packet={packet} dcId={parseInt(p.id.split("-")[1], 10)} sellerProfile={sellerProfile} assetToken={token} />}
