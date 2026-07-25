@@ -2,15 +2,15 @@ import React, { useEffect, useMemo, useState } from "react";
 import { formatCurrency } from "@/utils/format";
 import { useAuth } from "../contexts/AuthContext";
 import { isAblblFormat } from "../../../shared/textFormat";
+import { isServiceLineType } from "./operations/utils/estimateCalculations";
 import { companyAssetUrl } from "../utils/companyAssets";
-import { Package, Search, Printer, Check, FileArchive, Loader as Loader2, FileDown } from "lucide-react";
-import { zipSync, strToU8 } from "fflate";
-import { PDFDocument } from "pdf-lib";
+import { Package, Search, Printer, Loader as Loader2, FileDown, TriangleAlert as AlertTriangle } from "lucide-react";
+import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import html2canvas from "html2canvas";
 import EstimateDocument from "../components/EstimateDocument";
 import type { Client, Brand, Product, Store } from "./operations/types";
 import { isBoltMode } from "../lib/supabase";
-import { fetchInvoices, fetchCompanySettings, fetchEstimateById, fetchEstimateItems, fetchDeliveryChallansForEstimate, fetchPaymentsForInvoice, fetchClients, fetchStores, fetchProducts, fetchExecutionDocuments, getExecutionDocumentSignedUrl } from "../lib/api";
+import { fetchInvoices, fetchCompanySettings, fetchEstimateById, fetchEstimateItems, fetchDeliveryChallansForEstimate, fetchPaymentsForInvoice, fetchClients, fetchStores, fetchProducts, fetchExecutionDocuments, fetchExecutionStores, getExecutionDocumentSignedUrl } from "../lib/api";
 
 interface Invoice {
   id: number;
@@ -41,6 +41,7 @@ interface PacketData {
   clients?: Client[];
   products?: Product[];
   executionDocuments?: any[];
+  executionStores?: any[];
 }
 
 interface PacketPage {
@@ -157,7 +158,7 @@ const InvoicePacketPage: React.FC = () => {
           const inv = invoices.find((i: any) => i.id === selectedId);
           if (!inv) return;
           const estimateId = inv.estimateId ?? null;
-          const [estimate, estimateItems, challans, payments, clients, stores, products, executionDocuments] = await Promise.all([
+          const [estimate, estimateItems, challans, payments, clients, stores, products, executionDocuments, executionStores] = await Promise.all([
             estimateId ? fetchEstimateById(token, estimateId) : Promise.resolve(null),
             estimateId ? fetchEstimateItems(token, estimateId) : Promise.resolve([]),
             estimateId ? fetchDeliveryChallansForEstimate(token, estimateId) : Promise.resolve([]),
@@ -166,9 +167,10 @@ const InvoicePacketPage: React.FC = () => {
             fetchStores(token),
             fetchProducts(token),
             estimateId ? fetchExecutionDocuments(token, estimateId) : Promise.resolve([]),
+            estimateId ? fetchExecutionStores(token, estimateId) : Promise.resolve([]),
           ]);
           const client = clients.find((c: any) => c.id === inv.clientId);
-          data = { invoice: inv, estimate, estimateItems, challans, client, payments, stores, clients, products, executionDocuments };
+          data = { invoice: inv, estimate, estimateItems, challans, client, payments, stores, clients, products, executionDocuments, executionStores };
         } else {
           const res = await fetch(`/api/finance/invoice-packet/${selectedId}`, { headers: { Authorization: `Bearer ${token}` } });
           if (res.ok) data = await res.json();
@@ -197,7 +199,21 @@ const InvoicePacketPage: React.FC = () => {
             await addFile({ id: `doc-${doc.id}`, label: docTypeLabel(doc.documentType), kind: "extra", storagePath: doc.storagePath || doc.filePath, mimeType: doc.mimeType });
           }
 
-          const challans = [...(data.challans || [])].sort((a: any, b: any) => storeCodeFor(a).localeCompare(storeCodeFor(b)) || Number(a.id) - Number(b.id));
+          // Order stores by execution-workflow order (the order they were added to the
+          // project), never alphabetical. Fall back to challan id for legacy data.
+          const execOrder = new Map<string, number>();
+          (data.executionStores || []).forEach((s: any, i: number) => {
+            const code = String(s.code || s.storeCode || "");
+            if (code) execOrder.set(code, i);
+          });
+          const challans = [...(data.challans || [])].sort((a: any, b: any) => {
+            const oa = execOrder.get(storeCodeFor(a));
+            const ob = execOrder.get(storeCodeFor(b));
+            if (oa !== undefined && ob !== undefined) return oa - ob;
+            if (oa !== undefined) return -1;
+            if (ob !== undefined) return 1;
+            return Number(a.id) - Number(b.id);
+          });
           for (const dc of challans) {
             const storeCode = storeCodeFor(dc);
             const store = (data.stores || []).find((s: any) => String(s.code || s.storeCode || "") === storeCode);
@@ -210,8 +226,10 @@ const InvoicePacketPage: React.FC = () => {
               dc.transportReceiptPath && { id: `legacy-transport-${dc.id}`, documentType: "transport_receipt", storagePath: dc.transportReceiptPath },
               dc.extraDocPath && { id: `legacy-extra-${dc.id}`, documentType: "extra", storagePath: dc.extraDocPath },
             ].filter(Boolean) as any[];
+            // Inside each store block: Installation Photos first, then Signed WCC,
+            // then any other extras — matching client submission order.
             const ordered = [...owned, ...legacy].sort((a: any, b: any) => {
-              const rank = (d: any) => isSignedType(d.documentType) ? 0 : isPhotoType(d.documentType) ? 1 : 2;
+              const rank = (d: any) => isPhotoType(d.documentType) ? 0 : isSignedType(d.documentType) ? 1 : 2;
               return rank(a) - rank(b) || new Date(a.uploadedAt || a.createdAt).getTime() - new Date(b.uploadedAt || b.createdAt).getTime();
             });
             for (const doc of ordered) await addFile({ id: `exec-${doc.id}`, label: `${storeLabel} — ${docTypeLabel(doc.documentType)}`, kind: isPhotoType(doc.documentType) ? "photo" : "extra", storagePath: doc.storagePath || doc.filePath, mimeType: doc.mimeType, storeCode });
@@ -243,37 +261,66 @@ const InvoicePacketPage: React.FC = () => {
     return invoices.filter(i => i.invoiceNumber.toLowerCase().includes(q) || i.partyName.toLowerCase().includes(q));
   }, [invoices, search]);
 
-  const togglePage = (id: string) => {
-    setPages(prev => prev.map(p => p.id === id ? { ...p, included: !p.included } : p));
-  };
-  const movePage = (id: string, dir: -1 | 1) => {
-    setPages(prev => {
-      const idx = prev.findIndex(p => p.id === id);
-      if (idx < 0) return prev;
-      const j = idx + dir;
-      if (j < 0 || j >= prev.length) return prev;
-      const next = [...prev];
-      [next[idx], next[j]] = [next[j], next[idx]];
-      return next;
-    });
-  };
-
   const doPrint = () => window.print();
 
-  const [zipping, setZipping] = useState(false);
   const [building, setBuilding] = useState(false);
+  const [missingDocs, setMissingDocs] = useState<{ store: string; missing: string[] }[] | null>(null);
+  const [generateAnyway, setGenerateAnyway] = useState(false);
 
-  const downloadCombinedPdf = async () => {
+  const computeMissing = (): { store: string; missing: string[] }[] => {
+    const gaps: { store: string; missing: string[] }[] = [];
+    const coreMissing: string[] = [];
+    if (!pages.some(p => p.kind === "po" && p.filePath)) coreMissing.push("Purchase Order");
+    if (!pages.some(p => p.kind === "estimate")) coreMissing.push("Estimate");
+    if (coreMissing.length) gaps.push({ store: "Project-level", missing: coreMissing });
+    const dcPages = pages.filter(p => p.kind === "dc");
+    for (const dc of dcPages) {
+      const sc = dc.storeCode;
+      const storeLabel = dc.label.split(" — ")[0] || sc || "Store";
+      const storeMissing: string[] = [];
+      if (!pages.some(p => p.storeCode === sc && p.kind === "photo" && p.filePath)) storeMissing.push("Installation Photos");
+      if (!pages.some(p => p.storeCode === sc && p.kind === "extra" && p.filePath && /signed/i.test(p.label))) storeMissing.push("Signed WCC");
+      if (storeMissing.length) gaps.push({ store: storeLabel, missing: storeMissing });
+    }
+    return gaps;
+  };
+
+  const generateInvoicePacket = async () => {
     if (!packet) return;
+    const gaps = computeMissing();
+    if (gaps.length && !generateAnyway) {
+      setMissingDocs(gaps);
+      return;
+    }
+    setMissingDocs(null);
+    setGenerateAnyway(false);
     setBuilding(true);
     try {
       const pdf = await PDFDocument.create();
       const A4_W = 595.28;
       const A4_H = 841.89;
       const MARGIN = 24;
+      const helv = await pdf.embedFont(StandardFonts.Helvetica);
+      const helvBold = await pdf.embedFont(StandardFonts.HelveticaBold);
+      const invNum = packet.invoice?.invoiceNumber || String(selectedId);
+      const projNum = packet.estimate?.estimateNumber || packet.estimate?.projectNumber || "—";
+
+      let lastStoreCode: string | null = null;
+      const separatorIndices: number[] = [];
 
       for (const p of included) {
         try {
+          if (p.kind === "dc" && p.storeCode && p.storeCode !== lastStoreCode) {
+            lastStoreCode = p.storeCode;
+            const sepPage = pdf.addPage([A4_W, A4_H]);
+            const sepLabel = p.label.split(" — ")[0] || p.storeCode || "Store";
+            sepPage.drawRectangle({ x: 0, y: A4_H / 2 - 40, width: A4_W, height: 80, color: rgb(0.95, 0.95, 0.95) });
+            sepPage.drawText("STORE", { x: A4_W / 2 - helvBold.widthOfTextAtSize("STORE", 14) / 2, y: A4_H / 2 + 10, size: 14, font: helvBold, color: rgb(0.3, 0.3, 0.3) });
+            const labelText = sepLabel.length > 60 ? sepLabel.slice(0, 60) : sepLabel;
+            sepPage.drawText(labelText, { x: A4_W / 2 - helvBold.widthOfTextAtSize(labelText, 12) / 2, y: A4_H / 2 - 15, size: 12, font: helvBold, color: rgb(0.2, 0.2, 0.2) });
+            separatorIndices.push(pdf.getPageCount() - 1);
+          }
+
           if (p.filePath) {
             const res = await fetch(p.filePath);
             if (!res.ok) continue;
@@ -324,64 +371,33 @@ const InvoicePacketPage: React.FC = () => {
         alert("No pages could be assembled into a PDF. Check that documents are loaded.");
         return;
       }
+
+      const totalPages = pdf.getPageCount();
+      const skip = new Set(separatorIndices);
+      pdf.getPages().forEach((page, i) => {
+        if (skip.has(i)) return;
+        const w = page.getWidth();
+        const h = page.getHeight();
+        const headerText = `Invoice ${invNum}  |  Project ${projNum}`;
+        const footerText = `Page ${i + 1} of ${totalPages}`;
+        try {
+          page.drawText(headerText, { x: MARGIN, y: h - 14, size: 7, font: helv, color: rgb(0.5, 0.5, 0.5) });
+          page.drawText(footerText, { x: w - MARGIN - helv.widthOfTextAtSize(footerText, 7), y: 10, size: 7, font: helv, color: rgb(0.5, 0.5, 0.5) });
+        } catch { /* embedded PDF page with incompatible encoding */ }
+      });
+
       const pdfBytes = await pdf.save();
       const blob = new Blob([pdfBytes as BlobPart], { type: "application/pdf" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `Invoice_Packet_${packet.invoice?.invoiceNumber || selectedId}.pdf`;
+      a.download = `Invoice_Packet_${invNum}.pdf`;
       a.click();
       URL.revokeObjectURL(url);
     } catch (err: any) {
-      alert("Combined PDF build failed: " + (err?.message || err));
+      alert("Invoice Packet generation failed: " + (err?.message || err));
     } finally {
       setBuilding(false);
-    }
-  };
-
-  const downloadZip = async () => {
-    const filePages = included.filter(p => p.filePath);
-    if (filePages.length === 0) {
-      alert("No downloadable files in this packet. Use Print Packet for generated ERP pages (invoice / estimate / DC).");
-      return;
-    }
-    setZipping(true);
-    try {
-      const files: Record<string, Uint8Array> = {};
-      let n = 0;
-      const manifest: string[] = [`Invoice Packet — ${packet?.invoice?.invoiceNumber || selectedId}`, "", "Contents (in business order):", ""];
-      for (const p of filePages) {
-        n += 1;
-        const res = await fetch(p.filePath!);
-        if (!res.ok) { manifest.push(`${String(n).padStart(2, "0")}. [SKIPPED — fetch failed] ${p.label}`); continue; }
-        const buf = new Uint8Array(await res.arrayBuffer());
-        const ext = (p.mimeType === "application/pdf" || /\.pdf$/i.test(p.filePath!)) ? ".pdf"
-          : /\.(png|jpe?g|gif|webp)$/i.test(p.filePath!) ? "." + (p.filePath!.split(".").pop() || "jpg")
-          : "";
-        const safe = p.label.replace(/[^a-zA-Z0-9-_ ]/g, "").replace(/\s+/g, "_").slice(0, 50);
-        const name = `${String(n).padStart(2, "0")}_${safe}${ext}`;
-        files[name] = buf;
-        manifest.push(`${String(n).padStart(2, "0")}. ${p.label}`);
-      }
-      // Generated (print-only) pages noted in manifest
-      const printOnly = included.filter(p => !p.filePath);
-      if (printOnly.length) {
-        manifest.push("", "Generated ERP pages (use Print Packet → Save as PDF):", "");
-        for (const p of printOnly) { n += 1; manifest.push(`${String(n).padStart(2, "0")}. ${p.label}`); }
-      }
-      files["00_PACKET_CONTENTS.txt"] = strToU8(manifest.join("\n"));
-      const zipped = zipSync(files);
-      const blob = new Blob([zipped], { type: "application/zip" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `Invoice_Packet_${packet?.invoice?.invoiceNumber || selectedId}.zip`;
-      a.click();
-      URL.revokeObjectURL(url);
-    } catch (err: any) {
-      alert("ZIP download failed: " + (err?.message || err));
-    } finally {
-      setZipping(false);
     }
   };
 
@@ -411,7 +427,7 @@ const InvoicePacketPage: React.FC = () => {
         <h1 className="text-2xl md:text-3xl font-bold tracking-tight text-slate-900 flex items-center gap-2">
           <Package className="w-7 h-7 text-orange-600" /> Invoice Packet Builder
         </h1>
-        <p className="text-slate-500 text-sm mt-1">Select an invoice → auto-collect PO, estimate, DC, photos → reorder, include/exclude → print.</p>
+        <p className="text-slate-500 text-sm mt-1">Select an invoice → auto-collect PO, estimate, DC, photos → generate one client-ready PDF.</p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 print:block">
@@ -453,7 +469,6 @@ const InvoicePacketPage: React.FC = () => {
             </>
           )}
 
-          {/* Page list with include/reorder */}
           {packet && (
             <div className="glass-panel overflow-hidden">
               <div className="px-4 py-2 border-b border-slate-200 bg-slate-50 flex items-center justify-between gap-2">
@@ -463,34 +478,20 @@ const InvoicePacketPage: React.FC = () => {
                     <Printer className="w-3 h-3" /> Print
                   </button>
                   <button
-                    onClick={downloadCombinedPdf}
+                    onClick={generateInvoicePacket}
                     disabled={building}
-                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-xs font-semibold"
-                    title="Download everything as a single combined PDF"
+                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-orange-600 hover:bg-orange-700 disabled:opacity-60 text-white text-xs font-semibold"
+                    title="Generate a single client-ready PDF in submission order"
                   >
                     {building ? <Loader2 className="w-3 h-3 animate-spin" /> : <FileDown className="w-3 h-3" />}
-                    Combined PDF
-                  </button>
-                  <button
-                    onClick={downloadZip}
-                    disabled={zipping}
-                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-orange-600 hover:bg-orange-700 disabled:opacity-60 text-white text-xs font-semibold"
-                    title="Download all packet files as a ZIP in business order"
-                  >
-                    {zipping ? <Loader2 className="w-3 h-3 animate-spin" /> : <FileArchive className="w-3 h-3" />}
-                    ZIP
+                    Generate Invoice Packet
                   </button>
                 </div>
               </div>
               <div className="divide-y divide-slate-100 max-h-[40vh] overflow-y-auto">
                 {pages.map((p, idx) => (
                   <div key={p.id} className="px-3 py-2 flex items-center gap-2">
-                    <button onClick={() => togglePage(p.id)} className={`w-5 h-5 rounded border flex items-center justify-center ${p.included ? "bg-emerald-500 border-emerald-500 text-white" : "border-slate-300"}`}>
-                      {p.included && <Check className="w-3 h-3" />}
-                    </button>
                     <div className="flex-1 text-xs truncate" title={p.label}>{idx + 1}. {p.label}</div>
-                    <button onClick={() => movePage(p.id, -1)} className="text-slate-400 hover:text-slate-900"><ChevronUp className="w-3 h-3" /></button>
-                    <button onClick={() => movePage(p.id, 1)} className="text-slate-400 hover:text-slate-900"><ChevronDown className="w-3 h-3" /></button>
                   </div>
                 ))}
               </div>
@@ -509,6 +510,23 @@ const InvoicePacketPage: React.FC = () => {
             <div className="glass-panel p-8 text-center text-slate-500">Loading packet…</div>
           ) : (
             <div className="space-y-6 packet-print-root" data-print-document="true">
+              {missingDocs && missingDocs.length > 0 && (
+                <div className="glass-panel p-4 border-l-4 border-amber-400 bg-amber-50">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                    <div className="flex-1">
+                      <h3 className="font-bold text-sm text-amber-900">Missing documents</h3>
+                      <p className="text-xs text-amber-700 mt-0.5 mb-2">The following items are missing. Upload them before generating, or generate anyway.</p>
+                      <ul className="space-y-1 text-xs text-amber-800">
+                        {missingDocs.map((g, i) => (
+                          <li key={i}><b>{g.store}:</b> {g.missing.join(", ")}</li>
+                        ))}
+                      </ul>
+                      <button onClick={() => { setGenerateAnyway(true); generateInvoicePacket(); }} className="mt-3 px-3 py-1.5 rounded-md bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold">Generate anyway</button>
+                    </div>
+                  </div>
+                </div>
+              )}
               {included.map((p, idx) => (
                 <div key={p.id} className={`packet-page bg-white border border-slate-200 print:border-0 rounded-lg shadow-sm print:shadow-none ${idx < included.length - 1 ? "packet-page-break" : ""}`}>
                   <div className="px-4 py-2 border-b border-slate-100 bg-slate-50 text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center justify-between print:hidden">
@@ -561,7 +579,7 @@ const InvoicePacketPage: React.FC = () => {
 const InvoiceFrontPage: React.FC<{ packet: PacketData; sellerProfile: any; assetToken?: string | null }> = ({ packet, sellerProfile, assetToken }) => {
   const inv = packet.invoice;
   const est = packet.estimate;
-  const lines = (inv.lineItems?.length ? inv.lineItems : packet.estimateItems || []) as any[];
+  const lines = (inv.lineItems?.length ? inv.lineItems : (packet.estimateItems || []).filter((r: any) => !isServiceLineType(r.lineType))) as any[];
   const taxable = Number(inv.amount ?? lines.reduce((sum, row) => sum + Number(row.amount ?? Number(row.quantity || 0) * Number(row.rate || 0)), 0));
   const totalTax = Number(inv.taxAmount ?? Math.max(0, Number(inv.totalAmount || 0) - taxable));
   const estIgst = Number(est?.igstAmount || 0);
