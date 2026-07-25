@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useAuth } from "../../../contexts/AuthContext";
 import { isBoltMode } from "../../../lib/supabase";
-import { fetchEstimates, fetchEstimateItems, fetchDeliveryChallans, fetchInvoiceById, createInvoice } from "../../../lib/api";
+import { fetchEstimates, fetchEstimateItems, fetchDeliveryChallans, fetchInvoiceById, createInvoice, updateInvoice, fetchExecutionDocuments, openExecutionDocument } from "../../../lib/api";
 import { Link } from "wouter";
 import { X, Plus, Trash2, Save, Send, Printer, ChevronLeft } from "lucide-react";
 import { normalizeDisplayName } from "../../../../../shared/textFormat";
@@ -50,6 +50,8 @@ const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ open, invoiceId, estimate
   const [linkedEstimate, setLinkedEstimate] = useState<any>(null);
   const [linkedDc, setLinkedDc] = useState<any>(null);
   const [origInvoice, setOrigInvoice] = useState<any>(null);
+  const [attachments, setAttachments] = useState<any[]>([]);
+  const [selectedAttachments, setSelectedAttachments] = useState<number[]>([]);
 
   // Load: either an existing invoice OR build a draft from estimate + DC.
   useEffect(() => {
@@ -72,6 +74,14 @@ const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ open, invoiceId, estimate
               setPoReference(inv.poReference || inv.po_reference || "");
               setRemarks(inv.remarks || "");
               setStatus(inv.status || "draft");
+              const attachmentIds = inv.packetSettings?.attachmentIds || inv.packet_settings?.attachment_ids || [];
+              setSelectedAttachments(Array.isArray(attachmentIds) ? attachmentIds : []);
+              const invEstimateId = inv.estimateId ?? inv.estimate_id;
+              if (invEstimateId) {
+                const [allEstimates, docs] = await Promise.all([fetchEstimates(token), fetchExecutionDocuments(token, invEstimateId)]);
+                setLinkedEstimate((allEstimates as any[]).find((e: any) => e.id === invEstimateId) || null);
+                setAttachments(docs as any[]);
+              }
               const lines = Array.isArray(inv.lineItems || inv.line_items) ? (inv.lineItems || inv.line_items) : [];
               setItems(lines.length > 0 ? lines.map((l: any) => ({
                 itemName: l.itemName || l.item_name || "",
@@ -126,11 +136,14 @@ const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ open, invoiceId, estimate
         } else if (estimateId) {
           // Build new invoice from estimate items
           if (isBoltMode) {
-            const [allEstimates, its, allDcs] = await Promise.all([
+            const [allEstimates, its, allDcs, docs] = await Promise.all([
               fetchEstimates(token),
               fetchEstimateItems(token, estimateId),
               deliveryChallanId ? fetchDeliveryChallans(token) : Promise.resolve([]),
+              fetchExecutionDocuments(token, estimateId),
             ]);
+            setAttachments(docs as any[]);
+            setSelectedAttachments((docs as any[]).map((d: any) => d.id));
             const est = (allEstimates as any[]).find((e: any) => e.id === estimateId);
             setLinkedEstimate(est || null);
             if (est) {
@@ -233,14 +246,14 @@ const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ open, invoiceId, estimate
         poNumber: poNumber || null,
         poReference: poReference || null,
         remarks: remarks || null,
+        packetSettings: { ...(origInvoice?.packetSettings || {}), attachmentIds: selectedAttachments },
       };
       if (isBoltMode) {
         if (invoiceId || origInvoice?.id) {
-          // Invoice update not yet migrated to Edge Function — warn but don't crash
-          alert("Invoice update migration to Edge Function pending.");
-          return;
+          await updateInvoice(token, Number(invoiceId || origInvoice.id), payload);
+        } else {
+          await createInvoice(token, payload);
         }
-        await createInvoice(token, payload);
       } else {
         let r: Response;
         if (invoiceId || origInvoice?.id) {
@@ -409,6 +422,21 @@ const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ open, invoiceId, estimate
           </div>
 
           <div>
+            <div className="mb-5 bg-white rounded-xl border border-slate-200 p-4">
+              <h4 className="text-xs font-black uppercase tracking-wider text-slate-600 mb-2">Attachments</h4>
+              <p className="text-[11px] text-slate-500 mb-3">References existing project documents. No files are copied or uploaded.</p>
+              {attachments.length === 0 ? <p className="text-xs text-slate-400">No project documents available.</p> : (
+                <div className="grid md:grid-cols-2 gap-2">
+                  {attachments.map(doc => (
+                    <label key={doc.id} className="flex items-center gap-2 border border-slate-100 rounded p-2 text-xs">
+                      <input type="checkbox" checked={selectedAttachments.includes(doc.id)} onChange={e => setSelectedAttachments(prev => e.target.checked ? (prev.includes(doc.id) ? prev : [...prev, doc.id]) : prev.filter(id => id !== doc.id))} />
+                      <span className="flex-1"><b>{String(doc.documentType || "document").replace(/_/g, " ")}</b><br/><span className="text-slate-400">{doc.originalFileName || String(doc.storagePath || doc.filePath).split("/").pop()}</span></span>
+                      <button type="button" className="text-blue-600 font-bold" onClick={() => openExecutionDocument(doc.storagePath || doc.filePath).catch(err => alert(err.message))}>View</button>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
             <Field label="Remarks">
               <textarea rows={3} value={remarks} onChange={e => setRemarks(e.target.value)} className="input-compact resize-none" />
             </Field>

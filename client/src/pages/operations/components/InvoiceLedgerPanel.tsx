@@ -93,13 +93,15 @@ const InvoiceLedgerPanel: React.FC<InvoiceLedgerPanelProps> = ({
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState<string>("all");
 
-  // ----- BUILDER TAB: pick a DC/WCC (PO already received), then create invoice -----
+  // ----- BUILDER TAB: one row per estimate/PO, containing all its DC/WCCs -----
   const dcRows = useMemo(() => {
-    return challans.map(d => {
-      const est = estimates.find(e => e.id === d.estimateId);
+    const grouped = new Map<number, DeliveryChallan[]>();
+    challans.forEach(dc => grouped.set(dc.estimateId, [...(grouped.get(dc.estimateId) || []), dc]));
+    return Array.from(grouped.entries()).map(([estimateId, dcs]) => {
+      const est = estimates.find(e => e.id === estimateId);
       const client = est ? clients.find(c => c.id === est.clientId) : null;
-      const existingInv = invoices.find(i => (i.deliveryChallanId === d.id) || (!i.deliveryChallanId && i.estimateId === d.estimateId));
-      return { dc: d, est, client, existingInv };
+      const existingInv = invoices.find(i => i.estimateId === estimateId && i.status !== "cancelled");
+      return { dcs, est, client, existingInv };
     });
   }, [challans, estimates, invoices, clients]);
 
@@ -191,7 +193,7 @@ const InvoiceLedgerPanel: React.FC<InvoiceLedgerPanelProps> = ({
             <table className="w-full text-xs">
               <thead className="bg-slate-50 text-[10px] uppercase font-bold text-slate-500 border-b border-slate-200">
                 <tr>
-                  <th className="px-3 py-2 text-left">DC / WCC No.</th>
+                  <th className="px-3 py-2 text-left">DC / WCC</th>
                   <th className="px-3 py-2 text-left">Client</th>
                   <th className="px-3 py-2 text-left">Estimate</th>
                   <th className="px-3 py-2 text-left">PO No.</th>
@@ -204,13 +206,13 @@ const InvoiceLedgerPanel: React.FC<InvoiceLedgerPanelProps> = ({
                 {dcRows.length === 0 && (
                   <tr><td colSpan={7} className="px-3 py-10 text-center text-slate-400 text-sm">No delivery challans / WCCs exist yet. Create one from an estimate after PO upload.</td></tr>
                 )}
-                {dcRows.map(({ dc, est, client, existingInv }) => (
-                  <tr key={dc.id} className="hover:bg-slate-50/60">
-                    <td className="px-3 py-2 font-mono font-bold text-amber-700">{dc.dcNumber}</td>
+                {dcRows.map(({ dcs, est, client, existingInv }) => (
+                  <tr key={est?.id || dcs[0].estimateId} className="hover:bg-slate-50/60">
+                    <td className="px-3 py-2 font-bold text-amber-700">{dcs.length} document{dcs.length === 1 ? "" : "s"}<div className="text-[10px] font-mono font-normal text-slate-500">{dcs.map(dc => dc.dcNumber).join(", ")}</div></td>
                     <td className="px-3 py-2 text-slate-700">{client?.name || "—"}</td>
                     <td className="px-3 py-2 font-mono text-slate-700">{est?.estimateNumber || "—"}</td>
                     <td className="px-3 py-2 font-mono text-purple-700">{est?.poNumber || "—"}</td>
-                    <td className="px-3 py-2 text-center text-slate-500">{dc.deliveryDate ? new Date(dc.deliveryDate).toLocaleDateString("en-GB") : "—"}</td>
+                    <td className="px-3 py-2 text-center text-slate-500">{dcs[0].deliveryDate ? new Date(dcs[0].deliveryDate).toLocaleDateString("en-GB") : "—"}</td>
                     <td className="px-3 py-2 text-center">
                       {existingInv ? (
                         <button
@@ -222,7 +224,7 @@ const InvoiceLedgerPanel: React.FC<InvoiceLedgerPanelProps> = ({
                     <td className="px-3 py-2 text-center">
                       {!existingInv ? (
                         <button
-                          onClick={() => openInvoiceEditor({ estimateId: dc.estimateId, deliveryChallanId: dc.id })}
+                          onClick={() => openInvoiceEditor({ estimateId: dcs[0].estimateId })}
                           className="inline-flex items-center gap-1 px-2.5 py-1 bg-orange-50 border border-orange-200 text-orange-700 text-[10px] font-black rounded hover:bg-orange-100 transition"
                         >
                           <Plus className="w-3 h-3" /> Create Invoice

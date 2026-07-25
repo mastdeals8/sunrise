@@ -2357,8 +2357,9 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
         setUploadingDocType(docType);
         const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
         const storagePath = `estimate-${estimateId}/po/${Date.now()}-${safeName}`;
-        const { storagePath: saved, displayUrl } = await uploadToStorage("execution-documents", storagePath, file);
-        customSetCallback(displayUrl);
+        const { storagePath: saved } = await uploadToStorage("execution-documents", storagePath, file);
+        // Persist only the storage object path. View/download actions sign it on demand.
+        customSetCallback(saved);
         await registerExecutionDocument(token, {
           estimateId,
           storeCode: "",
@@ -4462,7 +4463,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
         estimateId={invoiceEditor.estimateId ?? null}
         deliveryChallanId={invoiceEditor.deliveryChallanId ?? null}
         onClose={closeInvoiceEditor}
-        onSaved={() => { fetchLedgerData(); }}
+        onSaved={() => { void Promise.all([fetchLedgerData(), fetchData()]); }}
       />
 
       {/* ======================================================== */}

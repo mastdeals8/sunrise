@@ -4,7 +4,7 @@ import { useAuth } from "../contexts/AuthContext";
 import { FileUp, Search, Download, ExternalLink, Image as ImageIcon, FileText, File, X, RefreshCw, Trash2, History } from "lucide-react";
 import { EmptyState } from "@/components/ui-kit";
 import { isBoltMode } from "../lib/supabase";
-import { fetchEstimates, fetchDeliveryChallans, fetchExecutionDocuments } from "../lib/api";
+import { fetchEstimates, fetchDeliveryChallans, fetchExecutionDocuments, openExecutionDocument } from "../lib/api";
 
 interface Upload {
   id: number;
@@ -295,9 +295,9 @@ const ProjectDocumentsPage: React.FC = () => {
                         <button type="button" onClick={() => setViewingDoc(d)} className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline">
                           View <ExternalLink className="w-3 h-3" />
                         </button>
-                        <a href={d.filePath} download className="ml-3 inline-flex items-center gap-1 text-xs text-slate-600 hover:text-slate-900">
+                        <button type="button" onClick={() => openExecutionDocument(d.filePath, true).catch(err => alert(err.message))} className="ml-3 inline-flex items-center gap-1 text-xs text-slate-600 hover:text-slate-900">
                           <Download className="w-3 h-3" /> Download
-                        </a>
+                        </button>
                       </td>
                     </tr>
                   );
@@ -443,9 +443,9 @@ const DocumentViewer: React.FC<{
             </p>
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            <a href={doc.filePath} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 px-3 py-1.5 bg-slate-50 border border-slate-200 text-slate-700 text-xs font-bold rounded hover:bg-slate-100">
+            <button type="button" onClick={() => openExecutionDocument(doc.filePath).catch(err => alert(err.message))} className="inline-flex items-center gap-1 px-3 py-1.5 bg-slate-50 border border-slate-200 text-slate-700 text-xs font-bold rounded hover:bg-slate-100">
               Open <ExternalLink className="w-3 h-3" />
-            </a>
+            </button>
             {doc.id && (
               <>
                 <button type="button" onClick={loadVersions} className="inline-flex items-center gap-1 px-3 py-1.5 bg-slate-50 border border-slate-200 text-slate-700 text-xs font-bold rounded hover:bg-slate-100">
@@ -464,9 +464,9 @@ const DocumentViewer: React.FC<{
                 </button>
               </>
             )}
-            <a href={doc.filePath} download className="inline-flex items-center gap-1 px-3 py-1.5 bg-orange-50 border border-orange-200 text-orange-700 text-xs font-bold rounded hover:bg-orange-100">
+            <button type="button" onClick={() => openExecutionDocument(doc.filePath, true).catch(err => alert(err.message))} className="inline-flex items-center gap-1 px-3 py-1.5 bg-orange-50 border border-orange-200 text-orange-700 text-xs font-bold rounded hover:bg-orange-100">
               <Download className="w-3 h-3" /> Download
-            </a>
+            </button>
             <button type="button" onClick={onClose} className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded">
               <X className="w-5 h-5" />
             </button>

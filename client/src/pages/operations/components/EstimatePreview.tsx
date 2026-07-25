@@ -1,6 +1,6 @@
 import React from "react";
 import { isBoltMode } from "../../../lib/supabase";
-import { fetchExecutionStores, createInvoice, uploadToStorage, registerExecutionDocument } from "../../../lib/api";
+import { fetchExecutionStores, createInvoice, uploadToStorage, registerExecutionDocument, openExecutionDocument } from "../../../lib/api";
 import { AlertTriangle, Briefcase, Camera, CheckCircle2, ChevronRight, Copy, Download, Edit3, Eye, File, FileCheck2, FilePlus, FileSpreadsheet, FileText, FileUp, Image as ImageIcon, Paperclip, Pen, Plus, Printer, ScanLine, Store as StoreIcon, Upload, X } from "lucide-react";
 import { isAblblFormat } from "../../../../../shared/textFormat";
 import { formatProductDetails } from "../../../../../shared/productDetails";
@@ -2177,8 +2177,8 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
                       <div className="flex flex-wrap gap-2">
                         {selectedEstimate.poFilePath && (
                           <>
-                            <a href={selectedEstimate.poFilePath} target="_blank" rel="noreferrer" className="py-1.5 px-3 bg-white border border-green-200 text-green-700 rounded-lg font-bold hover:bg-green-50 transition">View PO</a>
-                            <a href={selectedEstimate.poFilePath} download className="py-1.5 px-3 bg-white border border-green-200 text-green-700 rounded-lg font-bold hover:bg-green-50 transition">Download PO</a>
+                            <button type="button" onClick={() => openExecutionDocument(selectedEstimate.poFilePath!).catch(err => alert(err.message))} className="py-1.5 px-3 bg-white border border-green-200 text-green-700 rounded-lg font-bold hover:bg-green-50 transition">View PO</button>
+                            <button type="button" onClick={() => openExecutionDocument(selectedEstimate.poFilePath!, true).catch(err => alert(err.message))} className="py-1.5 px-3 bg-white border border-green-200 text-green-700 rounded-lg font-bold hover:bg-green-50 transition">Download PO</button>
                           </>
                         )}
                         <button type="button" onClick={() => openPoForEstimate && openPoForEstimate(selectedEstimate)} className="py-1.5 px-3 bg-green-700 border border-green-700 text-white rounded-lg font-bold hover:bg-green-600 transition">Replace PO</button>
@@ -2657,7 +2657,7 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
                   <section className="border border-slate-100 rounded-lg overflow-hidden">
                     <div className="px-3 py-2 bg-slate-50 border-b border-slate-100 font-black uppercase tracking-wider text-slate-600">Supporting Documents</div>
                     <div className="p-3 flex flex-wrap gap-2">
-                      {selectedEstimate.poFilePath && <a href={selectedEstimate.poFilePath} target="_blank" rel="noreferrer" className="px-2 py-1 bg-purple-50 border border-purple-200 text-purple-700 font-black rounded hover:bg-purple-100">PO</a>}
+                      {selectedEstimate.poFilePath && <button type="button" onClick={() => openExecutionDocument(selectedEstimate.poFilePath!).catch(err => alert(err.message))} className="px-2 py-1 bg-purple-50 border border-purple-200 text-purple-700 font-black rounded hover:bg-purple-100">PO</button>}
                       {activeSelectedChallans.map((dc: any) => <button key={`inv-wcc-${dc.id}`} type="button" onClick={() => openDcPreview && openDcPreview(dc)} className="px-2 py-1 bg-blue-50 border border-blue-200 text-blue-700 font-black rounded hover:bg-blue-100">{isAblblFormat(dc.clientFormat) ? "WCC" : "DC"} {dc.dcNumber}</button>)}
                       {executionStores.flatMap(row => row.signedWccDocuments || []).map((doc: ExecutionDocumentRow) => <button key={`inv-signed-${doc.id}`} type="button" onClick={() => openExecutionDocumentViewer && openExecutionDocumentViewer(doc)} className="px-2 py-1 bg-emerald-50 border border-emerald-200 text-emerald-700 font-black rounded hover:bg-emerald-100">Signed WCC {doc.storeCode || ""}</button>)}
                       {executionStores.flatMap(row => row.photoDocuments || []).slice(0, 8).map((doc: ExecutionDocumentRow) => <button key={`inv-photo-${doc.id}`} type="button" onClick={() => openExecutionDocumentViewer && openExecutionDocumentViewer(doc)} className="px-2 py-1 bg-orange-50 border border-orange-200 text-orange-700 font-black rounded hover:bg-orange-100">Photo {doc.storeCode || ""}</button>)}

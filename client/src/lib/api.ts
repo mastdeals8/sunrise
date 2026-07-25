@@ -376,14 +376,14 @@ export async function fetchExecutionDocuments(
         .createSignedUrls(stale, SIGNED_URL_TTL_S);
       if (signed) {
         for (const s of signed) {
-          if (s.signedUrl) {
+          if (s.path && s.signedUrl) {
             _cacheSignedUrl(s.path, s.signedUrl);
             hitMap.set(s.path, s.signedUrl);
           }
         }
       }
     }
-    return docs.map((d: any) => ({ ...d, filePath: hitMap.get(d.filePath) ?? d.filePath }));
+    return docs.map((d: any) => ({ ...d, storagePath: d.filePath, signedUrl: hitMap.get(d.filePath), filePath: hitMap.get(d.filePath) ?? d.filePath }));
   } catch { /* return raw paths as fallback */ }
   return docs;
 }
@@ -964,6 +964,17 @@ export async function createInvoice(
   return res.json();
 }
 
+export async function updateInvoice(token: string | null, id: number, payload: Record<string, unknown>): Promise<any> {
+  if (!isBoltMode) {
+    const res = await apiFetch(`/api/finance/invoices/${id}`, token, { method: "PATCH", body: JSON.stringify(payload) });
+    if (!res.ok) throw new Error((await res.json()).message ?? "Failed to update invoice");
+    return res.json();
+  }
+  const res = await edgeFetch("invoice-create", token, { method: "POST", body: JSON.stringify({ ...payload, id }) });
+  if (!res.ok) throw new Error((await res.json()).message ?? "Failed to update invoice");
+  return res.json();
+}
+
 // ─── Delivery Challans ────────────────────────────────────────────────────────
 
 const isLegacyWccPhotoPath = (value: string) =>
@@ -1047,7 +1058,7 @@ async function attachPhotoSignedUrls<T extends { metadata?: any }>(rows: T[]): P
   }
   const hitMap = new Map<string, string>();
   const stale: string[] = [];
-  for (const p of paths) {
+  for (const p of Array.from(paths)) {
     const cached = _cachedSignedUrl(p);
     if (cached) hitMap.set(p, cached);
     else stale.push(p);
@@ -1059,7 +1070,7 @@ async function attachPhotoSignedUrls<T extends { metadata?: any }>(rows: T[]): P
         .createSignedUrls(stale, SIGNED_URL_TTL_S);
       if (signed) {
         for (const s of signed) {
-          if (s.signedUrl) {
+          if (s.path && s.signedUrl) {
             _cacheSignedUrl(s.path, s.signedUrl);
             hitMap.set(s.path, s.signedUrl);
           }
@@ -1261,6 +1272,19 @@ export async function getExecutionDocumentDisplayUrl(storagePath: string): Promi
   if (error) throw new Error(error.message);
   _cacheSignedUrl(storagePath, data!.signedUrl);
   return data!.signedUrl;
+}
+
+/** Generate a new signed URL at click time; the returned URL is never persisted. */
+export async function openExecutionDocument(storagePath: string, download = false): Promise<void> {
+  if (!storagePath) return;
+  if (/^https?:\/\//i.test(storagePath)) {
+    window.open(storagePath, "_blank", "noopener,noreferrer");
+    return;
+  }
+  const options = download ? { download: storagePath.split("/").pop() || true } : undefined;
+  const { data, error } = await supabase.storage.from("execution-documents").createSignedUrl(storagePath, SIGNED_URL_TTL_S, options);
+  if (error || !data?.signedUrl) throw new Error(error?.message || "Could not open document");
+  window.open(data.signedUrl, "_blank", "noopener,noreferrer");
 }
 
 /**

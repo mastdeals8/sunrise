@@ -10,7 +10,7 @@ import ProductForm, { type ProductFormValue, emptyProductFormValue } from "./Pro
 import { categoryKey, normalizeCategoryLabel } from "./CategoryAutocomplete";
 import ClientForm, { type ClientFormValue, emptyClientFormValue } from "./ClientForm";
 import { isBoltMode } from "../../../lib/supabase";
-import { fetchEstimateItems, masterDataSave } from "../../../lib/api";
+import { fetchEstimateItems, masterDataSave, openExecutionDocument } from "../../../lib/api";
 import { exportEstimateToExcel } from "../utils/exportHelpers";
 
 // ─── Create Product Drawer ───────────────────────────────────────────────────
@@ -1551,7 +1551,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
 	                            <td className="px-3 py-2 font-mono text-purple-700">
                               {e.poNumber ? (
                                 e.poFilePath ? (
-                                  <a href={e.poFilePath} target="_blank" rel="noreferrer" className="hover:underline">{e.poNumber}</a>
+                                  <button type="button" onClick={() => openExecutionDocument(e.poFilePath!).catch(err => alert(err.message))} className="hover:underline">{e.poNumber}</button>
                                 ) : (
                                   <span>{e.poNumber}</span>
                                 )
