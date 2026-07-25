@@ -63,10 +63,13 @@ const docTypeLabel = (type: string) => ({
 } as Record<string, string>)[type] || type.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
 
 const storeCodeFor = (value: any) => String(value?.storeCode || value?.metadata?.storeCode || "").trim();
-const isPhotoType = (type: string) => ["photo", "installation_photo", "execution_photo", "wcc_photo"].includes(type);
+const isPhotoType = (type: string) => ["photo", "installation_photo", "execution_photo"].includes(type);
 const isPoType = (type: string) => ["po", "client_po"].includes(type);
 const isSignedType = (type: string) => ["signed_wcc", "signed_dc"].includes(type);
 const isTransportType = (type: string) => ["transport_receipt", "lr_copy", "courier_receipt", "gate_pass", "eway_bill"].includes(type);
+// wcc_photo is the unsigned WCC photo captured in the field — not wanted in the client packet.
+// The client packet only includes the signed WCC that was stamped and uploaded.
+const isExcludedType = (type: string) => ["wcc_photo"].includes(type);
 // Documents that belong in the per-store block: only signed WCC/challan + installation photos.
 const isStoreScopeDoc = (type: string) => isSignedType(type) || isPhotoType(type);
 
@@ -200,6 +203,7 @@ const InvoicePacketPage: React.FC = () => {
           const projectDocs = docs.filter((d: any) => {
             if (isPoType(d.documentType)) return false;
             if (isStoreScopeDoc(d.documentType)) return false;
+            if (isExcludedType(d.documentType)) return false;
             return true;
           });
           const legacyProject: any[] = [];
@@ -231,7 +235,7 @@ const InvoicePacketPage: React.FC = () => {
             const storeCode = storeCodeFor(dc);
             const store = (data.stores || []).find((s: any) => String(s.code || s.storeCode || "") === storeCode);
             const storeLabel = store?.name ? `${store.name}${storeCode ? ` (${storeCode})` : ""}` : (storeCode || "Project");
-            const owned = docs.filter((d: any) => (Number(d.deliveryChallanId) === Number(dc.id) || (storeCode && storeCodeFor(d) === storeCode)) && isStoreScopeDoc(d.documentType));
+            const owned = docs.filter((d: any) => (Number(d.deliveryChallanId) === Number(dc.id) || (storeCode && storeCodeFor(d) === storeCode)) && isStoreScopeDoc(d.documentType) && !isExcludedType(d.documentType));
             const legacy = [
               dc.signedChallanPath && { id: `legacy-signed-${dc.id}`, documentType: isAblblFormat(dc.clientFormat) ? "signed_wcc" : "signed_dc", storagePath: dc.signedChallanPath },
               dc.photoPath && { id: `legacy-photo-${dc.id}`, documentType: "photo", storagePath: dc.photoPath },
