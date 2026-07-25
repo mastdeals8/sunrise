@@ -1274,12 +1274,63 @@ export async function getExecutionDocumentDisplayUrl(storagePath: string): Promi
   return data!.signedUrl;
 }
 
-/** Generate a new signed URL at click time; the returned URL is never persisted. */
-export async function openExecutionDocument(storagePath: string, download = false): Promise<void> {
-  if (!storagePath) return;
-  if (/^https?:\/\//i.test(storagePath)) {
-    window.open(storagePath, "_blank", "noopener,noreferrer");
-    return;
+function storageKeyFromValue(value: string): string | null {
+  const clean = value.trim();
+  if (!clean) return null;
+  if (/^https?:\/\//i.test(clean)) {
+    try {
+      const marker = "/storage/v1/object/";
+      const pathname = decodeURIComponent(new URL(clean).pathname);
+      const markerIndex = pathname.indexOf(marker);
+      if (markerIndex < 0) return null;
+      const afterObject = pathname.slice(markerIndex + marker.length).replace(/^(sign|public|authenticated)\//, "");
+      const bucketPrefix = "execution-documents/";
+      return afterObject.startsWith(bucketPrefix) ? afterObject.slice(bucketPrefix.length) : null;
+    } catch {
+      return null;
+    }
+  }
+  return clean.replace(/^\/+/, "").replace(/^execution-documents\//, "");
+}
+
+async function storageObjectExists(key: string): Promise<boolean> {
+  const slash = key.lastIndexOf("/");
+  const folder = slash >= 0 ? key.slice(0, slash) : "";
+  const fileName = slash >= 0 ? key.slice(slash + 1) : key;
+  if (!fileName) return false;
+  const { data, error } = await supabase.storage.from("execution-documents").list(folder, { limit: 100, search: fileName });
+  if (error) return false;
+  return Boolean(data?.some(object => object.name === fileName));
+}
+
+async function resolveExecutionDocumentKey(value: string, estimateId?: number): Promise<string | null> {
+  const storedKey = storageKeyFromValue(value);
+  if (storedKey && !storedKey.startsWith("uploads/") && await storageObjectExists(storedKey)) return storedKey;
+
+  // Legacy Express paths (/uploads/file-...) were local disk paths, never
+  // Supabase keys. Recover only through an existing PO registry row owned by
+  // this estimate; do not guess filenames or sign a key that was not verified.
+  if (estimateId) {
+    const { data: rows } = await supabase.from("execution_documents").select("file_path")
+      .eq("estimate_id", estimateId).eq("status", "active")
+      .in("document_type", ["po", "client_po"]).order("created_at", { ascending: false });
+    for (const row of rows || []) {
+      const candidate = storageKeyFromValue(String(row.file_path || ""));
+      if (candidate && !candidate.startsWith("uploads/") && await storageObjectExists(candidate)) return candidate;
+    }
+  }
+  return null;
+}
+
+/** Resolve and verify a storage object, then generate a new URL at click time. */
+export async function openExecutionDocument(storageValue: string, download = false, estimateId?: number): Promise<void> {
+  const storagePath = await resolveExecutionDocumentKey(storageValue, estimateId);
+  if (!storagePath) throw new Error("Document not found. Please replace or re-upload this attachment.");
+
+  if (estimateId && storageValue.trim() !== storagePath) {
+    // Best-effort repair of historical signed/local paths. A failed RLS update
+    // must not prevent the verified document from opening.
+    await supabase.from("estimates").update({ po_file_path: storagePath }).eq("id", estimateId).then(() => undefined);
   }
   const options = download ? { download: storagePath.split("/").pop() || true } : undefined;
   const { data, error } = await supabase.storage.from("execution-documents").createSignedUrl(storagePath, SIGNED_URL_TTL_S, options);

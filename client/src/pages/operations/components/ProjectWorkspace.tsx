@@ -1488,7 +1488,7 @@ const DocumentsTab: React.FC<{
           <div className="flex items-center gap-3 py-2">
             <FileText className="w-4 h-4 text-purple-400" />
             <span className="text-sm font-bold text-slate-700">PO {estimate.poNumber || "—"}</span>
-            <button type="button" onClick={() => openExecutionDocument(estimate.poFilePath!).catch(err => alert(err.message))} className="ml-auto inline-flex items-center gap-1 px-2.5 py-1.5 rounded border text-xs font-bold bg-purple-50 border-purple-200 text-purple-700 hover:bg-purple-100">
+            <button type="button" onClick={() => openExecutionDocument(estimate.poFilePath!, false, estimate.id).catch(err => alert(err.message))} className="ml-auto inline-flex items-center gap-1 px-2.5 py-1.5 rounded border text-xs font-bold bg-purple-50 border-purple-200 text-purple-700 hover:bg-purple-100">
               <Eye className="w-3.5 h-3.5" /> View PO
             </button>
           </div>
