@@ -1161,7 +1161,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
   }, []);
 
   const editableColumnIds = React.useMemo<EstimateGridColumnId[]>(() => ([
-    "element", "hsn", "standard", "product", "width", "height", "quantity", "rate"
+    "element", "product", "hsn", "standard", "width", "height", "quantity", "rate"
   ]), []);
 
   const getCellKey = (rowIndex: number, columnId: EstimateGridColumnId) => `${rowIndex}:${columnId}`;
@@ -1641,7 +1641,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
 	                                    if (isBoltMode) {
 	                                      const items = await fetchEstimateItems(token, e.id);
 	                                      const client = clients.find((c: any) => c.id === e.clientId);
-	                                      await exportEstimateToExcel(e, items, client?.name, sellerProfile?.name);
+	                                      await exportEstimateToExcel(e, items, client?.name, sellerProfile, stores);
 	                                    } else {
 	                                      window.open(`/api/operations/estimates/${e.id}/export-excel`, "_blank");
 	                                    }
@@ -1760,10 +1760,19 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                 const canShowStoreList = eIsAbfrl
                   ? Boolean(eClientIdNum && eBrandIdNum)
                   : Boolean(eClientIdNum);
+                // When a GST Profile (billing profile) is selected, filter the store
+                // list to only stores in that profile's state. This narrows the dropdown
+                // for large clients with stores across India. If no profile is selected,
+                // all eligible stores are shown (existing behaviour).
+                const selectedBillingProfile = clientBillingProfilesList.find(
+                  (bp: any) => String(bp.id) === String(estBillingProfileId)
+                );
+                const filterState = selectedBillingProfile?.state?.trim().toLowerCase() || "";
                 const eligibleStores = !canShowStoreList ? [] : stores.filter(s =>
                   s.isActive
                   && s.clientId === eClientIdNum
                   && (!eBrandIdNum || s.brandId === eBrandIdNum)
+                  && (!filterState || (s.state || "").trim().toLowerCase() === filterState)
                 );
 
                 const handleBrandSelectChange = (brandIdVal: string) => {
