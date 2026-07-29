@@ -1772,7 +1772,9 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                   s.isActive
                   && s.clientId === eClientIdNum
                   && (!eBrandIdNum || s.brandId === eBrandIdNum)
-                  && (!filterState || (s.state || "").trim().toLowerCase() === filterState)
+                  && (!filterState
+                      || (s.state || "").trim().toLowerCase() === filterState
+                      || activeStoreIds.includes(String(s.id)))
                 );
 
                 const handleBrandSelectChange = (brandIdVal: string) => {
