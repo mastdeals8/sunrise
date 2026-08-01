@@ -1,32 +1,11 @@
-// =========================================================================
-// EstimateDocument — single source of truth for the A4 Sunrise document
-// template. Renders the same dense ERP layout used by:
-//   - Estimate preview/PDF (Operations → Estimates)
-//   - Invoice preview/PDF (Invoice Packet builder, /invoice-packet)
-//   - Estimate summary page inside an Invoice Packet
-//
-// Layout (top → bottom):
-//   1. Billing/Shipping block (left) + Sunrise wordmark + meta (right)
-//   2. Subject / TAX INVOICE banner
-//   3. 16-column item grid (SL, ELEMENT, HSN, Standard/Non, PRODUCT DETAILS,
-//      Sizes W/H, T.Sqft/Qty, P.Sqft, Amount, SGST %/Amt, CGST %/Amt, Total)
-//      with one section per store. Each section ends with a yellow Total
-//      Material Cost row + Packing/Installation/Transport rows.
-//   4. Grand TOTAL row, stacked tax block (TOTAL BEFORE / +CGST / +SGST / +TOTAL)
-//   5. Terms & Conditions / Bank details / Authorised Signatory
-//   6. Orange branding banner
-//
-// The Excel export route on the server (server/routes.ts) renders the same
-// 16-column structure with xlsx-js-style styling — keep them in sync.
-// =========================================================================
+// EstimateDocument is the single React renderer for estimate preview,
+// browser print/PDF export, and the estimate page inside Invoice Packet.
 
 import React from "react";
 import { formatProductDetails } from "../../../shared/productDetails";
 import { companyAssetUrl } from "../utils/companyAssets";
 import type { Estimate, EstimateItem, Store, Client, Brand, Product } from "../pages/operations/types";
 import { orderedEstimateItems, orderedStoreKeysFromItems } from "../pages/operations/utils/estimateOrdering";
-
-export type DocumentKind = "estimate" | "invoice";
 
 export interface EstimateDocumentProps {
   estimate: Estimate;
@@ -35,49 +14,47 @@ export interface EstimateDocumentProps {
   clients: Client[];
   products?: Product[];
   brands?: Brand[];
-  /** "estimate" labels the meta row "Est - No -" and the subject band "Subject :".
-   *  "invoice" labels it "Inv - No -" and shows a "TAX INVOICE" banner. */
-  docKind?: DocumentKind;
-  /** Override the document number — used when rendering an invoice that has a
-   *  separate invoiceNumber from the linked estimate's estimateNumber. */
-  docNumber?: string;
-  /** ISO date string (or any Date-parseable). Overrides est.createdAt for invoices. */
-  docDate?: string;
-  /** Optional remarks / invoice subject used when docKind === "invoice" — replaces
-   *  the subject band text. Defaults to estimate.subject / estimate.title. */
-  subjectOverride?: string;
   sellerProfile?: any;
   assetToken?: string | null;
 }
 
-export const numberToWords = (num: number): string => {
-  const a = ['', 'One ', 'Two ', 'Three ', 'Four ', 'Five ', 'Six ', 'Seven ', 'Eight ', 'Nine ', 'Ten ', 'Eleven ', 'Twelve ', 'Thirteen ', 'Fourteen ', 'Fifteen ', 'Sixteen ', 'Seventeen ', 'Eighteen ', 'Nineteen '];
-  const b = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
-  let internalNum = Math.floor(num);
-  if (internalNum === 0) return 'Zero';
-  const g = (n: number): string => {
-    if (n < 20) return a[n];
-    const digit = n % 10;
-    return b[Math.floor(n / 10)] + (digit ? '-' + a[digit] : '');
-  };
-  const h = (n: number): string => {
-    if (n === 0) return '';
-    if (n < 100) return g(n) + ' ';
-    return a[Math.floor(n / 100)] + 'Hundred ' + (n % 100 === 0 ? '' : 'and ' + g(n % 100) + ' ');
-  };
-  let str = '';
-  const cr = Math.floor(internalNum / 10000000);
-  internalNum %= 10000000;
-  if (cr) str += h(cr) + 'Crore ';
-  const lk = Math.floor(internalNum / 100000);
-  internalNum %= 100000;
-  if (lk) str += h(lk) + 'Lakh ';
-  const th = Math.floor(internalNum / 1000);
-  internalNum %= 1000;
-  if (th) str += h(th) + 'Thousand ';
-  if (internalNum) str += h(internalNum);
-  return 'Rupees ' + str.trim() + ' Only';
+const SERVICE_LINE_TYPES = new Set(["packing", "installation", "transport"]);
+const isServiceItem = (item: EstimateItem) => SERVICE_LINE_TYPES.has(String(item.lineType || "").toLowerCase());
+const serviceRateValue = (item: EstimateItem) => Number(item.rate) || 0;
+const serviceLabel = (item: EstimateItem) => {
+  const lineType = String(item.lineType || "").toLowerCase();
+  const rate = serviceRateValue(item);
+  if (lineType === "packing") return rate > 0 ? `Packing Charges (${rate}%)` : "Packing Charges";
+  if (lineType === "installation") return rate > 0 ? `Installation Charges (${rate}%)` : "Installation Charges";
+  if (lineType === "transport" && String(item.unit || "").toLowerCase() === "km") return rate > 0 ? `Outstation Transportation (₹${rate}/KM)` : "Outstation Transportation";
+  if (lineType === "transport") return "Local Transportation";
+  return item.itemName || "";
 };
+const serviceRateLabel = (item: EstimateItem) => item.calculationType === "percentage" ? `${serviceRateValue(item)}%` : "";
+
+const wrapAddress = (value: string) => {
+  const raw = String(value || "");
+  if (raw.includes("\n")) return raw.split(/\n+/).map(line => line.trim()).filter(Boolean).join("\n");
+  const normalized = raw.replace(/\s+/g, " ").replace(/\s*,\s*/g, ", ").replace(/\s+-\s*/g, " - ").trim();
+  if (!normalized) return "";
+  const commaParts = normalized.split(",").map(part => part.trim()).filter(Boolean);
+  const parts = commaParts.length > 1 ? commaParts.map((part, index) => index < commaParts.length - 1 ? `${part},` : part) : normalized.split(/\s+/);
+  const lines: string[] = [];
+  let current = "";
+  parts.forEach(part => {
+    const next = current ? `${current} ${part}` : part;
+    if (next.length > 72 && current && lines.length < 2) { lines.push(current); current = part; return; }
+    current = next;
+  });
+  if (current) lines.push(current);
+  return lines.length > 3 ? [...lines.slice(0, 2), lines.slice(2).join(" ")].join("\n") : lines.join("\n");
+};
+
+const documentLogo = (src: string, companyName: string) => src ? (
+  <img src={src} alt={companyName} style={{ width: 230, maxWidth: "100%", height: "auto", objectFit: "contain" }} />
+) : (
+  <div style={{ fontWeight: 900, fontSize: "22px", lineHeight: 1.1, textAlign: "right" }}>{companyName}</div>
+);
 
 const EstimateDocument: React.FC<EstimateDocumentProps> = ({
   estimate: est,
@@ -85,20 +62,17 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
   stores,
   clients,
   products = [],
-  docKind = "estimate",
-  docNumber,
-  docDate,
-  subjectOverride,
   sellerProfile = {},
-  assetToken,
+  assetToken: token,
 }) => {
   const targetClient = clients.find(c => c.id === est.clientId);
   const targetStore = stores.find(s => s.id === est.storeId);
+  const sortedItems = orderedEstimateItems(items);
+  // Unified flow: single vs multi-store is derived from storeGrouping
+  // alone (no separate "abfrl_multi_store" mode). One store added on
+  // the entry sheet → single-store render; many stores → multi-store.
   const hasStoreGrouping = Boolean(est.storeGrouping && Object.keys(est.storeGrouping as any).length > 0);
-  const sortedItems = React.useMemo(() => orderedEstimateItems(items), [items]);
 
-  // Billing block — first non-empty source wins. Billing snapshot beats user-
-  // entered estBillingTo beats client.address.
   const billingRaw = est.billingTo || "";
   const billingLines = billingRaw.split("\n").map(s => s.trim()).filter(Boolean);
   const billingNameSnap = est.billingLegalNameSnapshot || "";
@@ -122,7 +96,8 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
   const billingStateCode = est.billingStateCodeSnapshot || est.stateCode || "";
   const billingPan = est.pan || targetClient?.pan || "";
 
-  // Shipping
+  // Shipping: if user typed shipping text, parse name+address from it.
+  // Otherwise reuse the billing block (same name, same address).
   const shippingRaw = est.shippingAddressSnapshot || est.shippingTo || "";
   const shippingHasOwn = shippingRaw.trim().length > 0;
   let shippingName = billingName;
@@ -137,8 +112,9 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
     }
   }
   const shippingGstin = billingGstin;
+  const isIgst = est.gstType === "IGST";
 
-  // Sections (one per store from storeGrouping; otherwise single)
+  // Build sections (one per store for ABFRL, single section otherwise)
   type SectionRow = {
     label: string;
     type: string;
@@ -155,18 +131,23 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
     sgstAmt: number;
     cgstPercent: number;
     cgstAmt: number;
+    igstPercent: number;
+    igstAmt: number;
     total: number;
   };
   type Section = {
     storeName: string;
     storeCode: string;
     itemRows: SectionRow[];
+    serviceRows: EstimateItem[];
     packingPercent: number;
     implPercent: number;
     transportAmt: number;
-    materialBase: number;
+    transportDescription?: string | null;
+    materialBase: number; // items only (no packing/impl/transport)
     materialSgst: number;
     materialCgst: number;
+    materialIgst: number;
     materialTotal: number;
     packingBase: number;
     implBase: number;
@@ -183,16 +164,18 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
       item.description || "",
       item.itemName || "",
     ),
-    width: item.width != null && Number(item.width) > 0 ? Number(item.width).toFixed(2) : "",
-    height: item.height != null && Number(item.height) > 0 ? Number(item.height).toFixed(2) : "",
+    width: item.width ? Number(item.width).toFixed(2) : "",
+    height: item.height ? Number(item.height).toFixed(2) : "",
     qty: item.quantity != null ? Number(item.quantity).toFixed(2) : "",
-    tsqft: item.totalSize != null && Number(item.totalSize) > 0 ? Number(item.totalSize).toFixed(2) : "",
+    tsqft: item.totalSize != null ? Number(item.totalSize).toFixed(2) : "",
     psqft: item.rate != null ? Number(item.rate).toFixed(2) : "",
     amount: Number(item.totalPrice) || 0,
     sgstPercent: Number(item.sgstPercent) || 0,
     sgstAmt: Number(item.sgstAmount) || 0,
     cgstPercent: Number(item.cgstPercent) || 0,
     cgstAmt: Number(item.cgstAmount) || 0,
+    igstPercent: Number(item.igstPercent) || 0,
+    igstAmt: Number(item.igstAmount) || 0,
     total: Number(item.totalAmount) || 0,
   });
 
@@ -204,6 +187,8 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
       const itemSls = Array.isArray(groupData) ? groupData : (groupData.itemSls || []);
       const storeItems = sortedItems.filter(it => itemSls.includes(it.sl || 0));
       if (storeItems.length === 0) return;
+      const materialItems = storeItems.filter(it => !isServiceItem(it));
+      const serviceItems = storeItems.filter(isServiceItem);
       const packPct = !Array.isArray(groupData) && groupData.packingPercent !== undefined
         ? Number(groupData.packingPercent)
         : Number(est.packingPercent || 0);
@@ -213,114 +198,100 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
       const transAmt = !Array.isArray(groupData) && groupData.transportAmount !== undefined
         ? Number(groupData.transportAmount)
         : 0;
-      const materialBase = storeItems.reduce((s, it) => s + Number(it.totalPrice || 0), 0);
-      const materialSgst = storeItems.reduce((s, it) => s + Number(it.sgstAmount || 0), 0);
-      const materialCgst = storeItems.reduce((s, it) => s + Number(it.cgstAmount || 0), 0);
+      const transportDescription = !Array.isArray(groupData) && groupData.transportDescription !== undefined
+        ? groupData.transportDescription
+        : null;
+      const materialBase = materialItems.reduce((s, it) => s + Number(it.totalPrice || 0), 0);
+      const materialSgst = materialItems.reduce((s, it) => s + Number(it.sgstAmount || 0), 0);
+      const materialCgst = materialItems.reduce((s, it) => s + Number(it.cgstAmount || 0), 0);
+      const materialIgst = materialItems.reduce((s, it) => s + Number(it.igstAmount || 0), 0);
+      const hasSavedServices = serviceItems.length > 0;
       sections.push({
-        storeName: tStore?.name || `Store ${sidKey}`,
+        storeName: tStore?.name || (!Array.isArray(groupData) && groupData.storeName) || `Store ${sidKey}`,
         storeCode: tStore?.storeCode || "",
-        itemRows: storeItems.map((it, idx) => itemToRow(it, idx)),
+        itemRows: materialItems.map((it, idx) => itemToRow(it, idx)),
+        serviceRows: serviceItems,
         packingPercent: packPct,
         implPercent: implPct,
         transportAmt: transAmt,
+        transportDescription,
         materialBase,
         materialSgst,
         materialCgst,
-        materialTotal: materialBase + materialSgst + materialCgst,
-        packingBase: materialBase * (packPct / 100),
-        implBase: materialBase * (implPct / 100),
-        transportBase: transAmt,
+        materialIgst,
+        materialTotal: materialBase + materialSgst + materialCgst + materialIgst,
+        packingBase: hasSavedServices ? serviceItems.filter(it => it.lineType === "packing").reduce((s, it) => s + Number(it.totalPrice || 0), 0) : materialBase * (packPct / 100),
+        implBase: hasSavedServices ? serviceItems.filter(it => it.lineType === "installation").reduce((s, it) => s + Number(it.totalPrice || 0), 0) : materialBase * (implPct / 100),
+        transportBase: hasSavedServices ? serviceItems.filter(it => it.lineType === "transport").reduce((s, it) => s + Number(it.totalPrice || 0), 0) : transAmt,
       });
     });
   } else {
-    const materialBase = sortedItems.reduce((s, it) => s + Number(it.totalPrice || 0), 0);
-    const materialSgst = sortedItems.reduce((s, it) => s + Number(it.sgstAmount || 0), 0);
-    const materialCgst = sortedItems.reduce((s, it) => s + Number(it.cgstAmount || 0), 0);
+    const materialItems = sortedItems.filter(it => !isServiceItem(it));
+    const serviceItems = sortedItems.filter(isServiceItem);
+    const materialBase = materialItems.reduce((s, it) => s + Number(it.totalPrice || 0), 0);
+    const materialSgst = materialItems.reduce((s, it) => s + Number(it.sgstAmount || 0), 0);
+    const materialCgst = materialItems.reduce((s, it) => s + Number(it.cgstAmount || 0), 0);
+    const materialIgst = materialItems.reduce((s, it) => s + Number(it.igstAmount || 0), 0);
     const packPct = Number(est.packingPercent || 0);
     const implPct = Number(est.implementationPercent || 0);
     const transAmt = Number(est.transportAmount || 0);
+    const hasSavedServices = serviceItems.length > 0;
     sections.push({
       storeName: targetStore?.name || est.title || "Site",
       storeCode: targetStore?.storeCode || "",
-      itemRows: sortedItems.map((it, idx) => itemToRow(it, idx)),
+      itemRows: materialItems.map((it, idx) => itemToRow(it, idx)),
+      serviceRows: serviceItems,
       packingPercent: packPct,
       implPercent: implPct,
       transportAmt: transAmt,
+      transportDescription: null,
       materialBase,
       materialSgst,
       materialCgst,
-      materialTotal: materialBase + materialSgst + materialCgst,
-      packingBase: materialBase * (packPct / 100),
-      implBase: materialBase * (implPct / 100),
-      transportBase: transAmt,
+      materialIgst,
+      materialTotal: materialBase + materialSgst + materialCgst + materialIgst,
+      packingBase: hasSavedServices ? serviceItems.filter(it => it.lineType === "packing").reduce((s, it) => s + Number(it.totalPrice || 0), 0) : materialBase * (packPct / 100),
+      implBase: hasSavedServices ? serviceItems.filter(it => it.lineType === "installation").reduce((s, it) => s + Number(it.totalPrice || 0), 0) : materialBase * (implPct / 100),
+      transportBase: hasSavedServices ? serviceItems.filter(it => it.lineType === "transport").reduce((s, it) => s + Number(it.totalPrice || 0), 0) : transAmt,
     });
   }
 
-  const SERVICE_TAX_PCT = 9;
+  const SERVICE_TAX_PCT = isIgst ? 18 : 9;
+
+  // Grand totals across all sections
   let grandBeforeTax = 0;
   let grandSgst = 0;
   let grandCgst = 0;
+  let grandIgst = 0;
   sections.forEach(sec => {
-    grandBeforeTax += sec.materialBase + sec.packingBase + sec.implBase + sec.transportBase;
-    grandSgst += sec.materialSgst + (sec.packingBase + sec.implBase + sec.transportBase) * SERVICE_TAX_PCT / 100;
-    grandCgst += sec.materialCgst + (sec.packingBase + sec.implBase + sec.transportBase) * SERVICE_TAX_PCT / 100;
+    const savedServiceBase = sec.serviceRows.reduce((s, it) => s + Number(it.totalPrice || 0), 0);
+    const syntheticServiceBase = sec.serviceRows.length > 0 ? 0 : sec.packingBase + sec.implBase + sec.transportBase;
+    grandBeforeTax += sec.materialBase + savedServiceBase + syntheticServiceBase;
+    if (isIgst) {
+      grandIgst += sec.materialIgst
+        + sec.serviceRows.reduce((s, it) => s + Number(it.igstAmount || 0), 0)
+        + syntheticServiceBase * 0.18;
+    } else {
+      grandSgst += sec.materialSgst
+        + sec.serviceRows.reduce((s, it) => s + Number(it.sgstAmount || 0), 0)
+        + syntheticServiceBase * 0.09;
+      grandCgst += sec.materialCgst
+        + sec.serviceRows.reduce((s, it) => s + Number(it.cgstAmount || 0), 0)
+        + syntheticServiceBase * 0.09;
+    }
   });
-  const grandTotal = grandBeforeTax + grandSgst + grandCgst;
+  const grandTotal = grandBeforeTax + grandSgst + grandCgst + grandIgst;
 
   const num = (n: number) => (Number(n) || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  const dateSource = docDate || est.createdAt;
-  const dateStr = dateSource
-    ? new Date(dateSource).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }).replace(/ /g, "-")
+  const dateStr = (est.estimateDate || est.createdAt)
+    ? new Date(est.estimateDate || est.createdAt).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }).replace(/ /g, "-")
     : "";
-
-  const cellBase: React.CSSProperties = { border: "1px solid #000", padding: "2px 4px", fontSize: "10px", lineHeight: 1.25, verticalAlign: "top" };
-  const cellRight: React.CSSProperties = { ...cellBase, textAlign: "right" };
-  const cellCenter: React.CSSProperties = { ...cellBase, textAlign: "center" };
-  const headCell: React.CSSProperties = { ...cellBase, fontWeight: 700, textAlign: "center", backgroundColor: "#fff" };
-  const yellowRow: React.CSSProperties = { backgroundColor: "#fff066" };
-  const COL_COUNT = 16;
-
-  const serviceRow = (
-    kind: "Packing" | "Installation" | "Transport",
-    descr: string,
-    percentLabel: string,
-    base: number,
-    sectionKey: string,
-  ) => {
-    const sgstAmt = base * SERVICE_TAX_PCT / 100;
-    const cgstAmt = base * SERVICE_TAX_PCT / 100;
-    return (
-      <tr key={`${sectionKey}-${kind}`}>
-        <td style={cellCenter}></td>
-        <td style={cellBase}>{kind}</td>
-        <td style={cellBase}>9987</td>
-        <td style={cellBase}>Standard</td>
-        <td style={cellBase}>{descr}</td>
-        <td style={cellBase}></td>
-        <td style={cellBase}></td>
-        <td style={cellBase}></td>
-        <td style={cellBase}></td>
-        <td style={cellRight}>{percentLabel}</td>
-        <td style={cellRight}>{num(base)}</td>
-        <td style={cellRight}>{SERVICE_TAX_PCT}%</td>
-        <td style={cellRight}>{num(sgstAmt)}</td>
-        <td style={cellRight}>{SERVICE_TAX_PCT}%</td>
-        <td style={cellRight}>{num(cgstAmt)}</td>
-        <td style={cellRight}>{num(base + sgstAmt + cgstAmt)}</td>
-      </tr>
-    );
-  };
-
-  const isInvoice = docKind === "invoice";
-  const numberLabel = isInvoice ? "Inv - No -" : "Est - No -";
-  const numberValue = docNumber || est.estimateNumber;
-  const subjectText = subjectOverride || est.subject || est.title || "";
   const companyName = sellerProfile.name || "Sunrise Media";
   const companyAddress = sellerProfile.address || "";
   const companyEmail = sellerProfile.email || "";
   const companyMobile = sellerProfile.mobile || "";
-  const logoSrc = companyAssetUrl(sellerProfile.logoPath, assetToken);
-  const signatureStampSrc = companyAssetUrl(sellerProfile.signatureStampPath, assetToken);
+  const logoSrc = companyAssetUrl(sellerProfile.logoPath, token);
+  const signatureStampSrc = companyAssetUrl(sellerProfile.signatureStampPath, token);
   const termsLines = String(sellerProfile.terms || "1. Taxes will be applicable.\n2. 100% Payment after the delivery of the meterial.\n3. Transportation charges As per Actual.\n4. Any additional work / rework will be extra.")
     .split(/\n+/)
     .map((line: string) => line.trim())
@@ -348,219 +319,300 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
     </tr>
   );
 
-  return (
-    <div className="estimate-print" data-print-document="true" style={{ background: "#fff", color: "#000", fontFamily: "Arial, Helvetica, sans-serif" }}>
-      {/* Top: Billing/Shipping (left) — Logo + meta (right) */}
-      <table style={{ width: "100%", borderCollapse: "collapse" }}>
-        <tbody>
-          <tr style={{ verticalAlign: "top" }}>
-            <td style={{ padding: "8px 12px", fontSize: "11px", lineHeight: 1.45, width: "60%" }}>
-              <div style={{ fontWeight: 700 }}>Billing To</div>
-              <div style={{ fontWeight: 700 }}>M/S : {billingName}</div>
-              {billingAddress && <div style={{ whiteSpace: "pre-wrap" }}>{billingAddress}</div>}
-              {billingStateCode && <div>State Code: {billingStateCode}</div>}
-              {billingGstin && <div style={{ fontWeight: 700 }}>GSTN - {billingGstin}</div>}
-              <div style={{ marginTop: "10px", fontWeight: 700 }}>Shipping To</div>
-              <div style={{ fontWeight: 700 }}>M/S : {shippingName}</div>
-              {shippingAddress && <div style={{ whiteSpace: "pre-wrap" }}>{shippingAddress}</div>}
-              {shippingGstin && <div style={{ fontWeight: 700 }}>GSTN - {shippingGstin}</div>}
-            </td>
-            <td style={{ padding: "8px 12px", width: "40%", textAlign: "right", fontSize: "11px", verticalAlign: "top" }}>
-              {logoSrc ? (
-                <img
-                  src={logoSrc}
-                  alt={companyName}
-                  style={{ width: 230, maxWidth: "100%", height: "auto", objectFit: "contain" }}
-                />
-              ) : (
-                <div style={{ fontWeight: 900, fontSize: "22px", lineHeight: 1.1, textAlign: "right" }}>{companyName}</div>
-              )}
-              {isInvoice && (
-                <div style={{ marginTop: "8px", fontWeight: 900, fontSize: "14px", letterSpacing: "2px", color: "#000" }}>
-                  TAX INVOICE
-                </div>
-              )}
-              <table style={{ marginTop: "14px", marginLeft: "auto", borderCollapse: "collapse", tableLayout: "fixed", width: "262px" }}>
-                <tbody>
-                  {metaRow("Date :", dateStr)}
-                  {metaRow(numberLabel, numberValue, true)}
-                  {/* When viewing an invoice, also surface the linked estimate's number for traceability. */}
-                  {isInvoice && est.estimateNumber && est.estimateNumber !== numberValue && (
-                    metaRow("Ref Est -", est.estimateNumber)
-                  )}
-                  {billingGstin && metaRow("GSTN -", billingGstin)}
-                  {billingPan && metaRow("PAN -", billingPan)}
-                  {est.vendorCode && metaRow("Vendor Code -", est.vendorCode)}
-                </tbody>
-              </table>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+  // Cell + table styles for dense print-grade layout. Inline styles so
+  // they survive print without depending on Tailwind classes.
+  const cellBase: React.CSSProperties = { border: "1px solid #000", padding: "2px 4px", fontSize: "10px", lineHeight: 1.25, verticalAlign: "top" };
+  const cellRight: React.CSSProperties = { ...cellBase, textAlign: "right" };
+  const cellCenter: React.CSSProperties = { ...cellBase, textAlign: "center" };
+  const headCell: React.CSSProperties = { ...cellBase, fontWeight: 700, textAlign: "center", backgroundColor: "#fff" };
+  const yellowRow: React.CSSProperties = { backgroundColor: "#fff066" };
+  // 14 columns: SL, Element, HSN, Std/Non, Product Details, W, H, Qty,
+  // T.Sqft, Rate, Amount, GST%, GST Amount, Total.
+  const COL_COUNT = 14;
 
-      {/* Main dense table */}
-      <table className="estimate-table" style={{ width: "100%", borderCollapse: "collapse", tableLayout: "auto" }}>
-        <thead>
-          <tr>
-            <td colSpan={COL_COUNT} style={{ ...cellCenter, fontWeight: 700, padding: "4px 8px" }}>
-              Subject : {subjectText}
-            </td>
-          </tr>
-          <tr>
-            <td style={headCell} rowSpan={2}>SL</td>
-            <td style={headCell} rowSpan={2}>ELEMENT</td>
-            <td style={headCell} rowSpan={2}>HSN</td>
-            <td style={headCell} rowSpan={2}>Standard / Non</td>
-            <td style={headCell} rowSpan={2}>PRODUCT DETAILS</td>
-            <td style={headCell} colSpan={2}>Sizes</td>
-            <td style={headCell} colSpan={2}>T Sqft / Qty</td>
-            <td style={headCell} rowSpan={2}>P.Sqft</td>
-            <td style={headCell} rowSpan={2}>Amount</td>
-            <td style={headCell} colSpan={2}>SGST<br/>Rate Amount</td>
-            <td style={headCell} colSpan={2}>CGST<br/>Rate Amount</td>
-            <td style={headCell} rowSpan={2}>Total</td>
-          </tr>
-          <tr>
-            <td style={headCell}>W</td>
-            <td style={headCell}>H</td>
-            <td style={headCell}>Qty</td>
-            <td style={headCell}>T.Sqft</td>
-            <td style={headCell}>%</td>
-            <td style={headCell}>Amt</td>
-            <td style={headCell}>%</td>
-            <td style={headCell}>Amt</td>
-          </tr>
-        </thead>
-        <tbody>
-          {sections.map((sec, sIdx) => (
-            <React.Fragment key={`sec-${sIdx}`}>
-              <tr>
-                <td colSpan={COL_COUNT} style={{ ...cellBase, fontWeight: 700, padding: "4px 8px" }}>
-                  Store: {sec.storeName}{sec.storeCode ? `,  Store Code : ${sec.storeCode}` : ""}
-                </td>
-              </tr>
-              {sec.itemRows.map((row, rIdx) => (
-                <tr key={`sec-${sIdx}-row-${rIdx}`}>
-                  <td style={cellCenter}>{row.label}</td>
-                  <td style={cellBase}>{row.type}</td>
-                  <td style={cellBase}>{row.hsn || ""}</td>
-                  <td style={cellBase}>{row.stdLabel}</td>
-                  <td style={cellBase}>{row.description}</td>
-                  <td style={cellRight}>{row.width}</td>
-                  <td style={cellRight}>{row.height}</td>
-                  <td style={cellRight}>{row.qty}</td>
-                  <td style={cellRight}>{row.tsqft}</td>
-                  <td style={cellRight}>{row.psqft}</td>
-                  <td style={cellRight}>{num(row.amount)}</td>
-                  <td style={cellRight}>{row.sgstPercent}%</td>
-                  <td style={cellRight}>{num(row.sgstAmt)}</td>
-                  <td style={cellRight}>{row.cgstPercent}%</td>
-                  <td style={cellRight}>{num(row.cgstAmt)}</td>
-                  <td style={cellRight}>{num(row.total)}</td>
-                </tr>
-              ))}
-              <tr style={yellowRow}>
-                <td style={{ ...cellBase, fontWeight: 700 }} colSpan={5}>Total Materail Cost</td>
-                <td style={cellBase}></td>
-                <td style={cellBase}></td>
-                <td style={cellBase}></td>
-                <td style={cellBase}></td>
-                <td style={cellBase}></td>
-                <td style={{ ...cellRight, fontWeight: 700 }}>{num(sec.materialBase)}</td>
-                <td style={{ ...cellRight, fontWeight: 700 }}>9%</td>
-                <td style={{ ...cellRight, fontWeight: 700 }}>{num(sec.materialSgst)}</td>
-                <td style={{ ...cellRight, fontWeight: 700 }}>9%</td>
-                <td style={{ ...cellRight, fontWeight: 700 }}>{num(sec.materialCgst)}</td>
-                <td style={{ ...cellRight, fontWeight: 700 }}>{num(sec.materialTotal)}</td>
-              </tr>
-              {sec.packingPercent > 0 && serviceRow("Packing", `Packing charges ${sec.packingPercent}%`, `${sec.packingPercent}%`, sec.packingBase, `s${sIdx}`)}
-              {sec.implPercent > 0 && serviceRow("Installation", `Installation charges ${sec.implPercent}%`, `${sec.implPercent}%`, sec.implBase, `s${sIdx}`)}
-              {sec.transportAmt > 0 && serviceRow("Transport", "Local Transport", "", sec.transportBase, `s${sIdx}`)}
-              {sIdx < sections.length - 1 && (
-                <tr>
-                  <td colSpan={COL_COUNT} style={{ ...cellBase, height: "6px", padding: 0 }}></td>
-                </tr>
-              )}
-            </React.Fragment>
-          ))}
+  // A service charges row (Packing / Installation / Transport).
+  const serviceRow = (
+    kind: string,
+    descr: string,
+    percentLabel: string,
+    base: number,
+    sectionKey: string,
+  ) => {
+    const firstTaxAmt = base * SERVICE_TAX_PCT / 100;
+    const secondTaxAmt = isIgst ? 0 : base * SERVICE_TAX_PCT / 100;
+    const gstAmt = firstTaxAmt + secondTaxAmt;
+    return (
+      <tr className="estimate-service-row-keep" key={`${sectionKey}-${kind}`}>
+        <td style={cellCenter}></td>
+        <td style={cellBase}>{kind}</td>
+        <td style={cellBase}>9987</td>
+        <td style={cellBase}>Standard</td>
+        <td style={cellBase}>{descr}</td>
+        <td style={cellBase}></td>
+        <td style={cellBase}></td>
+        <td style={cellBase}></td>
+        <td style={cellBase}></td>
+        <td style={cellRight}>{percentLabel}</td>
+        <td style={cellRight}>{num(base)}</td>
+        <td style={cellRight}>{isIgst ? "18%" : "18%"}</td>
+        <td style={cellRight}>{num(gstAmt)}</td>
+        <td style={cellRight}>{num(base + gstAmt)}</td>
+      </tr>
+    );
+  };
 
-          {/* Grand TOTAL row */}
+  const savedServiceRow = (item: EstimateItem, sectionKey: string) => {
+    const base = Number(item.totalPrice) || 0;
+    const rateLabel = serviceRateLabel(item);
+    const gstPercent = isIgst
+      ? Number(item.igstPercent) || 0
+      : (Number(item.sgstPercent) || 0) + (Number(item.cgstPercent) || 0);
+    const gstAmount = isIgst
+      ? Number(item.igstAmount) || 0
+      : (Number(item.sgstAmount) || 0) + (Number(item.cgstAmount) || 0);
+    const label = serviceLabel(item);
+    return (
+      <tr className="estimate-service-row-keep" key={`${sectionKey}-${item.id || item.sl || item.itemName}`}>
+        <td style={cellCenter}></td>
+        <td style={cellBase}>{serviceLabel(item)}</td>
+        <td style={cellBase}>{item.hsn || "9987"}</td>
+        <td style={cellBase}>{item.isStandard === false ? "Non-standard" : "Standard"}</td>
+        <td style={cellBase}>{label}</td>
+        <td style={cellBase}></td>
+        <td style={cellBase}></td>
+        <td style={cellRight}>{Number(item.quantity || 1).toFixed(2)}</td>
+        <td style={cellBase}></td>
+        <td style={cellRight}>{rateLabel}</td>
+        <td style={cellRight}>{num(base)}</td>
+        <td style={cellRight}>{gstPercent}%</td>
+        <td style={cellRight}>{num(gstAmount)}</td>
+        <td style={cellRight}>{num(Number(item.totalAmount) || 0)}</td>
+      </tr>
+    );
+  };
+
+  const columnWidths = ["3%", "13.5%", "4.8%", "7.9%", "20.4%", "4.2%", "4.2%", "4.2%", "5.5%", "5.5%", "6.7%", "4.8%", "7.9%", "7.4%"];
+
+  const renderDocumentHeader = () => (
+    <table className="estimate-document-header" style={{ width: "100%", borderCollapse: "collapse" }}>
+      <tbody>
+        <tr style={{ verticalAlign: "top" }}>
+          <td style={{ padding: "8px 12px", fontSize: "11px", lineHeight: 1.45, width: "60%" }}>
+            <div style={{ fontWeight: 700 }}>Billing To</div>
+            <div style={{ fontWeight: 700 }}>M/S : {billingName}</div>
+            {billingAddress && <div style={{ whiteSpace: "pre-wrap" }}>{wrapAddress(billingAddress)}</div>}
+            {billingStateCode && <div>State Code: {billingStateCode}</div>}
+            {billingGstin && <div style={{ fontWeight: 700 }}>GSTN - {billingGstin}</div>}
+            <div style={{ marginTop: "10px", fontWeight: 700 }}>Shipping To</div>
+            <div style={{ fontWeight: 700 }}>M/S : {shippingName}</div>
+            {shippingAddress && <div style={{ whiteSpace: "pre-wrap" }}>{wrapAddress(shippingAddress)}</div>}
+            {shippingGstin && <div style={{ fontWeight: 700 }}>GSTN - {shippingGstin}</div>}
+          </td>
+          <td style={{ padding: "8px 12px", width: "40%", textAlign: "right", fontSize: "11px", verticalAlign: "top" }}>
+            <div style={{ display: "flex", justifyContent: "flex-end" }}>{documentLogo(logoSrc, companyName)}</div>
+            <table style={{ marginTop: "18px", marginLeft: "auto", borderCollapse: "collapse", tableLayout: "fixed", width: "262px" }}>
+              <tbody>
+                {metaRow("Date :", dateStr)}
+                {metaRow("Est - No -", est.estimateNumber, true)}
+                {sellerProfile.gstin && metaRow("GSTN -", sellerProfile.gstin)}
+                {sellerProfile.pan && metaRow("PAN -", sellerProfile.pan)}
+                {est.vendorCode && metaRow("Vendor Code -", est.vendorCode)}
+              </tbody>
+            </table>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  );
+
+  const renderEstimateTableHead = () => (
+    <thead>
+      <tr>
+        <td colSpan={COL_COUNT} style={{ ...cellCenter, fontWeight: 700, padding: "4px 8px" }}>
+          Subject : {est.subject || est.title}
+        </td>
+      </tr>
+      <tr>
+        <td style={headCell} rowSpan={2}>SL</td>
+        <td style={headCell} rowSpan={2}>ELEMENT</td>
+        <td style={headCell} rowSpan={2}>HSN</td>
+        <td style={headCell} rowSpan={2}>Standard / Non</td>
+        <td style={headCell} rowSpan={2}>PRODUCT DETAILS</td>
+        <td style={headCell} colSpan={2}>Sizes</td>
+        <td style={headCell} colSpan={2}>T Sqft / Qty</td>
+        <td style={headCell} rowSpan={2}>Rate</td>
+        <td style={headCell} rowSpan={2}>Amount</td>
+        <td style={headCell} rowSpan={2}>GST %</td>
+        <td style={headCell} rowSpan={2}>GST Amount</td>
+        <td style={headCell} rowSpan={2}>Total</td>
+      </tr>
+      <tr>
+        <td style={headCell}>W</td>
+        <td style={headCell}>H</td>
+        <td style={headCell}>Qty</td>
+        <td style={headCell}>T.Sqft</td>
+      </tr>
+    </thead>
+  );
+
+  const renderStoreSection = (sec: Section, sIdx: number) => (
+    <tbody
+      className="estimate-store-section-keep"
+      data-store-name={sec.storeName}
+      key={`sec-${sIdx}`}
+    >
+      <tr>
+        <td colSpan={COL_COUNT} style={{ ...cellBase, fontWeight: 700, padding: "4px 8px" }}>
+          Store: {sec.storeName}{sec.storeCode ? `,  Store Code : ${sec.storeCode}` : ""}
+        </td>
+      </tr>
+      {sec.itemRows.map((row, rIdx) => (
+        <tr key={`sec-${sIdx}-row-${rIdx}`}>
+          <td style={cellCenter}>{row.label}</td>
+          <td style={cellBase}>{row.type}</td>
+          <td style={cellBase}>{row.hsn || ""}</td>
+          <td style={cellBase}>{row.stdLabel}</td>
+          <td style={cellBase}>{row.description}</td>
+          <td style={cellRight}>{row.width}</td>
+          <td style={cellRight}>{row.height}</td>
+          <td style={cellRight}>{row.qty}</td>
+          <td style={cellRight}>{row.tsqft}</td>
+          <td style={cellRight}>{row.psqft}</td>
+          <td style={cellRight}>{num(row.amount)}</td>
+          <td style={cellRight}>{isIgst ? row.igstPercent : row.sgstPercent + row.cgstPercent}%</td>
+          <td style={cellRight}>{num(isIgst ? row.igstAmt : row.sgstAmt + row.cgstAmt)}</td>
+          <td style={cellRight}>{num(row.total)}</td>
+        </tr>
+      ))}
+      <tr className="estimate-store-total-keep" style={yellowRow}>
+        <td style={cellBase}></td>
+        <td style={{ ...cellBase, fontWeight: 700 }}>Total Material Cost</td>
+        <td style={cellBase}></td>
+        <td style={cellBase}></td>
+        <td style={cellBase}></td>
+        <td style={cellBase}></td>
+        <td style={cellBase}></td>
+        <td style={cellBase}></td>
+        <td style={cellBase}></td>
+        <td style={cellBase}></td>
+        <td style={{ ...cellRight, fontWeight: 700 }}>{num(sec.materialBase)}</td>
+        <td style={{ ...cellRight, fontWeight: 700 }}>{isIgst ? "18%" : "18%"}</td>
+        <td style={{ ...cellRight, fontWeight: 700 }}>{num(isIgst ? sec.materialIgst : sec.materialSgst + sec.materialCgst)}</td>
+        <td style={{ ...cellRight, fontWeight: 700 }}>{num(sec.materialTotal)}</td>
+      </tr>
+      {sec.serviceRows.length > 0 ? sec.serviceRows.map(item => savedServiceRow(item, `s${sIdx}`)) : (
+        <>
+          {sec.packingPercent > 0 && serviceRow(`Packing Charges (${sec.packingPercent}%)`, `Packing Charges (${sec.packingPercent}%)`, `${sec.packingPercent}%`, sec.packingBase, `s${sIdx}`)}
+          {sec.implPercent > 0 && serviceRow(`Installation Charges (${sec.implPercent}%)`, `Installation Charges (${sec.implPercent}%)`, `${sec.implPercent}%`, sec.implBase, `s${sIdx}`)}
+          {sec.transportAmt > 0 && serviceRow("Local Transportation", sec.transportDescription || "Local Transportation", "", sec.transportBase, `s${sIdx}`)}
+        </>
+      )}
+      {sIdx < sections.length - 1 && (
+        <tr className="estimate-store-spacer">
+          <td colSpan={COL_COUNT} style={{ ...cellBase, height: "6px", padding: 0 }}></td>
+        </tr>
+      )}
+    </tbody>
+  );
+
+  const renderTotalsBody = () => (
+    <tbody className="estimate-totals-keep">
+      <tr>
+        <td colSpan={9} style={cellBase}></td>
+        <td style={{ ...cellRight, fontWeight: 700 }}>TOTAL</td>
+        <td style={{ ...cellRight, fontWeight: 700 }}>{num(grandBeforeTax)}</td>
+        <td style={{ ...cellRight, fontWeight: 700 }}>18%</td>
+        <td style={{ ...cellRight, fontWeight: 700 }}>{num(isIgst ? grandIgst : grandSgst + grandCgst)}</td>
+        <td style={{ ...cellRight, fontWeight: 700 }}>{num(grandTotal)}</td>
+      </tr>
+      <tr>
+        <td colSpan={12} style={{ ...cellRight, fontWeight: 700, paddingRight: "10px" }}>TOTAL AMOUNT BEFORE TAX</td>
+        <td colSpan={2} style={{ ...cellRight, fontWeight: 700 }}>{num(grandBeforeTax)}</td>
+      </tr>
+      {isIgst ? (
+        <tr>
+          <td colSpan={12} style={{ ...cellRight, fontWeight: 700, paddingRight: "10px" }}>Add : IGST 18%</td>
+          <td colSpan={2} style={{ ...cellRight, fontWeight: 700 }}>{num(grandIgst)}</td>
+        </tr>
+      ) : (
+        <>
           <tr>
-            <td colSpan={9} style={cellBase}></td>
-            <td style={{ ...cellRight, fontWeight: 700 }}>TOTAL</td>
-            <td style={{ ...cellRight, fontWeight: 700 }}>{num(grandBeforeTax)}</td>
-            <td style={{ ...cellRight, fontWeight: 700 }}>9%</td>
-            <td style={{ ...cellRight, fontWeight: 700 }}>{num(grandSgst)}</td>
-            <td style={{ ...cellRight, fontWeight: 700 }}>9%</td>
-            <td style={{ ...cellRight, fontWeight: 700 }}>{num(grandCgst)}</td>
-            <td style={{ ...cellRight, fontWeight: 700 }}>{num(grandTotal)}</td>
-          </tr>
-          {/* Stacked tax summary */}
-          <tr>
-            <td colSpan={14} style={{ ...cellRight, fontWeight: 700, paddingRight: "10px" }}>TOTAL AMOUNT BEFORE TAX</td>
-            <td colSpan={2} style={{ ...cellRight, fontWeight: 700 }}>{num(grandBeforeTax)}</td>
-          </tr>
-          <tr>
-            <td colSpan={14} style={{ ...cellRight, fontWeight: 700, paddingRight: "10px" }}>Add : CGST 9%</td>
+            <td colSpan={12} style={{ ...cellRight, fontWeight: 700, paddingRight: "10px" }}>Add : CGST 9%</td>
             <td colSpan={2} style={{ ...cellRight, fontWeight: 700 }}>{num(grandCgst)}</td>
           </tr>
           <tr>
-            <td colSpan={14} style={{ ...cellRight, fontWeight: 700, paddingRight: "10px" }}>Add : SGST 9%</td>
+            <td colSpan={12} style={{ ...cellRight, fontWeight: 700, paddingRight: "10px" }}>Add : SGST 9%</td>
             <td colSpan={2} style={{ ...cellRight, fontWeight: 700 }}>{num(grandSgst)}</td>
           </tr>
-          <tr>
-            <td colSpan={14} style={{ ...cellRight, fontWeight: 700, paddingRight: "10px" }}>TOTAL AMOUNT AFTER TAX</td>
-            <td colSpan={2} style={{ ...cellRight, fontWeight: 700 }}>{num(grandTotal)}</td>
-          </tr>
-          <tr>
-            <td colSpan={COL_COUNT} style={{ ...cellBase, fontWeight: 700, fontStyle: "italic" }}>
-              Amount in Words: {numberToWords(grandTotal)}
+        </>
+      )}
+      <tr>
+        <td colSpan={12} style={{ ...cellRight, fontWeight: 700, paddingRight: "10px" }}>TOTAL AMOUNT AFTER TAX</td>
+        <td colSpan={2} style={{ ...cellRight, fontWeight: 700 }}>{num(grandTotal)}</td>
+      </tr>
+    </tbody>
+  );
+
+  const renderFooter = () => (
+    <div className="estimate-footer-block">
+      <table className="estimate-document-footer" style={{ width: "100%", borderCollapse: "collapse", marginTop: "-1px" }}>
+        <tbody>
+          <tr style={{ verticalAlign: "top" }}>
+            <td style={{ ...cellBase, padding: "8px 10px", width: "38%" }}>
+              <div style={{ color: "#b91c1c", fontWeight: 700, textDecoration: "underline", marginBottom: "4px" }}>Terms &amp; Condition :</div>
+              {termsLines.map((line: string, idx: number) => <div key={idx}>{line}</div>)}
+            </td>
+            <td style={{ ...cellBase, padding: "8px 10px", width: "34%" }}>
+              <div style={{ fontWeight: 700, marginBottom: "4px" }}>BANK ACCOUNT DETAILS</div>
+              <div>Bank Name : {sellerProfile.bankName || ""}</div>
+              <div>Branch Name : {sellerProfile.bankBranch || ""}</div>
+              <div>C.A/c No : {sellerProfile.bankAccountNumber || ""}</div>
+              <div>IFSC NO : {sellerProfile.bankIfsc || ""}</div>
+            </td>
+            <td className="estimate-signature-cell" style={{ ...cellBase, padding: "8px 10px", width: "28%", textAlign: "right", verticalAlign: "bottom" }}>
+              <div style={{ fontWeight: 700 }}>For {companyName.toUpperCase()}</div>
+              <div className="estimate-signature-space" style={{ height: "52px", display: "flex", alignItems: "center", justifyContent: "flex-end" }}>
+                {signatureStampSrc && (
+                  <img
+                    src={signatureStampSrc}
+                    alt="Signature and stamp"
+                    className="estimate-signature-stamp"
+                    style={{ maxHeight: "48px", maxWidth: "150px", objectFit: "contain" }}
+                  />
+                )}
+              </div>
+              <div style={{ fontWeight: 700 }}>Authorised Signatory</div>
             </td>
           </tr>
         </tbody>
       </table>
-
-      <div className="estimate-footer-block">
-        {/* Terms + Bank + Signature footer */}
-        <table className="estimate-document-footer" style={{ width: "100%", borderCollapse: "collapse", marginTop: "-1px" }}>
-          <tbody>
-            <tr style={{ verticalAlign: "top" }}>
-              <td style={{ ...cellBase, padding: "8px 10px", width: "38%" }}>
-                <div style={{ color: "#b91c1c", fontWeight: 700, textDecoration: "underline", marginBottom: "4px" }}>Terms &amp; Condition :</div>
-                {termsLines.map((line: string, idx: number) => <div key={idx}>{line}</div>)}
-              </td>
-              <td style={{ ...cellBase, padding: "8px 10px", width: "34%" }}>
-                <div style={{ fontWeight: 700, marginBottom: "4px" }}>BANK ACCOUNT DETAILS</div>
-                <div>Bank Name : {sellerProfile.bankName || ""}</div>
-                <div>Branch Name : {sellerProfile.bankBranch || ""}</div>
-                <div>C.A/c No : {sellerProfile.bankAccountNumber || ""}</div>
-                <div>IFSC NO : {sellerProfile.bankIfsc || ""}</div>
-              </td>
-              <td className="estimate-signature-cell" style={{ ...cellBase, padding: "8px 10px", width: "28%", textAlign: "right", verticalAlign: "bottom" }}>
-                <div style={{ fontWeight: 700 }}>For {companyName.toUpperCase()}</div>
-                <div className="estimate-signature-space" style={{ height: "52px", display: "flex", alignItems: "center", justifyContent: "flex-end" }}>
-                  {signatureStampSrc && (
-                    <img
-                      src={signatureStampSrc}
-                      alt="Signature and stamp"
-                      className="estimate-signature-stamp"
-                      style={{ maxHeight: "48px", maxWidth: "150px", objectFit: "contain" }}
-                    />
-                  )}
-                </div>
-                <div style={{ fontWeight: 700 }}>Authorised Signatory</div>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-
-        {/* Orange branding banner — compact ERP footer */}
-        <div className="estimate-brand-footer" style={{ backgroundColor: "#f59e0b", color: "#fff", textAlign: "center", padding: "6px 8px", letterSpacing: "0.3px" }}>
-          <div className="estimate-brand-footer-title" style={{ fontSize: "16px", fontWeight: 900, letterSpacing: "1.5px", lineHeight: 1.1 }}>{companyName.toUpperCase()}</div>
-          {companyAddress && <div style={{ fontSize: "9px", marginTop: "3px", lineHeight: 1.25 }}>{companyAddress}</div>}
-          {(companyMobile || companyEmail) && <div style={{ fontSize: "9px", marginTop: "1px", lineHeight: 1.25 }}>{[companyMobile, companyEmail].filter(Boolean).join("  ·  ")}</div>}
-        </div>
+      <div className="estimate-brand-footer" style={{ backgroundColor: "#f59e0b", color: "#fff", textAlign: "center", padding: "6px 8px", letterSpacing: "0.3px" }}>
+        <div className="estimate-brand-footer-title" style={{ fontSize: "16px", fontWeight: 900, letterSpacing: "1.5px", lineHeight: 1.1 }}>{companyName.toUpperCase()}</div>
+        {companyAddress && <div style={{ fontSize: "9px", marginTop: "3px", lineHeight: 1.25 }}>{companyAddress}</div>}
+        {(companyMobile || companyEmail) && <div style={{ fontSize: "9px", marginTop: "1px", lineHeight: 1.25 }}>{[companyMobile, companyEmail].filter(Boolean).join("  ·  ")}</div>}
       </div>
+    </div>
+  );
+
+  return (
+    <div
+      className="estimate-print"
+      data-source="estimate-print"
+      data-print-document="true"
+      style={{ background: "#fff", color: "#000", fontFamily: "Arial, Helvetica, sans-serif" }}
+    >
+      {renderDocumentHeader()}
+      <table className="estimate-table" style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
+        <colgroup>
+          {columnWidths.map((width, index) => (
+            <col key={index} style={{ width }} />
+          ))}
+        </colgroup>
+        {renderEstimateTableHead()}
+        {sections.map((sec, sIdx) => renderStoreSection(sec, sIdx))}
+        {renderTotalsBody()}
+      </table>
+      {renderFooter()}
     </div>
   );
 };

@@ -47,7 +47,7 @@ interface PacketData {
 interface PacketPage {
   id: string;
   label: string;
-  kind: "invoice" | "po" | "estimate" | "dc" | "photo" | "transport" | "extra";
+  kind: "invoice" | "po" | "estimate" | "photo" | "transport" | "extra";
   filePath?: string | null;
   storagePath?: string | null;
   mimeType?: string | null;
@@ -66,10 +66,10 @@ const storeCodeFor = (value: any) => String(value?.storeCode || value?.metadata?
 const isPhotoType = (type: string) => ["photo", "installation_photo", "execution_photo"].includes(type);
 const isPoType = (type: string) => ["po", "client_po"].includes(type);
 const isSignedType = (type: string) => ["signed_wcc", "signed_dc"].includes(type);
-const isTransportType = (type: string) => ["transport_receipt", "lr_copy", "courier_receipt", "gate_pass", "eway_bill"].includes(type);
+const isTransportType = (type: string) => ["transport", "transportation_document", "transport_receipt", "lr_copy", "courier_receipt", "gate_pass", "eway_bill"].includes(type);
 // wcc_photo is the unsigned WCC photo captured in the field — not wanted in the client packet.
 // The client packet only includes the signed WCC that was stamped and uploaded.
-const isExcludedType = (type: string) => ["wcc_photo"].includes(type);
+const isExcludedType = (type: string) => ["wcc", "wcc_photo"].includes(type);
 // Documents that belong in the per-store block: only signed WCC/challan + installation photos.
 const isStoreScopeDoc = (type: string) => isSignedType(type) || isPhotoType(type);
 
@@ -197,9 +197,8 @@ const InvoicePacketPage: React.FC = () => {
           if (data.estimate?.poFilePath) await addFile({ id: "po", label: `2. Purchase Order (${data.estimate.poNumber || "PO"})`, kind: "po", storagePath: data.estimate.poFilePath });
           if (data.estimate) list.push({ id: "est", label: `3. Estimate ${data.estimate.estimateNumber}`, kind: "estimate", included: true });
 
-          // Section 4: Transportation / Other Project Documents.
-          // Collect every transport receipt, LR, courier, gate pass, e-way bill, and any
-          // other uploaded project document (non-PO, non-store-scope) in upload order.
+          // Section 4: transportation documents, followed by other project
+          // documents. Store-scoped signed proofs/photos are appended later.
           const projectDocs = docs.filter((d: any) => {
             if (isPoType(d.documentType)) return false;
             if (isStoreScopeDoc(d.documentType)) return false;
@@ -212,8 +211,12 @@ const InvoicePacketPage: React.FC = () => {
             if (dc.extraDocPath) legacyProject.push({ id: `legacy-extra-${dc.id}`, documentType: "extra", storagePath: dc.extraDocPath });
           }
           const allProjectDocs = [...projectDocs, ...legacyProject];
-          for (const doc of [...allProjectDocs].sort((a: any, b: any) => new Date(a.uploadedAt || a.createdAt || 0).getTime() - new Date(b.uploadedAt || b.createdAt || 0).getTime())) {
-            await addFile({ id: `doc-${doc.id}`, label: docTypeLabel(doc.documentType), kind: "extra", storagePath: doc.storagePath || doc.filePath, mimeType: doc.mimeType });
+          const byUploadTime = (a: any, b: any) => new Date(a.uploadedAt || a.createdAt || 0).getTime() - new Date(b.uploadedAt || b.createdAt || 0).getTime();
+          for (const doc of allProjectDocs.filter((d: any) => isTransportType(d.documentType)).sort(byUploadTime)) {
+            await addFile({ id: `transport-${doc.id}`, label: docTypeLabel(doc.documentType), kind: "transport", storagePath: doc.storagePath || doc.filePath, mimeType: doc.mimeType });
+          }
+          for (const doc of allProjectDocs.filter((d: any) => !isTransportType(d.documentType)).sort(byUploadTime)) {
+            await addFile({ id: `project-${doc.id}`, label: docTypeLabel(doc.documentType), kind: "extra", storagePath: doc.storagePath || doc.filePath, mimeType: doc.mimeType });
           }
 
           // Order stores by execution-workflow order (the order they were added to the
@@ -231,15 +234,33 @@ const InvoicePacketPage: React.FC = () => {
             if (ob !== undefined) return 1;
             return Number(a.id) - Number(b.id);
           });
-          for (const dc of challans) {
-            const storeCode = storeCodeFor(dc);
+          const storeContexts: { storeCode: string; challans: any[] }[] = [];
+          const ensureStore = (storeCode: string) => {
+            if (!storeCode || storeContexts.some(row => row.storeCode === storeCode)) return;
+            storeContexts.push({ storeCode, challans: challans.filter(dc => storeCodeFor(dc) === storeCode) });
+          };
+          [...(data.executionStores || [])]
+            .sort((a: any, b: any) => Number(a.id || 0) - Number(b.id || 0))
+            .forEach((row: any) => ensureStore(String(row.storeCode || row.code || "").trim()));
+          challans.forEach((dc: any) => ensureStore(storeCodeFor(dc)));
+          docs.filter((doc: any) => isStoreScopeDoc(doc.documentType)).forEach((doc: any) => ensureStore(storeCodeFor(doc)));
+          if (challans.some((dc: any) => !storeCodeFor(dc)) || docs.some((doc: any) => isStoreScopeDoc(doc.documentType) && !storeCodeFor(doc))) {
+            storeContexts.push({ storeCode: "", challans: challans.filter((dc: any) => !storeCodeFor(dc)) });
+          }
+
+          for (const context of storeContexts) {
+            const storeCode = context.storeCode;
             const store = (data.stores || []).find((s: any) => String(s.code || s.storeCode || "") === storeCode);
             const storeLabel = store?.name ? `${store.name}${storeCode ? ` (${storeCode})` : ""}` : (storeCode || "Project");
-            const owned = docs.filter((d: any) => (Number(d.deliveryChallanId) === Number(dc.id) || (storeCode && storeCodeFor(d) === storeCode)) && isStoreScopeDoc(d.documentType) && !isExcludedType(d.documentType));
-            const legacy = [
+            const challanIds = new Set(context.challans.map(dc => Number(dc.id)));
+            const owned = docs.filter((d: any) => (
+              challanIds.has(Number(d.deliveryChallanId))
+              || (storeCode ? storeCodeFor(d) === storeCode : (!d.deliveryChallanId && !storeCodeFor(d)))
+            ) && isStoreScopeDoc(d.documentType) && !isExcludedType(d.documentType));
+            const legacy = context.challans.flatMap((dc: any) => [
               dc.signedChallanPath && { id: `legacy-signed-${dc.id}`, documentType: isAblblFormat(dc.clientFormat) ? "signed_wcc" : "signed_dc", storagePath: dc.signedChallanPath },
               dc.photoPath && { id: `legacy-photo-${dc.id}`, documentType: "photo", storagePath: dc.photoPath },
-            ].filter(Boolean) as any[];
+            ]).filter(Boolean) as any[];
             // Per store: Signed WCC first, then Installation Photos (in upload order).
             const ordered = [...owned, ...legacy].sort((a: any, b: any) => {
               const rank = (d: any) => isSignedType(d.documentType) ? 0 : isPhotoType(d.documentType) ? 1 : 2;
@@ -278,7 +299,6 @@ const InvoicePacketPage: React.FC = () => {
 
   const [building, setBuilding] = useState(false);
   const [missingDocs, setMissingDocs] = useState<{ store: string; missing: string[] }[] | null>(null);
-  const [generateAnyway, setGenerateAnyway] = useState(false);
 
   const computeMissing = (): { store: string; missing: string[] }[] => {
     const gaps: { store: string; missing: string[] }[] = [];
@@ -286,9 +306,14 @@ const InvoicePacketPage: React.FC = () => {
     if (!pages.some(p => p.kind === "po" && p.filePath)) coreMissing.push("Purchase Order");
     if (!pages.some(p => p.kind === "estimate")) coreMissing.push("Estimate");
     if (coreMissing.length) gaps.push({ store: "Project-level", missing: coreMissing });
-    const storeCodes = new Set(pages.filter(p => p.storeCode).map(p => p.storeCode));
+    const storeCodes = Array.from(new Set([
+      ...pages.map(p => p.storeCode),
+      ...(packet?.executionStores || []).map((row: any) => String(row.storeCode || row.code || "").trim()),
+      ...(packet?.challans || []).map((dc: any) => storeCodeFor(dc)),
+    ].filter((value): value is string => Boolean(value))));
     for (const sc of storeCodes) {
-      const storeLabel = pages.find(p => p.storeCode === sc)?.label?.split(" — ")[0] || sc || "Store";
+      const masterStore = (packet?.stores || []).find((store: any) => String(store.storeCode || store.code || "") === sc);
+      const storeLabel = pages.find(p => p.storeCode === sc)?.label?.split(" — ")[0] || masterStore?.name || sc || "Store";
       const storeMissing: string[] = [];
       if (!pages.some(p => p.storeCode === sc && p.kind === "extra" && p.filePath && /signed/i.test(p.label))) storeMissing.push("Signed WCC");
       if (!pages.some(p => p.storeCode === sc && p.kind === "photo" && p.filePath)) storeMissing.push("Installation Photos");
@@ -297,15 +322,14 @@ const InvoicePacketPage: React.FC = () => {
     return gaps;
   };
 
-  const generateInvoicePacket = async () => {
+  const generateInvoicePacket = async (force = false) => {
     if (!packet) return;
     const gaps = computeMissing();
-    if (gaps.length && !generateAnyway) {
+    if (gaps.length && !force) {
       setMissingDocs(gaps);
       return;
     }
     setMissingDocs(null);
-    setGenerateAnyway(false);
     setBuilding(true);
     try {
       const pdf = await PDFDocument.create();
@@ -316,13 +340,17 @@ const InvoicePacketPage: React.FC = () => {
 
       for (const p of included) {
         try {
-          if (p.filePath) {
+          if (p.storagePath) {
+            if (!p.filePath) throw new Error("Uploaded document is unavailable");
             const res = await fetch(p.filePath);
-            if (!res.ok) continue;
+            if (!res.ok) throw new Error(`Download failed (${res.status})`);
             const buf = new Uint8Array(await res.arrayBuffer());
-            const isPdf = p.mimeType === "application/pdf" || /\.pdf$/i.test(p.filePath);
-            const isPng = /\.png$/i.test(p.filePath);
-            const isJpg = /\.(jpe?g)$/i.test(p.filePath);
+            let pathname = p.storagePath || p.filePath;
+            try { pathname = decodeURIComponent(new URL(p.filePath).pathname); } catch { /* storage key */ }
+            const contentType = String(p.mimeType || res.headers.get("content-type") || "").split(";")[0].toLowerCase();
+            const isPdf = contentType === "application/pdf" || /\.pdf$/i.test(pathname);
+            const isPng = contentType === "image/png" || /\.png$/i.test(pathname);
+            const isJpg = contentType === "image/jpeg" || /\.(jpe?g)$/i.test(pathname);
 
             if (isPdf) {
               const srcDoc = await PDFDocument.load(buf, { ignoreEncryption: true });
@@ -337,6 +365,8 @@ const InvoicePacketPage: React.FC = () => {
               const drawH = img.height * scale;
               const page = pdf.addPage([A4_W, A4_H]);
               page.drawImage(img, { x: (A4_W - drawW) / 2, y: (A4_H - drawH) / 2, width: drawW, height: drawH });
+            } else {
+              throw new Error(`Unsupported packet file type: ${contentType || pathname}`);
             }
           } else {
             const el = document.querySelector(`[data-packet-page="${p.id}"]`) as HTMLElement | null;
@@ -406,7 +436,7 @@ const InvoicePacketPage: React.FC = () => {
         ) : pdfMode === "invoice" ? (
           <InvoiceFrontPage packet={packet} sellerProfile={sellerProfile} assetToken={token} />
         ) : (
-          <EstimateSummary packet={packet} sellerProfile={sellerProfile} assetToken={token} />
+          <EstimatePacketPage packet={packet} sellerProfile={sellerProfile} assetToken={token} />
         )}
       </div>
     );
@@ -469,7 +499,7 @@ const InvoicePacketPage: React.FC = () => {
                     <Printer className="w-3 h-3" /> Print
                   </button>
                   <button
-                    onClick={generateInvoicePacket}
+                    onClick={() => generateInvoicePacket()}
                     disabled={building}
                     className="flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-orange-600 hover:bg-orange-700 disabled:opacity-60 text-white text-xs font-semibold"
                     title="Generate a single client-ready PDF in submission order"
@@ -513,7 +543,7 @@ const InvoicePacketPage: React.FC = () => {
                           <li key={i}><b>{g.store}:</b> {g.missing.join(", ")}</li>
                         ))}
                       </ul>
-                      <button onClick={() => { setGenerateAnyway(true); generateInvoicePacket(); }} className="mt-3 px-3 py-1.5 rounded-md bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold">Generate anyway</button>
+                      <button onClick={() => generateInvoicePacket(true)} className="mt-3 px-3 py-1.5 rounded-md bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold">Generate anyway</button>
                     </div>
                   </div>
                 </div>
@@ -525,7 +555,7 @@ const InvoicePacketPage: React.FC = () => {
                   </div>
                   <div className="p-6 print:p-0" data-packet-page={p.id}>
                     {p.kind === "invoice" && <InvoiceFrontPage packet={packet} sellerProfile={sellerProfile} assetToken={token} />}
-                    {p.kind === "estimate" && <EstimateSummary packet={packet} sellerProfile={sellerProfile} assetToken={token} />}
+                    {p.kind === "estimate" && <EstimatePacketPage packet={packet} sellerProfile={sellerProfile} assetToken={token} />}
                     {(p.kind === "po" || p.kind === "photo" || p.kind === "transport" || p.kind === "extra") && (
                       <DocumentPreview label={p.label} filePath={p.filePath} mimeType={p.mimeType} isPurchaseOrder={p.kind === "po"} />
                     )}
@@ -616,7 +646,7 @@ const InvoiceFrontPage: React.FC<{ packet: PacketData; sellerProfile: any; asset
 };
 
 // Estimate page (inside a packet) — same A4 template, "Estimate" labeling.
-const EstimateSummary: React.FC<{ packet: PacketData; sellerProfile: any; assetToken?: string | null }> = ({ packet, sellerProfile, assetToken }) => {
+const EstimatePacketPage: React.FC<{ packet: PacketData; sellerProfile: any; assetToken?: string | null }> = ({ packet, sellerProfile, assetToken }) => {
   const est = packet.estimate;
   if (!est) return <div className="text-center text-slate-500 text-sm">No estimate linked.</div>;
   return (
@@ -626,7 +656,6 @@ const EstimateSummary: React.FC<{ packet: PacketData; sellerProfile: any; assetT
       stores={packet.stores || []}
       clients={packet.clients || (packet.client ? [packet.client] : [])}
       products={packet.products || []}
-      docKind="estimate"
       sellerProfile={sellerProfile}
       assetToken={assetToken}
     />
