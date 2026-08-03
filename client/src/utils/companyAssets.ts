@@ -2,8 +2,17 @@ export const companyAssetUrl = (filePath?: string | null, token?: string | null)
   const cleanPath = String(filePath || "").trim();
   if (!cleanPath) return "";
 
-  // Full URL — return as-is
+  // Rebuild Supabase company-asset URLs from their stable object key. Stored
+  // signed URLs expire; the public company-assets bucket does not need them.
   if (cleanPath.startsWith("http://") || cleanPath.startsWith("https://")) {
+    try {
+      const parsed = new URL(cleanPath);
+      const match = decodeURIComponent(parsed.pathname).match(/\/storage\/v1\/object\/(?:sign|public)\/company-assets\/(.+)$/);
+      if (match?.[1]) {
+        const supabaseUrl = (import.meta.env.VITE_SUPABASE_URL as string | undefined) ?? `${parsed.protocol}//${parsed.host}`;
+        return `${supabaseUrl}/storage/v1/object/public/company-assets/${match[1].split("/").map(encodeURIComponent).join("/")}`;
+      }
+    } catch { /* retain a non-Supabase absolute URL */ }
     return cleanPath;
   }
 
@@ -25,6 +34,13 @@ export const companyAssetUrl = (filePath?: string | null, token?: string | null)
     // SECURITY: browser requests authenticate via httpOnly session cookie.
     void token;
     return `/api/company-assets/${encodeURIComponent(filename)}`;
+  }
+
+  // Early Bolt records sometimes saved only "/logo.png". Those paths point at
+  // the Vite origin and 404 in production; company assets live in this bucket.
+  if (import.meta.env.VITE_BOLT_PREVIEW === "true" && /^\/[^/]+\.(png|jpe?g|webp|svg)$/i.test(cleanPath)) {
+    const supabaseUrl = (import.meta.env.VITE_SUPABASE_URL as string | undefined) ?? "";
+    return `${supabaseUrl}/storage/v1/object/public/company-assets/${encodeURIComponent(cleanPath.slice(1))}`;
   }
 
   return cleanPath;

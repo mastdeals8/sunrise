@@ -50,11 +50,16 @@ const wrapAddress = (value: string) => {
   return lines.length > 3 ? [...lines.slice(0, 2), lines.slice(2).join(" ")].join("\n") : lines.join("\n");
 };
 
-const documentLogo = (src: string, companyName: string) => src ? (
-  <img src={src} alt={companyName} style={{ width: 230, maxWidth: "100%", height: "auto", objectFit: "contain" }} />
-) : (
-  <div style={{ fontWeight: 900, fontSize: "22px", lineHeight: 1.1, textAlign: "right" }}>{companyName}</div>
-);
+const DocumentLogo: React.FC<{ src: string; companyName: string }> = ({ src, companyName }) => {
+  const [failed, setFailed] = React.useState(!src);
+  return failed ? (
+    <div style={{ fontWeight: 900, fontSize: "22px", lineHeight: 1.1, textAlign: "right" }}>{companyName}</div>
+  ) : (
+    <img src={src} alt={companyName} onError={() => setFailed(true)} style={{ width: 230, maxWidth: "100%", height: "auto", objectFit: "contain" }} />
+  );
+};
+
+const documentLogo = (src: string, companyName: string) => <DocumentLogo src={src} companyName={companyName} />;
 
 const EstimateDocument: React.FC<EstimateDocumentProps> = ({
   estimate: est,
