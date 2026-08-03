@@ -2,12 +2,11 @@ import React, { useEffect, useMemo, useState } from "react";
 import { formatCurrency } from "@/utils/format";
 import { useAuth } from "../contexts/AuthContext";
 import { isAblblFormat } from "../../../shared/textFormat";
-import { isServiceLineType } from "./operations/utils/estimateCalculations";
-import { companyAssetUrl } from "../utils/companyAssets";
 import { Package, Search, Printer, Loader as Loader2, FileDown, TriangleAlert as AlertTriangle } from "lucide-react";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import html2canvas from "html2canvas";
 import EstimateDocument from "../components/EstimateDocument";
+import InvoiceDocument from "../components/InvoiceDocument";
 import type { Client, Product, Store } from "./operations/types";
 import { isBoltMode } from "../lib/supabase";
 import { fetchInvoices, fetchCompanySettings, fetchEstimateById, fetchEstimateItems, fetchDeliveryChallansForEstimate, fetchPaymentsForInvoice, fetchClients, fetchStores, fetchProducts, fetchExecutionDocuments, fetchExecutionStores, getExecutionDocumentSignedUrl } from "../lib/api";
@@ -52,6 +51,7 @@ interface PacketPage {
   storagePath?: string | null;
   mimeType?: string | null;
   storeCode?: string | null;
+  storeName?: string | null;
   caption?: string | null;
   included: boolean;
 }
@@ -68,8 +68,8 @@ const SafeImage: React.FC<React.ImgHTMLAttributes<HTMLImageElement> & { fallback
 };
 
 const docTypeLabel = (type: string) => ({
-  photo: "Installation Photos", installation_photo: "Installation Photos", execution_photo: "Completion Photos",
-  completion_photo: "Completion Photos", additional_photo: "Additional Photos",
+  photo: "Installation Photo", installation_photo: "Installation Photo", execution_photo: "Completion Photo",
+  completion_photo: "Completion Photo", additional_photo: "Additional Photo",
   signed_wcc: "Signed WCC", signed_dc: "Signed Delivery Challan", transport_receipt: "Transport Receipt",
   lr_copy: "LR Copy", courier_receipt: "Courier Receipt", gate_pass: "Gate Pass", eway_bill: "E-Way Bill",
   extra: "Other Project Document", field_upload: "Project Document", client_po: "Purchase Order", po: "Purchase Order",
@@ -97,24 +97,6 @@ async function signPacketDocument(doc: any, estimateId: number): Promise<PacketP
 }
 
 
-const amountInWords = (num: number): string => {
-  if (!num) return "Zero";
-  const a = ['', 'One ', 'Two ', 'Three ', 'Four ', 'Five ', 'Six ', 'Seven ', 'Eight ', 'Nine ', 'Ten ', 'Eleven ', 'Twelve ', 'Thirteen ', 'Fourteen ', 'Fifteen ', 'Sixteen ', 'Seventeen ', 'Eighteen ', 'Nineteen '];
-  const b = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
-  const n = Math.floor(num);
-  if (n.toString().length > 9) return "Overflow";
-  const padded = ('000000000' + n).slice(-9);
-  const m = padded.match(/^(\d{2})(\d{2})(\d{2})(\d{1})(\d{2})$/);
-  if (!m) return "";
-  let str = "";
-  str += (Number(m[1]) !== 0) ? (a[Number(m[1])] || b[Number(m[1][0])] + ' ' + a[Number(m[1][1])]) + 'Crore ' : '';
-  str += (Number(m[2]) !== 0) ? (a[Number(m[2])] || b[Number(m[2][0])] + ' ' + a[Number(m[2][1])]) + 'Lakh ' : '';
-  str += (Number(m[3]) !== 0) ? (a[Number(m[3])] || b[Number(m[3][0])] + ' ' + a[Number(m[3][1])]) + 'Thousand ' : '';
-  str += (Number(m[4]) !== 0) ? (a[Number(m[4])] || b[Number(m[4][0])] + ' ' + a[Number(m[4][1])]) + 'Hundred ' : '';
-  str += (Number(m[5]) !== 0) ? ((str !== "") ? 'and ' : '') + (a[Number(m[5])] || b[Number(m[5][0])] + ' ' + a[Number(m[5][1])]) : '';
-  return str.trim() + " Only";
-};
-
 const InvoicePacketPage: React.FC = () => {
   const { token } = useAuth();
   const [invoices, setInvoices] = useState<Invoice[]>([]);
@@ -125,7 +107,6 @@ const InvoicePacketPage: React.FC = () => {
   const [search, setSearch] = useState("");
   const [sellerProfile, setSellerProfile] = useState<any>({});
   const [fromUrl, setFromUrl] = useState(false);
-  // pdfMode is the value of ?pdfMode= URL param: "invoice" | "estimate" | null
   const [pdfMode, setPdfMode] = useState<string | null>(null);
 
   useEffect(() => {
@@ -284,13 +265,17 @@ const InvoicePacketPage: React.FC = () => {
                 : isPhotoType(d.documentType) ? 4 : 5;
               return rank(a) - rank(b) || new Date(a.uploadedAt || a.createdAt).getTime() - new Date(b.uploadedAt || b.createdAt).getTime();
             });
+            let installationPhotoNumber = 0;
+            let completionPhotoNumber = 0;
+            let additionalPhotoNumber = 0;
             for (const doc of ordered) await addFile({
               id: `exec-${doc.id}`,
-              label: `${storeLabel} — ${docTypeLabel(doc.documentType)}`,
+              label: `${storeLabel} — ${docTypeLabel(doc.documentType)}${isPhotoType(doc.documentType) ? ` ${["execution_photo", "completion_photo"].includes(doc.documentType) ? ++completionPhotoNumber : doc.documentType === "additional_photo" ? ++additionalPhotoNumber : ++installationPhotoNumber}` : ""}`,
               kind: isPhotoType(doc.documentType) ? "photo" : isSignedType(doc.documentType) ? "wcc" : "store-file",
               storagePath: doc.storagePath || doc.filePath,
               mimeType: doc.mimeType,
               storeCode,
+              storeName: store?.name || storeLabel,
               caption: doc.caption || doc.description || doc.notes || null,
             });
           }
@@ -303,16 +288,12 @@ const InvoicePacketPage: React.FC = () => {
     load();
   }, [selectedId, token, invoices]);
 
-  // Signal playwright that the page is ready for PDF capture.
-  // Only fires when pdfMode is "invoice" or "estimate" and packet data is loaded.
+  // Retained for the existing legacy deployment path. Bolt packet generation
+  // remains entirely client-side and does not call this route mode.
   useEffect(() => {
-    if (pdfMode && packet && sellerProfile) {
-      // Wait for fonts + images to settle before signalling playwright
-      const t = setTimeout(() => {
-        document.documentElement.setAttribute("data-pdf-ready", "true");
-      }, 1200);
-      return () => clearTimeout(t);
-    }
+    if (!pdfMode || !packet) return;
+    const timer = window.setTimeout(() => document.documentElement.setAttribute("data-pdf-ready", "true"), 1200);
+    return () => window.clearTimeout(timer);
   }, [pdfMode, packet, sellerProfile]);
 
   const filtered = useMemo(() => {
@@ -320,8 +301,6 @@ const InvoicePacketPage: React.FC = () => {
     const q = search.toLowerCase();
     return invoices.filter(i => i.invoiceNumber.toLowerCase().includes(q) || i.partyName.toLowerCase().includes(q));
   }, [invoices, search]);
-
-  const doPrint = () => window.print();
 
   const [building, setBuilding] = useState(false);
   const [missingDocs, setMissingDocs] = useState<{ store: string; missing: string[] }[] | null>(null);
@@ -397,15 +376,18 @@ const InvoicePacketPage: React.FC = () => {
               // WCC scans are preserved as captured; photo pages reserve room
               // for the document type and optional field caption.
               const isPhoto = p.kind === "photo";
-              const maxH = A4_H - (isPhoto ? 190 : MARGIN * 2);
+              const maxH = A4_H - (isPhoto ? 230 : MARGIN * 2);
               const scale = Math.min(maxW / img.width, maxH / img.height);
               const drawW = img.width * scale;
               const drawH = img.height * scale;
               const page = pdf.addPage([A4_W, A4_H]);
-              const [storeName, documentType = p.kind === "photo" ? "Installation Photograph" : "Signed Work Completion Certificate"] = p.label.split(" — ");
+              const [, documentType = p.kind === "photo" ? "Installation Photo" : "Signed Work Completion Certificate"] = p.label.split(" — ");
               if (isPhoto) {
-                page.drawText(fitText(storeName, 52).toUpperCase(), { x: MARGIN, y: A4_H - 72, size: 18, color: rgb(0.08, 0.12, 0.18) });
-                page.drawText(documentType, { x: MARGIN, y: A4_H - 98, size: 11, color: rgb(0.85, 0.3, 0.07) });
+                page.drawText("Store Name:", { x: MARGIN, y: A4_H - 62, size: 8, color: rgb(0.4, 0.44, 0.5) });
+                page.drawText(fitText(p.storeName || "Store", 52), { x: MARGIN + 58, y: A4_H - 63, size: 13, color: rgb(0.08, 0.12, 0.18) });
+                page.drawText("Store Code:", { x: MARGIN, y: A4_H - 84, size: 8, color: rgb(0.4, 0.44, 0.5) });
+                page.drawText(fitText(p.storeCode || "—", 30), { x: MARGIN + 58, y: A4_H - 85, size: 11, color: rgb(0.08, 0.12, 0.18) });
+                page.drawText(documentType, { x: MARGIN, y: A4_H - 111, size: 11, color: rgb(0.85, 0.3, 0.07) });
                 if (p.caption) page.drawText(fitText(p.caption, 90), { x: MARGIN, y: 52, size: 9, color: rgb(0.35, 0.39, 0.45) });
               }
               page.drawImage(img, { x: (A4_W - drawW) / 2, y: isPhoto ? 70 + (maxH - drawH) / 2 : (A4_H - drawH) / 2, width: drawW, height: drawH });
@@ -433,13 +415,24 @@ const InvoicePacketPage: React.FC = () => {
                 if (sheet) { sheet.style.width = "794px"; sheet.style.minHeight = "1123px"; }
               },
             });
-            const pngBytes = canvas.toDataURL("image/png");
-            const img = await pdf.embedPng(pngBytes);
-            const scale = Math.min(A4_W / img.width, A4_H / img.height);
-            const drawW = img.width * scale;
-            const drawH = img.height * scale;
-            const page = pdf.addPage([A4_W, A4_H]);
-            page.drawImage(img, { x: (A4_W - drawW) / 2, y: A4_H - drawH, width: drawW, height: drawH });
+            // Slice at the exact A4 CSS ratio instead of shrinking a long
+            // renderer onto one page. At scale 3, 1123 CSS px is one A4 page.
+            const sliceHeight = 1123 * 3;
+            for (let offset = 0; offset < canvas.height; offset += sliceHeight) {
+              const height = Math.min(sliceHeight, canvas.height - offset);
+              const slice = document.createElement("canvas");
+              slice.width = canvas.width;
+              slice.height = height;
+              const context = slice.getContext("2d");
+              if (!context) throw new Error("Could not prepare printable page");
+              context.fillStyle = "#ffffff";
+              context.fillRect(0, 0, slice.width, slice.height);
+              context.drawImage(canvas, 0, offset, canvas.width, height, 0, 0, canvas.width, height);
+              const img = await pdf.embedPng(slice.toDataURL("image/png"));
+              const drawH = A4_W * (height / canvas.width);
+              const page = pdf.addPage([A4_W, A4_H]);
+              page.drawImage(img, { x: 0, y: A4_H - drawH, width: A4_W, height: drawH });
+            }
           }
         } catch (err) {
           console.warn(`[packet-pdf] Failed to add page ${p.label}:`, err);
@@ -475,22 +468,12 @@ const InvoicePacketPage: React.FC = () => {
 
   const included = pages.filter(p => p.included);
 
-  // pdfMode: playwright renders this route.
-  // "invoice" → render ONLY the Tax Invoice component (InvoiceFrontPage)
-  // "estimate" → render ONLY the Estimate component (EstimateSummary)
-  // Nothing else — no sidebar, no file previews, no DC summaries.
   if (pdfMode === "invoice" || pdfMode === "estimate") {
-    return (
-      <div style={{ background: "white", padding: "0", margin: "0" }}>
-        {!packet ? (
-          <div style={{ padding: "40px", textAlign: "center", color: "#666" }}>Loading…</div>
-        ) : pdfMode === "invoice" ? (
-          <InvoiceFrontPage packet={packet} sellerProfile={sellerProfile} assetToken={token} />
-        ) : (
-          <EstimatePacketPage packet={packet} sellerProfile={sellerProfile} assetToken={token} />
-        )}
-      </div>
-    );
+    return <div style={{ background: "white", padding: 0, margin: 0 }}>
+      {!packet ? <div style={{ padding: 40, textAlign: "center", color: "#666" }}>Loading…</div>
+        : pdfMode === "invoice" ? <InvoicePacketDocument packet={packet} sellerProfile={sellerProfile} assetToken={token} />
+        : <EstimatePacketPage packet={packet} sellerProfile={sellerProfile} assetToken={token} />}
+    </div>;
   }
 
   return (
@@ -546,7 +529,7 @@ const InvoicePacketPage: React.FC = () => {
               <div className="px-4 py-2 border-b border-slate-200 bg-slate-50 flex items-center justify-between gap-2">
                 <h3 className="font-bold text-sm shrink-0">Packet Pages ({included.length})</h3>
                 <div className="flex gap-1.5 flex-wrap">
-                  <button onClick={doPrint} className="flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold">
+                  <button onClick={() => generateInvoicePacket()} disabled={building} className="flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-slate-900 hover:bg-slate-800 disabled:opacity-60 text-white text-xs font-semibold">
                     <Printer className="w-3 h-3" /> Print
                   </button>
                   <button
@@ -605,7 +588,7 @@ const InvoicePacketPage: React.FC = () => {
                     <span>Page {idx + 1}: {p.label}</span>
                   </div>
                   <div className="p-6 print:p-0" data-packet-page={p.id}>
-                    {p.kind === "invoice" && <InvoiceFrontPage packet={packet} sellerProfile={sellerProfile} assetToken={token} />}
+                    {p.kind === "invoice" && <InvoicePacketDocument packet={packet} sellerProfile={sellerProfile} assetToken={token} />}
                     {p.kind === "estimate" && <EstimatePacketPage packet={packet} sellerProfile={sellerProfile} assetToken={token} />}
                     {(p.kind === "po" || p.kind === "project" || p.kind === "photo" || p.kind === "wcc" || p.kind === "store-file") && (
                       <DocumentPreview label={p.label} filePath={p.filePath} mimeType={p.mimeType} />
@@ -647,57 +630,7 @@ const InvoicePacketPage: React.FC = () => {
   );
 };
 
-const InvoiceFrontPage: React.FC<{ packet: PacketData; sellerProfile: any; assetToken?: string | null }> = ({ packet, sellerProfile, assetToken }) => {
-  const inv = packet.invoice;
-  const est = packet.estimate;
-  // The client invoice deliberately uses the approved Estimate descriptions.
-  // Invoice totals/tax remain authoritative; no internal invoice costing fields
-  // are rendered or used to construct the visible commercial lines.
-  const lines = (packet.estimateItems?.length ? packet.estimateItems : (inv.lineItems || [])).filter((r: any) => !isServiceLineType(r.lineType)) as any[];
-  const taxable = Number(inv.amount ?? lines.reduce((sum, row) => sum + Number(row.amount ?? row.totalPrice ?? Number(row.quantity || 0) * Number(row.rate || 0)), 0));
-  const totalTax = Number(inv.taxAmount ?? Math.max(0, Number(inv.totalAmount || 0) - taxable));
-  const estIgst = Number(est?.igstAmount || 0);
-  const igst = estIgst > 0 ? totalTax : 0;
-  const cgst = igst ? 0 : Number(est?.cgstAmount ?? totalTax / 2);
-  const sgst = igst ? 0 : Number(est?.sgstAmount ?? totalTax - cgst);
-  const beforeRound = taxable + cgst + sgst + igst;
-  const roundOff = Number((Number(inv.totalAmount || beforeRound) - beforeRound).toFixed(2));
-  const companyName = sellerProfile?.name || sellerProfile?.companyName || "Sunrise Media";
-  const logoSrc = companyAssetUrl(sellerProfile?.logoPath, assetToken);
-  return (
-    <article className="gst-invoice a4-sheet bg-white text-slate-900 mx-auto">
-      <header className="flex justify-between gap-6 border-b-2 border-slate-900 pb-4">
-        <div className="flex gap-3 items-start">
-          <SafeImage src={logoSrc} alt={companyName} className="h-14 w-auto max-w-[180px] object-contain" fallback={companyName} />
-          <div><h1 className="text-lg font-black uppercase">{companyName}</h1><p className="text-[10px] whitespace-pre-line">{sellerProfile?.address || sellerProfile?.registeredAddress || ""}</p><p className="text-[10px]">GSTIN: {sellerProfile?.gstin || "—"}</p></div>
-        </div>
-        <div className="text-right"><h2 className="text-2xl font-black tracking-widest">INVOICE</h2><p className="font-mono font-bold mt-2">{inv.invoiceNumber}</p><p className="text-xs">Date: {inv.date ? new Date(inv.date).toLocaleDateString("en-GB") : "—"}</p></div>
-      </header>
-      <section className="grid grid-cols-2 gap-6 py-4 border-b border-slate-300 text-xs">
-        <div><p className="text-[10px] uppercase font-bold text-slate-500">Bill To</p><p className="font-bold text-sm">{inv.partyName}</p><p className="whitespace-pre-line">{est?.billingAddressSnapshot || packet.client?.address || ""}</p><p>GSTIN: {est?.billingGstinSnapshot || packet.client?.gstin || "—"}</p></div>
-        <div className="grid grid-cols-2 gap-x-3 content-start"><span className="text-slate-500">PO Number</span><b>{inv.poNumber || est?.poNumber || "—"}</b><span className="text-slate-500">Due Date</span><b>{inv.dueDate ? new Date(inv.dueDate).toLocaleDateString("en-GB") : "—"}</b><span className="text-slate-500">Place of Supply</span><b>{est?.billingStateSnapshot || packet.client?.state || "—"}</b></div>
-      </section>
-      <table className="w-full text-[11px] invoice-lines mt-4">
-        <thead><tr><th>Sr.</th><th className="text-left">Product Name</th><th className="text-left">Description</th><th>Qty</th><th>Unit</th><th>Rate</th><th>Amount</th></tr></thead>
-        <tbody>{lines.map((row, index) => {
-          const qty = Number(row.quantity || 0); const rate = Number(row.rate || 0); const amount = Number(row.amount ?? row.totalPrice ?? qty * rate);
-          return <tr key={row.id || index}><td>{index + 1}</td><td className="text-left font-semibold">{row.itemName || row.productName || "Item"}</td><td className="text-left whitespace-pre-wrap">{row.description || "—"}</td><td>{qty}</td><td>{row.unit || "Nos"}</td><td className="text-right">{formatCurrency(rate)}</td><td className="text-right font-semibold">{formatCurrency(amount)}</td></tr>;
-        })}</tbody>
-      </table>
-      <section className="ml-auto mt-4 w-full max-w-sm text-xs summary-table">
-        <div><span>Subtotal</span><b>{formatCurrency(taxable)}</b></div>
-        {cgst > 0 && <div><span>CGST</span><b>{formatCurrency(cgst)}</b></div>}
-        {sgst > 0 && <div><span>SGST</span><b>{formatCurrency(sgst)}</b></div>}
-        {igst > 0 && <div><span>IGST</span><b>{formatCurrency(igst)}</b></div>}
-        {roundOff !== 0 && <div><span>Round Off</span><b>{formatCurrency(roundOff)}</b></div>}
-        <div className="grand"><span>Grand Total</span><b>{formatCurrency(inv.totalAmount || beforeRound + roundOff)}</b></div>
-      </section>
-      <p className="mt-4 border-t border-slate-300 pt-3 text-xs"><b>Amount in words:</b> {amountInWords(inv.totalAmount || 0)}</p>
-      {inv.remarks && <p className="mt-2 text-xs"><b>Remarks:</b> {inv.remarks}</p>}
-      <footer className="mt-12 text-right text-xs"><p>For <b>{companyName.toUpperCase()}</b></p><div className="h-12"/><p className="font-bold">Authorised Signatory</p></footer>
-    </article>
-  );
-};
+const InvoicePacketDocument: React.FC<{ packet: PacketData; sellerProfile: any; assetToken?: string | null }> = ({ packet, sellerProfile, assetToken }) => <InvoiceDocument invoice={packet.invoice} estimate={packet.estimate} estimateItems={packet.estimateItems || []} client={packet.client} sellerProfile={sellerProfile} assetToken={assetToken} />;
 
 // Estimate page (inside a packet) — same A4 template, "Estimate" labeling.
 const EstimatePacketPage: React.FC<{ packet: PacketData; sellerProfile: any; assetToken?: string | null }> = ({ packet, sellerProfile, assetToken }) => {
