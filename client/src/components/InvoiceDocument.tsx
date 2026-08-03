@@ -49,7 +49,7 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({ invoice: inv, estimat
   const companyName = sellerProfile?.name || sellerProfile?.companyName || "Sunrise Media";
   const logoSrc = companyAssetUrl(sellerProfile?.logoPath, assetToken);
 
-  return <article className="invoice-print a4-sheet bg-white text-slate-900 mx-auto" data-source="invoice-print" data-print-document="true">
+  return <article className="invoice-print a4-sheet bg-white text-slate-900" data-source="invoice-print" data-print-document="true">
     <header className="flex justify-between gap-6 border-b-2 border-slate-900 pb-4">
       <div className="flex gap-3 items-start">
         <InvoiceLogo src={logoSrc} companyName={companyName} />

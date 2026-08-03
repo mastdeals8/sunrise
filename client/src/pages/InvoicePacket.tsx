@@ -61,6 +61,15 @@ const fitText = (value: unknown, max = 80) => {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 };
 
+const estimatePrintMode = () => {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem("sunrise_estimate_print_options") || "{}");
+    return saved?.mode === "normal" ? "normal" : "compact";
+  } catch {
+    return "compact";
+  }
+};
+
 const SafeImage: React.FC<React.ImgHTMLAttributes<HTMLImageElement> & { fallback?: string }> = ({ fallback = "Image unavailable", ...props }) => {
   const [failed, setFailed] = useState(!props.src);
   if (failed) return <div className="flex items-center justify-center border border-dashed border-slate-300 bg-slate-50 text-slate-500 text-xs rounded p-6">{fallback}</div>;
@@ -302,6 +311,22 @@ const InvoicePacketPage: React.FC = () => {
     return invoices.filter(i => i.invoiceNumber.toLowerCase().includes(q) || i.partyName.toLowerCase().includes(q));
   }, [invoices, search]);
 
+  const doPrint = () => {
+    const modeClass = `estimate-print-mode-${estimatePrintMode()}`;
+    document.body.classList.add(modeClass);
+    let cleaned = false;
+    const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
+      document.body.classList.remove(modeClass);
+      window.removeEventListener("afterprint", cleanup);
+      window.removeEventListener("focus", cleanup);
+    };
+    window.addEventListener("afterprint", cleanup);
+    window.addEventListener("focus", cleanup);
+    window.print();
+  };
+
   const [building, setBuilding] = useState(false);
   const [missingDocs, setMissingDocs] = useState<{ store: string; missing: string[] }[] | null>(null);
 
@@ -342,6 +367,11 @@ const InvoicePacketPage: React.FC = () => {
       const A4_W = 595.28;
       const A4_H = 841.89;
       const MARGIN = 42;
+      const PRINT_MARGIN = 22.68; // 8 mm, identical to the native @page rule
+      const PRINTABLE_W = A4_W - PRINT_MARGIN * 2;
+      const PRINTABLE_H = A4_H - PRINT_MARGIN * 2;
+      const PRINTABLE_CSS_W = 733; // 194 mm at 96 CSS dpi
+      const PRINTABLE_CSS_H = 1062; // 281 mm at 96 CSS dpi
       const invNum = packet.invoice?.invoiceNumber || String(selectedId);
 
       const addUnavailablePage = (label: string) => {
@@ -402,22 +432,48 @@ const InvoicePacketPage: React.FC = () => {
               useCORS: true,
               backgroundColor: "#ffffff",
               logging: false,
-              windowWidth: 794,
+              windowWidth: PRINTABLE_CSS_W,
               onclone: (doc: Document) => {
+                doc.body.classList.add(`estimate-print-mode-${estimatePrintMode()}`);
+                const printRules: string[] = [];
+                Array.from(doc.styleSheets).forEach(sheet => {
+                  try {
+                    Array.from(sheet.cssRules || []).forEach(rule => {
+                      if (rule.type === 4) {
+                        const mediaRule = rule as CSSMediaRule;
+                        if (mediaRule.conditionText.includes("print")) {
+                          printRules.push(Array.from(mediaRule.cssRules).map(child => child.cssText).join("\n"));
+                        }
+                      }
+                    });
+                  } catch { /* cross-origin stylesheet; inline styles still apply */ }
+                });
+                if (printRules.length) {
+                  const printStyle = doc.createElement("style");
+                  printStyle.textContent = printRules.join("\n");
+                  doc.head.appendChild(printStyle);
+                }
                 const node = doc.querySelector(`[data-packet-page="${p.id}"]`) as HTMLElement | null;
                 if (!node) return;
-                node.style.width = "794px";
+                node.style.width = `${PRINTABLE_CSS_W}px`;
                 node.style.padding = "0";
                 node.style.margin = "0";
                 node.style.maxWidth = "none";
                 node.style.overflow = "visible";
+                node.querySelectorAll<HTMLElement>(".a4-sheet, .invoice-print, .estimate-print").forEach(documentNode => {
+                  documentNode.style.width = "100%";
+                  documentNode.style.maxWidth = "none";
+                  documentNode.style.margin = "0";
+                  documentNode.style.paddingLeft = "0";
+                  documentNode.style.paddingRight = "0";
+                  documentNode.style.boxSizing = "border-box";
+                });
                 const sheet = node.querySelector(".a4-sheet") as HTMLElement | null;
-                if (sheet) { sheet.style.width = "794px"; sheet.style.minHeight = "1123px"; }
+                if (sheet) sheet.style.minHeight = `${PRINTABLE_CSS_H}px`;
               },
             });
-            // Slice at the exact A4 CSS ratio instead of shrinking a long
-            // renderer onto one page. At scale 3, 1123 CSS px is one A4 page.
-            const sliceHeight = 1123 * 3;
+            // Slice using the same 194 x 281 mm printable box as native print.
+            const sliceHeight = PRINTABLE_CSS_H * 3;
             for (let offset = 0; offset < canvas.height; offset += sliceHeight) {
               const height = Math.min(sliceHeight, canvas.height - offset);
               const slice = document.createElement("canvas");
@@ -429,9 +485,9 @@ const InvoicePacketPage: React.FC = () => {
               context.fillRect(0, 0, slice.width, slice.height);
               context.drawImage(canvas, 0, offset, canvas.width, height, 0, 0, canvas.width, height);
               const img = await pdf.embedPng(slice.toDataURL("image/png"));
-              const drawH = A4_W * (height / canvas.width);
+              const drawH = PRINTABLE_W * (height / canvas.width);
               const page = pdf.addPage([A4_W, A4_H]);
-              page.drawImage(img, { x: 0, y: A4_H - drawH, width: A4_W, height: drawH });
+              page.drawImage(img, { x: PRINT_MARGIN, y: A4_H - PRINT_MARGIN - drawH, width: PRINTABLE_W, height: Math.min(drawH, PRINTABLE_H) });
             }
           }
         } catch (err) {
@@ -485,7 +541,7 @@ const InvoicePacketPage: React.FC = () => {
         <p className="text-slate-500 text-sm mt-1">Select an invoice → auto-collect PO, estimate, DC, photos → generate one client-ready PDF.</p>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 print:block">
+      <div className="packet-layout grid grid-cols-1 lg:grid-cols-12 gap-6 print:block">
         {/* Sidebar: invoice picker + page list (hidden on print) */}
         <div className={`${fromUrl ? "lg:col-span-3" : "lg:col-span-4"} space-y-3 print:hidden`}>
           {!fromUrl && (
@@ -529,7 +585,7 @@ const InvoicePacketPage: React.FC = () => {
               <div className="px-4 py-2 border-b border-slate-200 bg-slate-50 flex items-center justify-between gap-2">
                 <h3 className="font-bold text-sm shrink-0">Packet Pages ({included.length})</h3>
                 <div className="flex gap-1.5 flex-wrap">
-                  <button onClick={() => generateInvoicePacket()} disabled={building} className="flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-slate-900 hover:bg-slate-800 disabled:opacity-60 text-white text-xs font-semibold">
+                  <button onClick={doPrint} className="flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold">
                     <Printer className="w-3 h-3" /> Print
                   </button>
                   <button
@@ -555,7 +611,7 @@ const InvoicePacketPage: React.FC = () => {
         </div>
 
         {/* Main: packet preview */}
-        <div className={`${fromUrl ? "lg:col-span-9" : "lg:col-span-8"} print:col-span-12`}>
+        <div className={`packet-preview-column ${fromUrl ? "lg:col-span-9" : "lg:col-span-8"} print:col-span-12`}>
           {!selectedId ? (
             <div className="glass-panel p-12 text-center text-slate-500 print:hidden">
               <Package className="w-10 h-10 mx-auto mb-3 text-slate-300" />
@@ -604,11 +660,12 @@ const InvoicePacketPage: React.FC = () => {
       <style>{`
         @media print {
           body { background: white !important; }
+          .packet-layout, .packet-preview-column { display: block !important; width: 100% !important; max-width: none !important; margin: 0 !important; padding: 0 !important; }
           aside, header, nav, .print\\:hidden { display: none !important; }
-          .packet-print-root { margin: 0 !important; padding: 0 !important; }
-          .packet-page { width: 100% !important; min-height: 279mm !important; margin: 0 !important; padding: 0 !important; overflow: visible !important; }
+          .packet-print-root { width: 100% !important; max-width: none !important; margin: 0 !important; padding: 0 !important; }
+          .packet-page { display: block !important; width: 100% !important; max-width: none !important; min-height: 281mm !important; margin: 0 !important; padding: 0 !important; overflow: visible !important; }
           .packet-page-break { break-after: page !important; page-break-after: always !important; }
-          .a4-sheet { width: 100% !important; min-height: 270mm !important; }
+          .a4-sheet, .invoice-print, .estimate-print { width: 100% !important; max-width: none !important; min-height: 281mm !important; margin: 0 !important; padding-left: 0 !important; padding-right: 0 !important; box-sizing: border-box !important; }
           .doc-preview-frame {
             height: 270mm !important;
             width: 100% !important;
@@ -617,7 +674,7 @@ const InvoicePacketPage: React.FC = () => {
           }
           .document-image { width: 100% !important; height: 270mm !important; object-fit: contain !important; }
         }
-        .a4-sheet { width: 210mm; min-height: 297mm; padding: 12mm; box-sizing: border-box; }
+        .a4-sheet, .invoice-print { width: 100%; max-width: none; min-height: 281mm; margin: 0; padding: 0; box-sizing: border-box; }
         .invoice-lines { border-collapse: collapse; }
         .invoice-lines th, .invoice-lines td { border: 1px solid #cbd5e1; padding: 6px; text-align: center; vertical-align: top; }
         .invoice-lines th { background: #f1f5f9; font-weight: 800; }
