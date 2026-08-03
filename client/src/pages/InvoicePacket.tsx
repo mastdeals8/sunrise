@@ -47,11 +47,12 @@ interface PacketData {
 interface PacketPage {
   id: string;
   label: string;
-  kind: "cover" | "invoice" | "po" | "estimate" | "store" | "photo" | "wcc";
+  kind: "invoice" | "estimate" | "store" | "photo" | "wcc";
   filePath?: string | null;
   storagePath?: string | null;
   mimeType?: string | null;
   storeCode?: string | null;
+  caption?: string | null;
   included: boolean;
 }
 
@@ -71,14 +72,15 @@ const SafeImage: React.FC<React.ImgHTMLAttributes<HTMLImageElement> & { fallback
 };
 
 const docTypeLabel = (type: string) => ({
-  photo: "Installation Photo", installation_photo: "Installation Photo", execution_photo: "Execution Photo",
+  photo: "Installation Photos", installation_photo: "Installation Photos", execution_photo: "Completion Photos",
+  completion_photo: "Completion Photos", additional_photo: "Additional Photos",
   signed_wcc: "Signed WCC", signed_dc: "Signed Delivery Challan", transport_receipt: "Transport Receipt",
   lr_copy: "LR Copy", courier_receipt: "Courier Receipt", gate_pass: "Gate Pass", eway_bill: "E-Way Bill",
   extra: "Other Project Document", field_upload: "Project Document", client_po: "Purchase Order", po: "Purchase Order",
 } as Record<string, string>)[type] || type.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
 
 const storeCodeFor = (value: any) => String(value?.storeCode || value?.metadata?.storeCode || "").trim();
-const isPhotoType = (type: string) => ["photo", "installation_photo", "execution_photo"].includes(type);
+const isPhotoType = (type: string) => ["photo", "installation_photo", "execution_photo", "completion_photo", "additional_photo"].includes(type);
 const isSignedType = (type: string) => ["signed_wcc", "signed_dc"].includes(type);
 // wcc_photo is the unsigned WCC photo captured in the field — not wanted in the client packet.
 // The client packet only includes the signed WCC that was stamped and uploaded.
@@ -198,7 +200,7 @@ const InvoicePacketPage: React.FC = () => {
           const estimateId = Number(data.estimate?.id || 0);
           const docs = (data.executionDocuments || []).filter((d: any) => d.status !== "deleted" && d.status !== "replaced");
           const seen = new Set<string>();
-          const list: PacketPage[] = [{ id: "cover", label: "Cover Page", kind: "cover", included: true }];
+          const list: PacketPage[] = [{ id: "inv", label: "Client Billing Invoice", kind: "invoice", included: true }];
           const addFile = async (page: Omit<PacketPage, "included">) => {
             const raw = String(page.storagePath || page.filePath || "");
             if (!raw || seen.has(raw)) return;
@@ -209,8 +211,6 @@ const InvoicePacketPage: React.FC = () => {
 
           // The Estimate Register and packet both render this exact shared component.
           if (data.estimate) list.push({ id: "est", label: `Estimate ${data.estimate.estimateNumber}`, kind: "estimate", included: true });
-          if (data.estimate?.poFilePath) await addFile({ id: "po", label: `Purchase Order (${data.estimate.poNumber || "PO"})`, kind: "po", storagePath: data.estimate.poFilePath });
-          list.push({ id: "inv", label: "Commercial Invoice", kind: "invoice", included: true });
 
           const byUploadTime = (a: any, b: any) => new Date(a.uploadedAt || a.createdAt || 0).getTime() - new Date(b.uploadedAt || b.createdAt || 0).getTime();
 
@@ -262,7 +262,15 @@ const InvoicePacketPage: React.FC = () => {
               const rank = (d: any) => isSignedType(d.documentType) ? 0 : isPhotoType(d.documentType) ? 1 : 2;
               return rank(a) - rank(b) || new Date(a.uploadedAt || a.createdAt).getTime() - new Date(b.uploadedAt || b.createdAt).getTime();
             });
-            for (const doc of ordered) await addFile({ id: `exec-${doc.id}`, label: `${storeLabel} — ${docTypeLabel(doc.documentType)}`, kind: isPhotoType(doc.documentType) ? "photo" : "wcc", storagePath: doc.storagePath || doc.filePath, mimeType: doc.mimeType, storeCode });
+            for (const doc of ordered) await addFile({
+              id: `exec-${doc.id}`,
+              label: `${storeLabel} — ${docTypeLabel(doc.documentType)}`,
+              kind: isPhotoType(doc.documentType) ? "photo" : "wcc",
+              storagePath: doc.storagePath || doc.filePath,
+              mimeType: doc.mimeType,
+              storeCode,
+              caption: doc.caption || doc.description || doc.notes || null,
+            });
           }
           setPages(list);
         }
@@ -299,7 +307,6 @@ const InvoicePacketPage: React.FC = () => {
   const computeMissing = (): { store: string; missing: string[] }[] => {
     const gaps: { store: string; missing: string[] }[] = [];
     const coreMissing: string[] = [];
-    if (!pages.some(p => p.kind === "po" && p.filePath)) coreMissing.push("Purchase Order");
     if (!pages.some(p => p.kind === "estimate")) coreMissing.push("Estimate");
     if (coreMissing.length) gaps.push({ store: "Project-level", missing: coreMissing });
     const storeCodes = Array.from(new Set([
@@ -342,15 +349,6 @@ const InvoicePacketPage: React.FC = () => {
         page.drawText("The packet was generated without this missing attachment.", { x: MARGIN + 24, y: 345, size: 9, color: rgb(0.4, 0.45, 0.52) });
       };
 
-      const addDocumentTitlePage = (label: string) => {
-        const [storeName, documentType = "Project Document"] = label.split(" — ");
-        const page = pdf.addPage([A4_W, A4_H]);
-        page.drawText("STORE", { x: MARGIN, y: 515, size: 10, color: rgb(0.85, 0.3, 0.07) });
-        page.drawText(fitText(storeName, 42).toUpperCase(), { x: MARGIN, y: 472, size: 25, color: rgb(0.08, 0.12, 0.18) });
-        page.drawLine({ start: { x: MARGIN, y: 445 }, end: { x: A4_W - MARGIN, y: 445 }, thickness: 1, color: rgb(0.85, 0.3, 0.07) });
-        page.drawText(documentType, { x: MARGIN, y: 410, size: 13, color: rgb(0.3, 0.35, 0.42) });
-      };
-
       for (const p of included) {
         try {
           if (p.storagePath) {
@@ -366,22 +364,27 @@ const InvoicePacketPage: React.FC = () => {
             const isJpg = contentType === "image/jpeg" || /\.(jpe?g)$/i.test(pathname);
 
             if (isPdf) {
-              if (p.kind === "wcc") addDocumentTitlePage(p.label);
               const srcDoc = await PDFDocument.load(buf, { ignoreEncryption: true });
               const copied = await pdf.copyPages(srcDoc, srcDoc.getPageIndices());
               copied.forEach(page => pdf.addPage(page));
             } else if (isPng || isJpg) {
               const img = isPng ? await pdf.embedPng(buf) : await pdf.embedJpg(buf);
               const maxW = A4_W - MARGIN * 2;
-              const maxH = A4_H - 190;
+              // WCC scans are preserved as captured; photo pages reserve room
+              // for the document type and optional field caption.
+              const isPhoto = p.kind === "photo";
+              const maxH = A4_H - (isPhoto ? 190 : MARGIN * 2);
               const scale = Math.min(maxW / img.width, maxH / img.height);
               const drawW = img.width * scale;
               const drawH = img.height * scale;
               const page = pdf.addPage([A4_W, A4_H]);
               const [storeName, documentType = p.kind === "photo" ? "Installation Photograph" : "Signed Work Completion Certificate"] = p.label.split(" — ");
-              page.drawText(fitText(storeName, 52).toUpperCase(), { x: MARGIN, y: A4_H - 72, size: 18, color: rgb(0.08, 0.12, 0.18) });
-              page.drawText(documentType, { x: MARGIN, y: A4_H - 98, size: 11, color: rgb(0.85, 0.3, 0.07) });
-              page.drawImage(img, { x: (A4_W - drawW) / 2, y: 70 + (maxH - drawH) / 2, width: drawW, height: drawH });
+              if (isPhoto) {
+                page.drawText(fitText(storeName, 52).toUpperCase(), { x: MARGIN, y: A4_H - 72, size: 18, color: rgb(0.08, 0.12, 0.18) });
+                page.drawText(documentType, { x: MARGIN, y: A4_H - 98, size: 11, color: rgb(0.85, 0.3, 0.07) });
+                if (p.caption) page.drawText(fitText(p.caption, 90), { x: MARGIN, y: 52, size: 9, color: rgb(0.35, 0.39, 0.45) });
+              }
+              page.drawImage(img, { x: (A4_W - drawW) / 2, y: isPhoto ? 70 + (maxH - drawH) / 2 : (A4_H - drawH) / 2, width: drawW, height: drawH });
             } else {
               throw new Error(`Unsupported packet file type: ${contentType || pathname}`);
             }
@@ -586,12 +589,11 @@ const InvoicePacketPage: React.FC = () => {
                     <span>Page {idx + 1}: {p.label}</span>
                   </div>
                   <div className="p-6 print:p-0" data-packet-page={p.id}>
-                    {p.kind === "cover" && <CoverPage packet={packet} sellerProfile={sellerProfile} assetToken={token} />}
-                    {p.kind === "store" && <StoreSectionPage packet={packet} page={p} sellerProfile={sellerProfile} assetToken={token} />}
+                    {p.kind === "store" && <StoreSectionPage packet={packet} page={p} />}
                     {p.kind === "invoice" && <InvoiceFrontPage packet={packet} sellerProfile={sellerProfile} assetToken={token} />}
                     {p.kind === "estimate" && <EstimatePacketPage packet={packet} sellerProfile={sellerProfile} assetToken={token} />}
-                    {(p.kind === "po" || p.kind === "photo" || p.kind === "wcc") && (
-                      <DocumentPreview label={p.label} filePath={p.filePath} mimeType={p.mimeType} isPurchaseOrder={p.kind === "po"} />
+                    {(p.kind === "photo" || p.kind === "wcc") && (
+                      <DocumentPreview label={p.label} filePath={p.filePath} mimeType={p.mimeType} />
                     )}
                   </div>
                 </div>
@@ -630,40 +632,13 @@ const InvoicePacketPage: React.FC = () => {
   );
 };
 
-const CoverPage: React.FC<{ packet: PacketData; sellerProfile: any; assetToken?: string | null }> = ({ packet, sellerProfile, assetToken }) => {
-  const logoSrc = companyAssetUrl(sellerProfile?.logoPath, assetToken);
-  return <article className="a4-sheet mx-auto flex flex-col bg-white text-slate-900">
-    <div className="flex justify-between items-start border-b border-slate-200 pb-8">
-      <SafeImage src={logoSrc} alt="Sunrise Media" className="h-20 w-auto max-w-[240px] object-contain" fallback="Sunrise Media" />
-      <span className="text-xs font-bold uppercase tracking-[0.22em] text-orange-600">Client Handover</span>
-    </div>
-    <div className="flex-1 flex flex-col justify-center max-w-xl">
-      <p className="text-sm uppercase tracking-[0.3em] text-orange-600 font-bold">Invoice Packet</p>
-      <h1 className="mt-4 text-5xl leading-tight font-black">{packet.estimate?.title || "Project Documentation"}</h1>
-      <p className="mt-5 text-xl text-slate-500">Prepared for {packet.invoice.partyName}</p>
-      <dl className="mt-12 grid grid-cols-[150px_1fr] gap-y-4 text-sm border-t border-slate-200 pt-7">
-        <dt className="text-slate-500">Invoice Number</dt><dd className="font-bold">{packet.invoice.invoiceNumber}</dd>
-        <dt className="text-slate-500">Client</dt><dd className="font-bold">{packet.invoice.partyName}</dd>
-        <dt className="text-slate-500">Generated Date</dt><dd className="font-bold">{safeDate()}</dd>
-        <dt className="text-slate-500">Prepared By</dt><dd className="font-bold">{sellerProfile?.name || sellerProfile?.companyName || "Sunrise Media"}</dd>
-      </dl>
-    </div>
-  </article>;
-};
-
-const StoreSectionPage: React.FC<{ packet: PacketData; page: PacketPage; sellerProfile: any; assetToken?: string | null }> = ({ packet, page, sellerProfile, assetToken }) => {
+const StoreSectionPage: React.FC<{ packet: PacketData; page: PacketPage }> = ({ packet, page }) => {
   const store = (packet.stores || []).find((row: any) => String(row.storeCode || row.code || "") === page.storeCode);
-  const logoSrc = companyAssetUrl(sellerProfile?.logoPath, assetToken);
   return <article className="a4-sheet mx-auto flex flex-col bg-white text-slate-900">
-    <SafeImage src={logoSrc} alt="Sunrise Media" className="h-14 w-auto max-w-[200px] object-contain" fallback="Sunrise Media" />
     <div className="flex-1 flex flex-col justify-center">
       <p className="text-sm uppercase tracking-[0.3em] text-orange-600 font-bold">Store</p>
       <h2 className="mt-5 text-5xl font-black leading-tight">{store?.name || page.label}</h2>
       {page.storeCode && <p className="mt-4 text-xl text-slate-500">Store Code: <b className="text-slate-800">{page.storeCode}</b></p>}
-      <div className="mt-14 border-t border-slate-200 pt-7 grid grid-cols-2 gap-5 text-sm">
-        <div><span className="block text-slate-500">Signed WCC</span><b>Work completion evidence</b></div>
-        <div><span className="block text-slate-500">Installation Photos</span><b>Site completion record</b></div>
-      </div>
     </div>
   </article>;
 };
@@ -671,8 +646,11 @@ const StoreSectionPage: React.FC<{ packet: PacketData; page: PacketPage; sellerP
 const InvoiceFrontPage: React.FC<{ packet: PacketData; sellerProfile: any; assetToken?: string | null }> = ({ packet, sellerProfile, assetToken }) => {
   const inv = packet.invoice;
   const est = packet.estimate;
-  const lines = (inv.lineItems?.length ? inv.lineItems : (packet.estimateItems || []).filter((r: any) => !isServiceLineType(r.lineType))) as any[];
-  const taxable = Number(inv.amount ?? lines.reduce((sum, row) => sum + Number(row.amount ?? Number(row.quantity || 0) * Number(row.rate || 0)), 0));
+  // The client invoice deliberately uses the approved Estimate descriptions.
+  // Invoice totals/tax remain authoritative; no internal invoice costing fields
+  // are rendered or used to construct the visible commercial lines.
+  const lines = (packet.estimateItems?.length ? packet.estimateItems : (inv.lineItems || []).filter((r: any) => !isServiceLineType(r.lineType))) as any[];
+  const taxable = Number(inv.amount ?? lines.reduce((sum, row) => sum + Number(row.amount ?? row.totalPrice ?? Number(row.quantity || 0) * Number(row.rate || 0)), 0));
   const totalTax = Number(inv.taxAmount ?? Math.max(0, Number(inv.totalAmount || 0) - taxable));
   const estIgst = Number(est?.igstAmount || 0);
   const igst = estIgst > 0 ? totalTax : 0;
@@ -689,17 +667,18 @@ const InvoiceFrontPage: React.FC<{ packet: PacketData; sellerProfile: any; asset
           <SafeImage src={logoSrc} alt={companyName} className="h-14 w-auto max-w-[180px] object-contain" fallback={companyName} />
           <div><h1 className="text-lg font-black uppercase">{companyName}</h1><p className="text-[10px] whitespace-pre-line">{sellerProfile?.address || sellerProfile?.registeredAddress || ""}</p><p className="text-[10px]">GSTIN: {sellerProfile?.gstin || "—"}</p></div>
         </div>
-        <div className="text-right"><h2 className="text-2xl font-black tracking-widest">TAX INVOICE</h2><p className="font-mono font-bold mt-2">{inv.invoiceNumber}</p><p className="text-xs">Date: {inv.date ? new Date(inv.date).toLocaleDateString("en-GB") : "—"}</p></div>
+        <div className="text-right"><h2 className="text-2xl font-black tracking-widest">CLIENT BILLING INVOICE</h2><p className="font-mono font-bold mt-2">{inv.invoiceNumber}</p><p className="text-xs">Date: {inv.date ? new Date(inv.date).toLocaleDateString("en-GB") : "—"}</p></div>
       </header>
       <section className="grid grid-cols-2 gap-6 py-4 border-b border-slate-300 text-xs">
         <div><p className="text-[10px] uppercase font-bold text-slate-500">Bill To</p><p className="font-bold text-sm">{inv.partyName}</p><p className="whitespace-pre-line">{est?.billingAddressSnapshot || packet.client?.address || ""}</p><p>GSTIN: {est?.billingGstinSnapshot || packet.client?.gstin || "—"}</p></div>
         <div className="grid grid-cols-2 gap-x-3 content-start"><span className="text-slate-500">PO Number</span><b>{inv.poNumber || est?.poNumber || "—"}</b><span className="text-slate-500">Due Date</span><b>{inv.dueDate ? new Date(inv.dueDate).toLocaleDateString("en-GB") : "—"}</b><span className="text-slate-500">Place of Supply</span><b>{est?.billingStateSnapshot || packet.client?.state || "—"}</b></div>
       </section>
       <table className="w-full text-[11px] invoice-lines mt-4">
-        <thead><tr><th className="text-left">Product Name</th><th className="text-left">Description</th><th>Total Sqft</th><th>Qty</th><th>Rate</th><th>Amount</th></tr></thead>
+        <thead><tr><th>Sr.</th><th className="text-left">Description</th><th>Qty</th><th>Unit</th><th>Rate</th><th>Amount</th></tr></thead>
         <tbody>{lines.map((row, index) => {
-          const qty = Number(row.quantity || 0); const rate = Number(row.rate || 0); const amount = Number(row.amount ?? qty * rate);
-          return <tr key={row.id || index}><td className="text-left font-semibold">{row.itemName || row.productName || "Item"}</td><td className="text-left whitespace-pre-wrap">{row.description || "—"}</td><td>{Number(row.totalSize ?? row.totalSqft ?? 0).toFixed(2)}</td><td>{qty}</td><td className="text-right">{formatCurrency(rate)}</td><td className="text-right font-semibold">{formatCurrency(amount)}</td></tr>;
+          const qty = Number(row.quantity || 0); const rate = Number(row.rate || 0); const amount = Number(row.amount ?? row.totalPrice ?? qty * rate);
+          const commercialDescription = [row.itemName || row.productName, row.description].filter(Boolean).join("\n");
+          return <tr key={row.id || index}><td>{index + 1}</td><td className="text-left whitespace-pre-wrap">{commercialDescription || "Item"}</td><td>{qty}</td><td>{row.unit || "Nos"}</td><td className="text-right">{formatCurrency(rate)}</td><td className="text-right font-semibold">{formatCurrency(amount)}</td></tr>;
         })}</tbody>
       </table>
       <section className="ml-auto mt-4 w-full max-w-sm text-xs summary-table">
@@ -707,7 +686,7 @@ const InvoiceFrontPage: React.FC<{ packet: PacketData; sellerProfile: any; asset
         {cgst > 0 && <div><span>CGST</span><b>{formatCurrency(cgst)}</b></div>}
         {sgst > 0 && <div><span>SGST</span><b>{formatCurrency(sgst)}</b></div>}
         {igst > 0 && <div><span>IGST</span><b>{formatCurrency(igst)}</b></div>}
-        <div><span>Round Off</span><b>{formatCurrency(roundOff)}</b></div>
+        {roundOff !== 0 && <div><span>Round Off</span><b>{formatCurrency(roundOff)}</b></div>}
         <div className="grand"><span>Grand Total</span><b>{formatCurrency(inv.totalAmount || beforeRound + roundOff)}</b></div>
       </section>
       <p className="mt-4 border-t border-slate-300 pt-3 text-xs"><b>Amount in words:</b> {amountInWords(inv.totalAmount || 0)}</p>
@@ -734,8 +713,8 @@ const EstimatePacketPage: React.FC<{ packet: PacketData; sellerProfile: any; ass
   );
 };
 
-const DocumentPreview: React.FC<{ label: string; filePath?: string | null; mimeType?: string | null; isPurchaseOrder?: boolean }> = ({ label, filePath, mimeType, isPurchaseOrder }) => {
-  if (!filePath) return <div className="text-center text-slate-500 text-sm p-4 border border-dashed border-slate-200 rounded">{isPurchaseOrder ? "Purchase Order not found" : `${label}: Document not found`}</div>;
+const DocumentPreview: React.FC<{ label: string; filePath?: string | null; mimeType?: string | null }> = ({ label, filePath, mimeType }) => {
+  if (!filePath) return <div className="text-center text-slate-500 text-sm p-4 border border-dashed border-slate-200 rounded">{label}: Document not found</div>;
   let pathname = filePath;
   try { pathname = decodeURIComponent(new URL(filePath).pathname); } catch { /* storage key */ }
   const isImage = Boolean(mimeType?.startsWith("image/") || /\.(png|jpe?g|gif|webp)$/i.test(pathname));
