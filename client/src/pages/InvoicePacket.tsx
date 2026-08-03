@@ -47,7 +47,7 @@ interface PacketData {
 interface PacketPage {
   id: string;
   label: string;
-  kind: "invoice" | "estimate" | "store" | "photo" | "wcc";
+  kind: "invoice" | "po" | "estimate" | "project" | "photo" | "wcc" | "store-file";
   filePath?: string | null;
   storagePath?: string | null;
   mimeType?: string | null;
@@ -55,10 +55,6 @@ interface PacketPage {
   caption?: string | null;
   included: boolean;
 }
-
-const safeDate = (value: string | Date = new Date()) => new Date(value).toLocaleDateString("en-GB", {
-  day: "2-digit", month: "short", year: "numeric",
-});
 
 const fitText = (value: unknown, max = 80) => {
   const text = String(value || "").replace(/\s+/g, " ").trim();
@@ -82,11 +78,11 @@ const docTypeLabel = (type: string) => ({
 const storeCodeFor = (value: any) => String(value?.storeCode || value?.metadata?.storeCode || "").trim();
 const isPhotoType = (type: string) => ["photo", "installation_photo", "execution_photo", "completion_photo", "additional_photo"].includes(type);
 const isSignedType = (type: string) => ["signed_wcc", "signed_dc"].includes(type);
+const isPoType = (type: string) => ["po", "client_po"].includes(type);
 // wcc_photo is the unsigned WCC photo captured in the field — not wanted in the client packet.
 // The client packet only includes the signed WCC that was stamped and uploaded.
 const isExcludedType = (type: string) => ["wcc", "wcc_photo"].includes(type);
-// Documents that belong in the per-store block: only signed WCC/challan + installation photos.
-const isStoreScopeDoc = (type: string) => isSignedType(type) || isPhotoType(type);
+const isStoreScopeDoc = (doc: any) => Boolean(storeCodeFor(doc) || doc?.deliveryChallanId);
 
 async function signPacketDocument(doc: any, estimateId: number): Promise<PacketPage | null> {
   const storagePath = String(doc.storagePath || doc.filePath || "");
@@ -201,6 +197,7 @@ const InvoicePacketPage: React.FC = () => {
           const docs = (data.executionDocuments || []).filter((d: any) => d.status !== "deleted" && d.status !== "replaced");
           const seen = new Set<string>();
           const list: PacketPage[] = [{ id: "inv", label: "Client Billing Invoice", kind: "invoice", included: true }];
+          const byUploadTime = (a: any, b: any) => new Date(a.uploadedAt || a.createdAt || 0).getTime() - new Date(b.uploadedAt || b.createdAt || 0).getTime();
           const addFile = async (page: Omit<PacketPage, "included">) => {
             const raw = String(page.storagePath || page.filePath || "");
             if (!raw || seen.has(raw)) return;
@@ -209,10 +206,32 @@ const InvoicePacketPage: React.FC = () => {
             if (signed) list.push(signed);
           };
 
-          // The Estimate Register and packet both render this exact shared component.
+          // Prefer the Estimate's PO reference, then fall back to the active PO
+          // upload row used by the existing documents workflow.
+          const poUpload = docs.filter((doc: any) => isPoType(doc.documentType)).sort(byUploadTime)[0];
+          const poStoragePath = data.estimate?.poFilePath || poUpload?.storagePath || poUpload?.filePath;
+          if (poStoragePath) await addFile({ id: "po", label: `Purchase Order (${data.estimate?.poNumber || "PO"})`, kind: "po", storagePath: poStoragePath, mimeType: poUpload?.mimeType });
           if (data.estimate) list.push({ id: "est", label: `Estimate ${data.estimate.estimateNumber}`, kind: "estimate", included: true });
 
-          const byUploadTime = (a: any, b: any) => new Date(a.uploadedAt || a.createdAt || 0).getTime() - new Date(b.uploadedAt || b.createdAt || 0).getTime();
+          // Project-level uploads sit after the Estimate and before store
+          // execution. Preserve the same order in which users uploaded them.
+          const projectDocs = docs
+            .filter((doc: any) => !isPoType(doc.documentType) && !isExcludedType(doc.documentType) && !isSignedType(doc.documentType) && !isPhotoType(doc.documentType) && !isStoreScopeDoc(doc))
+            .sort(byUploadTime);
+          const legacyProjectDocs = (data.challans || []).flatMap((dc: any) => [
+            dc.transportReceiptPath && { id: `legacy-transport-${dc.id}`, documentType: "transport_receipt", storagePath: dc.transportReceiptPath, createdAt: dc.createdAt },
+            dc.extraDocPath && { id: `legacy-extra-${dc.id}`, documentType: "extra", storagePath: dc.extraDocPath, createdAt: dc.createdAt },
+          ]).filter(Boolean).sort(byUploadTime) as any[];
+          for (const doc of [...projectDocs, ...legacyProjectDocs].sort(byUploadTime)) {
+            await addFile({
+              id: `project-${doc.id}`,
+              label: docTypeLabel(doc.documentType),
+              kind: "project",
+              storagePath: doc.storagePath || doc.filePath,
+              mimeType: doc.mimeType,
+              caption: doc.caption || doc.description || doc.notes || null,
+            });
+          }
 
           // Order stores by execution-workflow order (the order they were added to the
           // project), never alphabetical. Fall back to challan id for legacy data.
@@ -238,8 +257,8 @@ const InvoicePacketPage: React.FC = () => {
             .sort((a: any, b: any) => Number(a.id || 0) - Number(b.id || 0))
             .forEach((row: any) => ensureStore(String(row.storeCode || row.code || "").trim()));
           challans.forEach((dc: any) => ensureStore(storeCodeFor(dc)));
-          docs.filter((doc: any) => isStoreScopeDoc(doc.documentType)).forEach((doc: any) => ensureStore(storeCodeFor(doc)));
-          if (challans.some((dc: any) => !storeCodeFor(dc)) || docs.some((doc: any) => isStoreScopeDoc(doc.documentType) && !storeCodeFor(doc))) {
+          docs.filter(isStoreScopeDoc).forEach((doc: any) => ensureStore(storeCodeFor(doc)));
+          if (challans.some((dc: any) => !storeCodeFor(dc)) || docs.some((doc: any) => (isSignedType(doc.documentType) || isPhotoType(doc.documentType) || isStoreScopeDoc(doc)) && !storeCodeFor(doc))) {
             storeContexts.push({ storeCode: "", challans: challans.filter((dc: any) => !storeCodeFor(dc)) });
           }
 
@@ -247,25 +266,28 @@ const InvoicePacketPage: React.FC = () => {
             const storeCode = context.storeCode;
             const store = (data.stores || []).find((s: any) => String(s.code || s.storeCode || "") === storeCode);
             const storeLabel = store?.name ? `${store.name}${storeCode ? ` (${storeCode})` : ""}` : (storeCode || "Project");
-            list.push({ id: `store-${storeCode || "project"}`, label: storeLabel, kind: "store", storeCode, included: true });
             const challanIds = new Set(context.challans.map(dc => Number(dc.id)));
             const owned = docs.filter((d: any) => (
               challanIds.has(Number(d.deliveryChallanId))
               || (storeCode ? storeCodeFor(d) === storeCode : (!d.deliveryChallanId && !storeCodeFor(d)))
-            ) && isStoreScopeDoc(d.documentType) && !isExcludedType(d.documentType));
+            ) && !isPoType(d.documentType) && !isExcludedType(d.documentType));
             const legacy = context.challans.flatMap((dc: any) => [
               dc.signedChallanPath && { id: `legacy-signed-${dc.id}`, documentType: isAblblFormat(dc.clientFormat) ? "signed_wcc" : "signed_dc", storagePath: dc.signedChallanPath },
               dc.photoPath && { id: `legacy-photo-${dc.id}`, documentType: "photo", storagePath: dc.photoPath },
             ]).filter(Boolean) as any[];
-            // Per store: Signed WCC first, then Installation Photos (in upload order).
+            // Per store: signed WCC, photos, then any other store attachment.
             const ordered = [...owned, ...legacy].sort((a: any, b: any) => {
-              const rank = (d: any) => isSignedType(d.documentType) ? 0 : isPhotoType(d.documentType) ? 1 : 2;
+              const rank = (d: any) => isSignedType(d.documentType) ? 0
+                : ["photo", "installation_photo"].includes(d.documentType) ? 1
+                : ["execution_photo", "completion_photo"].includes(d.documentType) ? 2
+                : d.documentType === "additional_photo" ? 3
+                : isPhotoType(d.documentType) ? 4 : 5;
               return rank(a) - rank(b) || new Date(a.uploadedAt || a.createdAt).getTime() - new Date(b.uploadedAt || b.createdAt).getTime();
             });
             for (const doc of ordered) await addFile({
               id: `exec-${doc.id}`,
               label: `${storeLabel} — ${docTypeLabel(doc.documentType)}`,
-              kind: isPhotoType(doc.documentType) ? "photo" : "wcc",
+              kind: isPhotoType(doc.documentType) ? "photo" : isSignedType(doc.documentType) ? "wcc" : "store-file",
               storagePath: doc.storagePath || doc.filePath,
               mimeType: doc.mimeType,
               storeCode,
@@ -307,6 +329,8 @@ const InvoicePacketPage: React.FC = () => {
   const computeMissing = (): { store: string; missing: string[] }[] => {
     const gaps: { store: string; missing: string[] }[] = [];
     const coreMissing: string[] = [];
+    if (!packet?.invoice) coreMissing.push("Invoice");
+    if (!pages.some(p => p.kind === "po" && p.filePath)) coreMissing.push("Purchase Order");
     if (!pages.some(p => p.kind === "estimate")) coreMissing.push("Estimate");
     if (coreMissing.length) gaps.push({ store: "Project-level", missing: coreMissing });
     const storeCodes = Array.from(new Set([
@@ -344,7 +368,7 @@ const InvoicePacketPage: React.FC = () => {
       const addUnavailablePage = (label: string) => {
         const page = pdf.addPage([A4_W, A4_H]);
         page.drawRectangle({ x: MARGIN, y: 300, width: A4_W - MARGIN * 2, height: 180, color: rgb(0.97, 0.98, 0.99), borderColor: rgb(0.8, 0.84, 0.88), borderWidth: 1 });
-        page.drawText("IMAGE UNAVAILABLE", { x: MARGIN + 24, y: 405, size: 17, color: rgb(0.15, 0.2, 0.28) });
+        page.drawText("DOCUMENT UNAVAILABLE", { x: MARGIN + 24, y: 405, size: 17, color: rgb(0.15, 0.2, 0.28) });
         page.drawText(fitText(label, 70), { x: MARGIN + 24, y: 375, size: 10, color: rgb(0.4, 0.45, 0.52) });
         page.drawText("The packet was generated without this missing attachment.", { x: MARGIN + 24, y: 345, size: 9, color: rgb(0.4, 0.45, 0.52) });
       };
@@ -429,18 +453,10 @@ const InvoicePacketPage: React.FC = () => {
       }
 
       const regular = await pdf.embedFont(StandardFonts.Helvetica);
-      const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
       const pageCount = pdf.getPageCount();
-      const generated = safeDate();
-      const projectName = fitText(packet.estimate?.title || packet.invoice?.remarks || "Project", 42);
       pdf.getPages().forEach((page, index) => {
-        page.drawLine({ start: { x: MARGIN, y: A4_H - 28 }, end: { x: A4_W - MARGIN, y: A4_H - 28 }, thickness: 0.5, color: rgb(0.82, 0.85, 0.88) });
-        page.drawText("SUNRISE MEDIA", { x: MARGIN, y: A4_H - 20, size: 7.5, font: bold, color: rgb(0.15, 0.18, 0.23) });
-        page.drawText(`${projectName}  |  ${fitText(packet.invoice.partyName, 28)}  |  ${invNum}`, { x: MARGIN + 88, y: A4_H - 20, size: 7, font: regular, color: rgb(0.35, 0.39, 0.45) });
-        page.drawLine({ start: { x: MARGIN, y: 30 }, end: { x: A4_W - MARGIN, y: 30 }, thickness: 0.5, color: rgb(0.82, 0.85, 0.88) });
-        page.drawText(`Generated ${generated}`, { x: MARGIN, y: 18, size: 7, font: regular, color: rgb(0.4, 0.44, 0.5) });
         const pageLabel = `Page ${index + 1} of ${pageCount}`;
-        page.drawText(pageLabel, { x: A4_W - MARGIN - regular.widthOfTextAtSize(pageLabel, 7), y: 18, size: 7, font: regular, color: rgb(0.4, 0.44, 0.5) });
+        page.drawText(pageLabel, { x: A4_W - MARGIN - regular.widthOfTextAtSize(pageLabel, 7), y: 14, size: 7, font: regular, color: rgb(0.4, 0.44, 0.5) });
       });
       const pdfBytes = await pdf.save();
       const blob = new Blob([pdfBytes as BlobPart], { type: "application/pdf" });
@@ -589,10 +605,9 @@ const InvoicePacketPage: React.FC = () => {
                     <span>Page {idx + 1}: {p.label}</span>
                   </div>
                   <div className="p-6 print:p-0" data-packet-page={p.id}>
-                    {p.kind === "store" && <StoreSectionPage packet={packet} page={p} />}
                     {p.kind === "invoice" && <InvoiceFrontPage packet={packet} sellerProfile={sellerProfile} assetToken={token} />}
                     {p.kind === "estimate" && <EstimatePacketPage packet={packet} sellerProfile={sellerProfile} assetToken={token} />}
-                    {(p.kind === "photo" || p.kind === "wcc") && (
+                    {(p.kind === "po" || p.kind === "project" || p.kind === "photo" || p.kind === "wcc" || p.kind === "store-file") && (
                       <DocumentPreview label={p.label} filePath={p.filePath} mimeType={p.mimeType} />
                     )}
                   </div>
@@ -632,24 +647,13 @@ const InvoicePacketPage: React.FC = () => {
   );
 };
 
-const StoreSectionPage: React.FC<{ packet: PacketData; page: PacketPage }> = ({ packet, page }) => {
-  const store = (packet.stores || []).find((row: any) => String(row.storeCode || row.code || "") === page.storeCode);
-  return <article className="a4-sheet mx-auto flex flex-col bg-white text-slate-900">
-    <div className="flex-1 flex flex-col justify-center">
-      <p className="text-sm uppercase tracking-[0.3em] text-orange-600 font-bold">Store</p>
-      <h2 className="mt-5 text-5xl font-black leading-tight">{store?.name || page.label}</h2>
-      {page.storeCode && <p className="mt-4 text-xl text-slate-500">Store Code: <b className="text-slate-800">{page.storeCode}</b></p>}
-    </div>
-  </article>;
-};
-
 const InvoiceFrontPage: React.FC<{ packet: PacketData; sellerProfile: any; assetToken?: string | null }> = ({ packet, sellerProfile, assetToken }) => {
   const inv = packet.invoice;
   const est = packet.estimate;
   // The client invoice deliberately uses the approved Estimate descriptions.
   // Invoice totals/tax remain authoritative; no internal invoice costing fields
   // are rendered or used to construct the visible commercial lines.
-  const lines = (packet.estimateItems?.length ? packet.estimateItems : (inv.lineItems || []).filter((r: any) => !isServiceLineType(r.lineType))) as any[];
+  const lines = (packet.estimateItems?.length ? packet.estimateItems : (inv.lineItems || [])).filter((r: any) => !isServiceLineType(r.lineType)) as any[];
   const taxable = Number(inv.amount ?? lines.reduce((sum, row) => sum + Number(row.amount ?? row.totalPrice ?? Number(row.quantity || 0) * Number(row.rate || 0)), 0));
   const totalTax = Number(inv.taxAmount ?? Math.max(0, Number(inv.totalAmount || 0) - taxable));
   const estIgst = Number(est?.igstAmount || 0);
@@ -667,18 +671,17 @@ const InvoiceFrontPage: React.FC<{ packet: PacketData; sellerProfile: any; asset
           <SafeImage src={logoSrc} alt={companyName} className="h-14 w-auto max-w-[180px] object-contain" fallback={companyName} />
           <div><h1 className="text-lg font-black uppercase">{companyName}</h1><p className="text-[10px] whitespace-pre-line">{sellerProfile?.address || sellerProfile?.registeredAddress || ""}</p><p className="text-[10px]">GSTIN: {sellerProfile?.gstin || "—"}</p></div>
         </div>
-        <div className="text-right"><h2 className="text-2xl font-black tracking-widest">CLIENT BILLING INVOICE</h2><p className="font-mono font-bold mt-2">{inv.invoiceNumber}</p><p className="text-xs">Date: {inv.date ? new Date(inv.date).toLocaleDateString("en-GB") : "—"}</p></div>
+        <div className="text-right"><h2 className="text-2xl font-black tracking-widest">INVOICE</h2><p className="font-mono font-bold mt-2">{inv.invoiceNumber}</p><p className="text-xs">Date: {inv.date ? new Date(inv.date).toLocaleDateString("en-GB") : "—"}</p></div>
       </header>
       <section className="grid grid-cols-2 gap-6 py-4 border-b border-slate-300 text-xs">
         <div><p className="text-[10px] uppercase font-bold text-slate-500">Bill To</p><p className="font-bold text-sm">{inv.partyName}</p><p className="whitespace-pre-line">{est?.billingAddressSnapshot || packet.client?.address || ""}</p><p>GSTIN: {est?.billingGstinSnapshot || packet.client?.gstin || "—"}</p></div>
         <div className="grid grid-cols-2 gap-x-3 content-start"><span className="text-slate-500">PO Number</span><b>{inv.poNumber || est?.poNumber || "—"}</b><span className="text-slate-500">Due Date</span><b>{inv.dueDate ? new Date(inv.dueDate).toLocaleDateString("en-GB") : "—"}</b><span className="text-slate-500">Place of Supply</span><b>{est?.billingStateSnapshot || packet.client?.state || "—"}</b></div>
       </section>
       <table className="w-full text-[11px] invoice-lines mt-4">
-        <thead><tr><th>Sr.</th><th className="text-left">Description</th><th>Qty</th><th>Unit</th><th>Rate</th><th>Amount</th></tr></thead>
+        <thead><tr><th>Sr.</th><th className="text-left">Product Name</th><th className="text-left">Description</th><th>Qty</th><th>Unit</th><th>Rate</th><th>Amount</th></tr></thead>
         <tbody>{lines.map((row, index) => {
           const qty = Number(row.quantity || 0); const rate = Number(row.rate || 0); const amount = Number(row.amount ?? row.totalPrice ?? qty * rate);
-          const commercialDescription = [row.itemName || row.productName, row.description].filter(Boolean).join("\n");
-          return <tr key={row.id || index}><td>{index + 1}</td><td className="text-left whitespace-pre-wrap">{commercialDescription || "Item"}</td><td>{qty}</td><td>{row.unit || "Nos"}</td><td className="text-right">{formatCurrency(rate)}</td><td className="text-right font-semibold">{formatCurrency(amount)}</td></tr>;
+          return <tr key={row.id || index}><td>{index + 1}</td><td className="text-left font-semibold">{row.itemName || row.productName || "Item"}</td><td className="text-left whitespace-pre-wrap">{row.description || "—"}</td><td>{qty}</td><td>{row.unit || "Nos"}</td><td className="text-right">{formatCurrency(rate)}</td><td className="text-right font-semibold">{formatCurrency(amount)}</td></tr>;
         })}</tbody>
       </table>
       <section className="ml-auto mt-4 w-full max-w-sm text-xs summary-table">
