@@ -3276,10 +3276,24 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     setShowDcPreviewModal(true);
   };
 
+  const wccPrintFileName = (dc: DeliveryChallan): string => {
+    const storeName = String(dc.metadata?.storeName || "").trim();
+    const subjectVal = String(estimates.find(e => e.id === dc.estimateId)?.subject || "").trim();
+    const storePart = storeName ? storeName.split(/[ ,\-_/]+/)[0] : "";
+    const subjectPart = subjectVal ? subjectVal.split(/[ ,\-_/]+/)[0] : "";
+    const parts = ["Challan", storePart, subjectPart].filter(Boolean);
+    return parts.length > 1 ? parts.join("_") : "Challan";
+  };
+
   const printWcc = async (dc: DeliveryChallan) => {
     setWccPrintMode("current");
     await openWccPreview(dc);
-    window.setTimeout(() => window.print(), 100);
+    const prevTitle = document.title;
+    document.title = wccPrintFileName(dc);
+    window.setTimeout(() => {
+      window.print();
+      window.setTimeout(() => { document.title = prevTitle; }, 500);
+    }, 100);
   };
 
   const deleteDeliveryChallanForPreview = async (dc: DeliveryChallan) => {
@@ -3462,7 +3476,13 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
   const printAllWccs = () => {
     if (activeWccsForEditor.length === 0) return;
     setWccPrintMode("all");
-    window.setTimeout(() => window.print(), 100);
+    const prevTitle = document.title;
+    const firstDc = activeWccsForEditor[0];
+    document.title = firstDc ? wccPrintFileName(firstDc) : "Challan";
+    window.setTimeout(() => {
+      window.print();
+      window.setTimeout(() => { document.title = prevTitle; }, 500);
+    }, 100);
   };
 
   const handleCreateInvoice = async (e: React.FormEvent) => {
