@@ -1254,7 +1254,7 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
                         </div>
 
                         <p className="text-[10px] text-slate-400 leading-snug pt-1 border-t border-slate-100">
-                          <b>Shortcuts:</b> ← → navigate · Del delete image · Esc deselect · ⌘/Ctrl+V paste · ⌘/Ctrl+S save · ⌘/Ctrl+Shift+S save all · ⌘/Ctrl+P export PDF · Shift+drag = free resize.
+                          <b>Shortcuts:</b> ← → navigate · Del delete image · Esc deselect · ⌘/Ctrl+V paste · ⌘/Ctrl+S save · ⌘/Ctrl+Shift+S save all · ⌘/Ctrl+P print / save as PDF · Shift+drag = free resize.
                         </p>
                       </div>
                     </div>
@@ -1315,7 +1315,7 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
                           type="button"
                           onClick={() => handleSaveAndExportPdf && handleSaveAndExportPdf()}
                           className="flex-1 h-9 px-3 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg transition-all shadow-sm flex items-center justify-center gap-1.5"
-                          title="Save then download PDF"
+                          title="Save then print / Save as PDF"
                         >
                           <FileDown className="w-3.5 h-3.5" /> Save & PDF
                         </button>
@@ -1341,7 +1341,7 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
                           type="button"
                           onClick={() => handleExportCurrentPdf && handleExportCurrentPdf()}
                           className="flex-1 h-8 px-2 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-[11px] font-medium rounded-lg transition-all flex items-center justify-center gap-1"
-                          title="Ctrl/Cmd+P"
+                          title="Ctrl/Cmd+P — Print or Save as PDF"
                         >
                           <FileDown className="w-3.5 h-3.5 text-slate-400" /> Export PDF
                         </button>

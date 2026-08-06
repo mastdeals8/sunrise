@@ -106,21 +106,17 @@ export async function exportWccCanvasToPdf(
   setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
-// Build a friendly file name for a WCC/DC, matching the existing
-// printWccFileName convention: Challan_Store_Subject
+// Build a friendly file name: DC_StoreName_ProjectName
 export function wccExportFileName(parts: {
   storeName?: string;
   subject?: string;
   dcNumber?: string;
 }): string {
-  const storePart = parts.storeName
-    ? String(parts.storeName).trim().split(/[ ,\-_/]+/)[0]
-    : "";
-  const subjectPart = parts.subject
-    ? String(parts.subject).trim().split(/[ ,\-_/]+/)[0]
-    : "";
-  const segs = ["Challan", storePart, subjectPart].filter(Boolean);
-  return segs.length > 1 ? segs.join("_") : parts.dcNumber || "Challan";
+  const safe = (s: string) => s.replace(/[\/\\:*?"<>|]/g, "-").trim();
+  const storePart = parts.storeName ? safe(String(parts.storeName).trim()) : "";
+  const subjectPart = parts.subject ? safe(String(parts.subject).trim()) : "";
+  const segs = ["DC", storePart, subjectPart].filter(Boolean);
+  return segs.length > 1 ? segs.join("_") : parts.dcNumber || "DC";
 }
 
 // Open WhatsApp Web / app with a pre-filled share message. The user
