@@ -1,5 +1,5 @@
 import React from "react";
-import { Copy, Plus, Printer, X } from "lucide-react";
+import { Copy, FileDown, FilePlus, MessageCircle, Plus, Printer, Save, X } from "lucide-react";
 import type { Estimate, WccPhoto } from "../types";
 import { isAblblFormat } from "../../../../../shared/textFormat";
 import { companyAssetUrl } from "../../../utils/companyAssets";
@@ -376,6 +376,11 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
     setDcDeliveredBy,
     setDcReceivedBy,
     setWccAuthPerson,
+    handleSaveAllWccs,
+    saveAllProgress,
+    handleExportCurrentPdf,
+    handleSaveAndExportPdf,
+    handleSaveAndShareWhatsApp,
   } = props;
 
   // ── Editor-wide selection (single-photo) ──────────────────────────────
@@ -406,9 +411,19 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
     };
     const onKey = (e: KeyboardEvent) => {
       // Ctrl/Cmd+S = save (fires even inside inputs so the user never loses work)
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === "s" || e.key === "S")) {
+        e.preventDefault();
+        handleSaveAllWccs && handleSaveAllWccs();
+        return;
+      }
       if ((e.metaKey || e.ctrlKey) && (e.key === "s" || e.key === "S")) {
         e.preventDefault();
-        handleDcSubmit({ preventDefault: () => {} });
+        handleDcSubmit({ preventDefault: () => {} }, { keepOpen: true });
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && (e.key === "p" || e.key === "P")) {
+        e.preventDefault();
+        handleExportCurrentPdf && handleExportCurrentPdf();
         return;
       }
       if (isEditableTarget(e.target)) return;
@@ -459,7 +474,7 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
       document.removeEventListener("keydown", onKey);
       document.removeEventListener("paste", onPaste);
     };
-  }, [showDcModal, activeWccsForEditor, editingDcId, selectedPhotoIdx, navigateWccEditor, handleRemovePhoto, handleMultiPhotoUpload, handleDcSubmit]);
+  }, [showDcModal, activeWccsForEditor, editingDcId, selectedPhotoIdx, navigateWccEditor, handleRemovePhoto, handleMultiPhotoUpload, handleDcSubmit, handleSaveAllWccs, handleExportCurrentPdf]);
 
   // ── Print isolation ────────────────────────────────────────────────────
   // Print reliability was broken because the WCC/DC canvas lives deep inside a
@@ -1239,7 +1254,7 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
                         </div>
 
                         <p className="text-[10px] text-slate-400 leading-snug pt-1 border-t border-slate-100">
-                          <b>Shortcuts:</b> ← → navigate · Del delete image · Esc deselect · ⌘/Ctrl+V paste · ⌘/Ctrl+S save · Shift+drag = free resize.
+                          <b>Shortcuts:</b> ← → navigate · Del delete image · Esc deselect · ⌘/Ctrl+V paste · ⌘/Ctrl+S save · ⌘/Ctrl+Shift+S save all · ⌘/Ctrl+P export PDF · Shift+drag = free resize.
                         </p>
                       </div>
                     </div>
@@ -1280,20 +1295,66 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
                           </div>
                         </div>
                       )}
-                      <div className="flex gap-2">
+                      {/* Save All progress indicator */}
+                      {saveAllProgress && (
+                        <div className="text-[10px] font-bold text-blue-600 text-center py-1">
+                          Saving all… {saveAllProgress.done} / {saveAllProgress.total}
+                        </div>
+                      )}
+                      {/* Primary action row: Save (stays open) + Save & Export PDF + Save & Share */}
+                      <div className="flex gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => handleDcSubmit({ preventDefault: () => {} }, { keepOpen: true })}
+                          className="flex-1 h-9 px-3 bg-orange-600 hover:bg-orange-700 text-white text-xs font-semibold rounded-lg transition-all shadow-sm flex items-center justify-center gap-1.5"
+                          title="Ctrl/Cmd+S"
+                        >
+                          <Save className="w-3.5 h-3.5" /> Save
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleSaveAndExportPdf && handleSaveAndExportPdf()}
+                          className="flex-1 h-9 px-3 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg transition-all shadow-sm flex items-center justify-center gap-1.5"
+                          title="Save then download PDF"
+                        >
+                          <FileDown className="w-3.5 h-3.5" /> Save & PDF
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleSaveAndShareWhatsApp && handleSaveAndShareWhatsApp()}
+                          className="flex-1 h-9 px-3 bg-green-600 hover:bg-green-700 text-white text-xs font-semibold rounded-lg transition-all shadow-sm flex items-center justify-center gap-1.5"
+                          title="Save then share on WhatsApp"
+                        >
+                          <MessageCircle className="w-3.5 h-3.5" /> Save & Share
+                        </button>
+                      </div>
+                      {/* Secondary action row: Print · Export PDF · Save All */}
+                      <div className="flex gap-1.5">
                         <button
                           type="button"
                           onClick={() => { setWccPrintMode && setWccPrintMode("current"); window.print(); }}
-                          className="h-9 px-3 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-medium rounded-lg transition-all flex items-center justify-center gap-1.5"
+                          className="flex-1 h-8 px-2 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-[11px] font-medium rounded-lg transition-all flex items-center justify-center gap-1"
                         >
-                          <Printer className="w-4 h-4 text-slate-400" /> Print
+                          <Printer className="w-3.5 h-3.5 text-slate-400" /> Print
                         </button>
                         <button
-                          type="submit"
-                          className="flex-1 h-9 px-3 bg-orange-600 hover:bg-orange-700 text-white text-xs font-semibold rounded-lg transition-all shadow-sm"
+                          type="button"
+                          onClick={() => handleExportCurrentPdf && handleExportCurrentPdf()}
+                          className="flex-1 h-8 px-2 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-[11px] font-medium rounded-lg transition-all flex items-center justify-center gap-1"
+                          title="Ctrl/Cmd+P"
                         >
-                          Save WCC
+                          <FileDown className="w-3.5 h-3.5 text-slate-400" /> Export PDF
                         </button>
+                        {activeWccsForEditor.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => handleSaveAllWccs && handleSaveAllWccs()}
+                            className="flex-1 h-8 px-2 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-[11px] font-medium rounded-lg transition-all flex items-center justify-center gap-1"
+                            title="Ctrl/Cmd+Shift+S"
+                          >
+                            <Save className="w-3.5 h-3.5 text-slate-400" /> Save All
+                          </button>
+                        )}
                       </div>
                     </div>
                   </form>
@@ -1457,7 +1518,14 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
                           className="inline-flex items-center gap-1.5 py-2 px-4 bg-orange-600 hover:bg-orange-500 text-white text-xs font-bold rounded-lg transition shadow-md"
                         >
                           <Printer className="w-4 h-4" />
-                          Print Current Store
+                          Print Current
+                        </button>
+                        <button
+                          onClick={() => handleExportCurrentPdf && handleExportCurrentPdf()}
+                          className="inline-flex items-center gap-1.5 py-2 px-4 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-lg transition shadow-md"
+                        >
+                          <FileDown className="w-4 h-4" />
+                          Export PDF
                         </button>
                         {siblingDcs.length > 1 && (
                           <button
@@ -1465,7 +1533,7 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
                             className="inline-flex items-center gap-1.5 py-2 px-4 bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold rounded-lg transition shadow-md"
                           >
                             <Printer className="w-4 h-4" />
-                            Print All WCCs
+                            Print All
                           </button>
                         )}
                         <button

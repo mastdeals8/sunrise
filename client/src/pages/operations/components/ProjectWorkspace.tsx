@@ -103,6 +103,7 @@ interface ProjectWorkspaceProps {
   onOpenWcc: (dc: DeliveryChallan, msg?: string) => void;
   onPreviewWcc: (dc: DeliveryChallan) => void;
   onGenerateWcc: (storeCode: string, storeId?: number | null) => void;
+  onPrintWcc?: (dc: DeliveryChallan) => void;
   onOpenInvoice: (args: { estimateId?: number | null; invoiceId?: number | null }) => void;
   onPoUpload: (est: Estimate) => void;
   onRefresh: () => void;
@@ -471,8 +472,9 @@ const StoreDrawer: React.FC<{
   onOpenWcc: (dc: DeliveryChallan, msg?: string) => void;
   onPreviewWcc: (dc: DeliveryChallan) => void;
   onGenerateWcc: (storeCode: string, storeId?: number | null) => void;
+  onPrintWcc?: (dc: DeliveryChallan) => void;
   onRefresh: () => void;
-}> = ({ row, estimate, token, onClose, onOpenWcc, onPreviewWcc, onGenerateWcc, onRefresh }) => {
+}> = ({ row, estimate, token, onClose, onOpenWcc, onPreviewWcc, onGenerateWcc, onPrintWcc, onRefresh }) => {
   const [notes, setNotes] = React.useState(row.notes || "");
   const [savingNotes, setSavingNotes] = React.useState(false);
   const [togglingBilling, setTogglingBilling] = React.useState(false);
@@ -1067,8 +1069,9 @@ const WccTab: React.FC<{
   onOpenWcc: (dc: DeliveryChallan, msg?: string) => void;
   onPreviewWcc: (dc: DeliveryChallan) => void;
   onGenerateWcc: (storeCode: string, storeId?: number | null) => void;
+  onPrintWcc?: (dc: DeliveryChallan) => void;
   onRefresh: () => void;
-}> = ({ data, token, onOpenUpload, onOpenWcc, onPreviewWcc, onGenerateWcc, onRefresh }) => {
+}> = ({ data, token, onOpenUpload, onOpenWcc, onPreviewWcc, onGenerateWcc, onPrintWcc, onRefresh }) => {
   const { stores } = data;
   const [wccPickerOpen, setWccPickerOpen] = React.useState(false);
   const authHeader = { Authorization: `Bearer ${token}` };
@@ -1221,7 +1224,7 @@ const WccTab: React.FC<{
                                 <Upload className="w-3.5 h-3.5" />
                               </button>
                               {isBoltMode ? (
-                                <button type="button" onClick={() => onPreviewWcc(dc)} className="p-1 text-slate-400 hover:text-slate-700" title="Print">
+                                <button type="button" onClick={() => (onPrintWcc ? onPrintWcc(dc) : onPreviewWcc(dc))} className="p-1 text-slate-400 hover:text-slate-700" title="Print">
                                   <Printer className="w-3.5 h-3.5" />
                                 </button>
                               ) : (
@@ -1262,8 +1265,9 @@ const ExecutionTab: React.FC<{
   onOpenWcc: (dc: DeliveryChallan, msg?: string) => void;
   onPreviewWcc: (dc: DeliveryChallan) => void;
   onGenerateWcc: (storeCode: string, storeId?: number | null) => void;
+  onPrintWcc?: (dc: DeliveryChallan) => void;
   onRefresh: () => void;
-}> = ({ data, estimate, token, onOpenWcc, onPreviewWcc, onGenerateWcc, onRefresh }) => {
+}> = ({ data, estimate, token, onOpenWcc, onPreviewWcc, onGenerateWcc, onPrintWcc, onRefresh }) => {
   const [selectedStore, setSelectedStore] = React.useState<ExecStoreRow | null>(null);
   const stores = data.stores;
 
@@ -1372,6 +1376,7 @@ const ExecutionTab: React.FC<{
           onOpenWcc={onOpenWcc}
           onPreviewWcc={onPreviewWcc}
           onGenerateWcc={onGenerateWcc}
+          onPrintWcc={onPrintWcc}
           onRefresh={() => {
             setSelectedStore(null);
             onRefresh();
@@ -1948,6 +1953,7 @@ const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({
   onOpenWcc,
   onPreviewWcc,
   onGenerateWcc,
+  onPrintWcc,
   onOpenInvoice,
   onPoUpload,
   onRefresh,
@@ -2147,6 +2153,7 @@ const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({
               onOpenWcc={onOpenWcc}
               onPreviewWcc={onPreviewWcc}
               onGenerateWcc={onGenerateWcc}
+              onPrintWcc={onPrintWcc}
               onRefresh={refresh}
             />
           )}
@@ -2158,6 +2165,7 @@ const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({
               onOpenWcc={onOpenWcc}
               onPreviewWcc={onPreviewWcc}
               onGenerateWcc={onGenerateWcc}
+              onPrintWcc={onPrintWcc}
               onRefresh={refresh}
             />
           )}

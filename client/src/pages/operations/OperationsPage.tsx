@@ -3153,10 +3153,16 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
 
       if (res.ok) {
         if (!savedChallan) savedChallan = await res.clone().json().catch(() => null);
-        showSuccess(`WCC "${dcNumberVal}" ${editingDcId ? "updated" : "created"} successfully!`);
+        showSuccess(`WCC "${savedChallan?.dcNumber || dcNumberVal}" ${editingDcId ? "updated" : "created"} successfully!`);
         if (!opts?.keepOpen) {
           setShowDcModal(false);
           setEditingDcId(null);
+        } else if (savedChallan) {
+          // Keep editor open: adopt the final generated number + id so the
+          // user sees the real DC number (replacing any temporary value)
+          // and subsequent saves become updates rather than duplicate creates.
+          setEditingDcId(savedChallan.id);
+          setDcNumberVal(savedChallan.dcNumber || dcNumberVal);
         }
         markWccPristine();
         if (savedChallan) upsertCanonicalChallan(savedChallan);
@@ -3483,6 +3489,75 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
       window.print();
       window.setTimeout(() => { document.title = prevTitle; }, 500);
     }, 100);
+  };
+
+  // Save every WCC for the current estimate, keeping the editor open
+  // throughout. Returns the count of successfully saved records.
+  const [saveAllProgress, setSaveAllProgress] = useState<{ done: number; total: number } | null>(null);
+  const handleSaveAllWccs = async (): Promise<number> => {
+    if (activeWccsForEditor.length === 0) return 0;
+    let savedCount = 0;
+    setSaveAllProgress({ done: 0, total: activeWccsForEditor.length });
+    for (let i = 0; i < activeWccsForEditor.length; i++) {
+      const dc = activeWccsForEditor[i];
+      setSaveAllProgress({ done: i, total: activeWccsForEditor.length });
+      // Load the WCC into the editor state so handleDcSubmit has the right
+      // context, then save with keepOpen so the dialog stays open.
+      await openDcForEdit(dc);
+      const ok = await handleDcSubmit({ preventDefault: () => {} }, { keepOpen: true });
+      if (ok) savedCount++;
+    }
+    setSaveAllProgress({ done: activeWccsForEditor.length, total: activeWccsForEditor.length });
+    showSuccess(`Saved ${savedCount} of ${activeWccsForEditor.length} WCCs successfully!`);
+    // Reload the originally active WCC so the user lands back where they were.
+    const target = activeWccsForEditor.find((dc: any) => dc.id === editingDcId) || activeWccsForEditor[0];
+    if (target) await openDcForEdit(target);
+    setTimeout(() => setSaveAllProgress(null), 1500);
+    return savedCount;
+  };
+
+  // Export the current WCC canvas as a direct PDF download (no print dialog).
+  const handleExportCurrentPdf = async () => {
+    const { exportWccCanvasToPdf, wccExportFileName } = await import("../operations/utils/wccPdfExport");
+    const currentDc = activeWccsForEditor.find((dc: any) => dc.id === editingDcId);
+    const storeName = currentDc?.metadata?.storeName
+      || stores.find((s: any) => s.id === Number(currentDc?.metadata?.storeId || 0))?.name
+      || "";
+    const fileName = wccExportFileName({
+      storeName,
+      subject: selectedEstimate?.title,
+      dcNumber: currentDc?.dcNumber || dcNumberVal,
+    });
+    await exportWccCanvasToPdf(fileName);
+  };
+
+  // Save the current WCC (keeping editor open), then export PDF.
+  const handleSaveAndExportPdf = async () => {
+    const ok = await handleDcSubmit({ preventDefault: () => {} }, { keepOpen: true });
+    if (ok) {
+      // Give React a tick to re-render with the saved DC number.
+      await new Promise((r) => setTimeout(r, 150));
+      await handleExportCurrentPdf();
+    }
+  };
+
+  // Save the current WCC (keeping editor open), export PDF, then open WhatsApp.
+  const handleSaveAndShareWhatsApp = async () => {
+    const ok = await handleDcSubmit({ preventDefault: () => {} }, { keepOpen: true });
+    if (!ok) return;
+    await new Promise((r) => setTimeout(r, 150));
+    await handleExportCurrentPdf();
+    const { shareWccOnWhatsApp } = await import("../operations/utils/wccPdfExport");
+    const currentDc = activeWccsForEditor.find((dc: any) => dc.id === editingDcId);
+    const storeName = currentDc?.metadata?.storeName
+      || stores.find((s: any) => s.id === Number(currentDc?.metadata?.storeId || 0))?.name
+      || "";
+    shareWccOnWhatsApp({
+      storeName,
+      subject: selectedEstimate?.title,
+      dcNumber: currentDc?.dcNumber || dcNumberVal,
+      companyName: sellerProfile?.name,
+    });
   };
 
   const handleCreateInvoice = async (e: React.FormEvent) => {
@@ -4191,6 +4266,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
           onOpenWcc={openDcForEdit}
           onPreviewWcc={openWccPreview}
           onGenerateWcc={handleGenerateWccForStore}
+          onPrintWcc={printWcc}
           onOpenInvoice={openInvoiceEditor}
           onPoUpload={openPoForEstimate}
           onRefresh={async () => {
@@ -4434,7 +4510,12 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
           wccPrintMode,
           setWccPrintMode,
           token,
-          sellerProfile
+          sellerProfile,
+          handleSaveAllWccs,
+          saveAllProgress,
+          handleExportCurrentPdf,
+          handleSaveAndExportPdf,
+          handleSaveAndShareWhatsApp,
         }}
       />
 
