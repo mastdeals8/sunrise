@@ -28,6 +28,7 @@ import { preprocessDateFields, nowDefault } from "./utils/dateFields";
 import { buildInvoicePacketPdf } from "./utils/pdfPacket.js";
 import { ABLBL_LEGAL_NAME, isAblblFormat, normalizeDisplayName, normalizeFormatMode, normalizeGstinPan, nameMatchKey, nameSimilarity, NAME_SIMILAR_THRESHOLD } from "../shared/textFormat";
 import { formatProductDetails } from "../shared/productDetails";
+import { isServiceEstimateItem, resolveServiceProduct, serviceProductLabel } from "../shared/serviceProductDisplay";
 
 export async function registerRoutes(app: Express): Promise<Server> {
   if (process.env.BOLT_SAFE_BOOT === "true") {
@@ -932,21 +933,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   const namesMatch = (a: any, b: any) => normalizeDisplayName(a).toLowerCase() === normalizeDisplayName(b).toLowerCase();
 
-  const estimateServiceLineTypes = new Set(["packing", "installation", "transport"]);
-  const isEstimateServiceItem = (item: any) => estimateServiceLineTypes.has(String(item?.lineType || "").toLowerCase());
-  const serviceItemRateValue = (item: any) => Number(item?.rate) || 0;
-  const serviceItemLabel = (item: any) => {
-    const lineType = String(item?.lineType || "").toLowerCase();
-    const rate = serviceItemRateValue(item);
-    if (lineType === "packing") return rate > 0 ? `Packing Charges (${rate}%)` : "Packing Charges";
-    if (lineType === "installation") return rate > 0 ? `Installation Charges (${rate}%)` : "Installation Charges";
-    if (lineType === "transport" && String(item?.unit || "").toLowerCase() === "km") {
-      return rate > 0 ? `Outstation Transportation (₹${rate}/KM)` : "Outstation Transportation";
-    }
-    if (lineType === "transport") return "Local Transportation";
-    return item?.itemName || "";
-  };
-  const serviceItemRateLabel = (item: any) => item?.calculationType === "percentage" ? `${serviceItemRateValue(item)}%` : "";
+  const isEstimateServiceItem = (item: any) => isServiceEstimateItem(item);
   const numericOrder = (value: any, fallback: number) => {
     const parsed = Number(value);
     return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
@@ -3111,7 +3098,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             packingPercent: !Array.isArray(groupData) && groupData.packingPercent !== undefined ? Number(groupData.packingPercent) : Number(estimate.packingPercent || 0),
             implPercent: !Array.isArray(groupData) && groupData.implementationPercent !== undefined ? Number(groupData.implementationPercent) : Number(estimate.implementationPercent || 0),
             transportAmt: !Array.isArray(groupData) && groupData.transportAmount !== undefined ? Number(groupData.transportAmount) : 0,
-            transportDescription: !Array.isArray(groupData) && groupData.transportDescription ? String(groupData.transportDescription) : "Local Transportation",
+            transportDescription: !Array.isArray(groupData) && groupData.transportDescription ? String(groupData.transportDescription) : "",
           });
         });
       }
@@ -3124,7 +3111,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           packingPercent: Number(estimate.packingPercent || 0),
           implPercent: Number(estimate.implementationPercent || 0),
           transportAmt: Number(estimate.transportAmount || 0),
-          transportDescription: "Local Transportation",
+          transportDescription: "",
         });
       }
 
@@ -3214,16 +3201,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const savedServiceRow = (item: any) => {
           const base = Number(item.totalPrice || 0);
           if (base <= 0) return;
+          const service = resolveServiceProduct(item, productsList);
           const r = printableRows.length;
           const row = blankRow();
-          row[1] = serviceItemLabel(item);
-          row[2] = item.hsn || "9987";
+          row[1] = service.label;
+          row[2] = service.hsn || "9987";
           row[3] = item.isStandard === false ? "Non-standard" : "Standard";
-          row[4] = serviceItemLabel(item);
+          row[4] = service.label;
           row[7] = r2(Number(item.quantity) || 1);
-          row[9] = serviceItemRateLabel(item);
+          row[9] = service.rateLabel;
           row[10] = r2(base);
-          row[11] = isIgst ? Number(item.igstPercent) || 0 : (Number(item.sgstPercent) || 0) + (Number(item.cgstPercent) || 0);
+          row[11] = service.gstPercent;
           row[12] = r2(isIgst ? Number(item.igstAmount) || 0 : (Number(item.sgstAmount) || 0) + (Number(item.cgstAmount) || 0));
           row[13] = r2(Number(item.totalAmount) || 0);
           printableRows.push(row);
@@ -3234,9 +3222,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (hasSavedServices) {
           sec.serviceItems.forEach(savedServiceRow);
         } else {
-          serviceRow(`Packing Charges (${sec.packingPercent}%)`, `Packing Charges (${sec.packingPercent}%)`, `${sec.packingPercent}%`, packAmt);
-          serviceRow(`Installation Charges (${sec.implPercent}%)`, `Installation Charges (${sec.implPercent}%)`, `${sec.implPercent}%`, implAmt);
-          serviceRow("Local Transportation", sec.transportDescription || "Local Transportation", "", transAmt);
+          const packingLabel = serviceProductLabel({ lineType: "packing", rate: sec.packingPercent, calculationType: "percentage" }, productsList);
+          const installationLabel = serviceProductLabel({ lineType: "installation", rate: sec.implPercent, calculationType: "percentage" }, productsList);
+          const transportLabel = serviceProductLabel({ lineType: "transport", itemName: sec.transportDescription }, productsList);
+          serviceRow(packingLabel, packingLabel, `${sec.packingPercent}%`, packAmt);
+          serviceRow(installationLabel, installationLabel, `${sec.implPercent}%`, implAmt);
+          serviceRow(transportLabel, transportLabel, "", transAmt);
         }
 
         // Spacer between stores
@@ -3454,6 +3445,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const seller = await getSellerProfile();
       const items = orderedEstimateItems(await storage.getEstimateItems(id));
       const storesList = await storage.getAllStores();
+      const productsList = await storage.getAllProducts();
       const targetStore = storesList.find(s => s.id === estimate.storeId);
       const storeGrouping = (estimate.storeGrouping as Record<string, any>) || {};
       const storeKeys = orderedStoreKeysFromItems(items, storeGrouping);
@@ -3478,7 +3470,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         srNo: section.srNo,
         vendorCode: estimate.vendorCode || "",
         activityName: isEstimateServiceItem(item)
-          ? `${serviceItemLabel(item)}${serviceItemRateLabel(item) ? ` ${serviceItemRateLabel(item)}` : ""}`
+          ? serviceProductLabel(item, productsList)
           : (item.itemName || item.description || ""),
         storeCode: section.storeCode,
         qty: Number(item.quantity || 0),

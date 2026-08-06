@@ -3,7 +3,7 @@ import { isBoltMode, supabase } from "../../../lib/supabase";
 import { fetchEstimateItems, fetchDeliveryChallansForEstimate, fetchExecutionStores, fetchExecutionDocuments, fetchInvoiceForEstimate, uploadToStorage, registerExecutionDocument, deleteExecutionDocument, openExecutionDocument } from "../../../lib/api";
 import { ArrowLeft, Camera, CircleCheck as CheckCircle, CircleCheck as CheckCircle2, ChevronRight, Clock, Download, ExternalLink, Eye, File, FileCheck2, FilePlus, FileText, FileUp, Image as ImageIcon, IndianRupee, MapPin, Package, Paperclip, Printer, RefreshCw, Trash2, TrendingUp, Truck, Upload, X, CircleAlert as AlertCircle, Activity as ActivityIcon, Zap } from "lucide-react";
 import { StatusBadge } from "@/components/ui-kit";
-import type { Client, Brand, Store, Estimate, DeliveryChallan } from "../types";
+import type { Client, Brand, Store, Estimate, DeliveryChallan, Product } from "../types";
 import ProjectUploadModal, { type UploadMode } from "./ProjectUploadModal";
 import { isAblblFormat } from "../../../../../shared/textFormat";
 
@@ -92,6 +92,7 @@ interface ProjectWorkspaceProps {
   clients: Client[];
   brands: Brand[];
   stores: Store[];
+  products: Product[];
   token: string | null;
   onBack: () => void;
   onOpenWcc: (dc: DeliveryChallan, msg?: string) => void;
@@ -1338,9 +1339,10 @@ const DocumentsTab: React.FC<{
   token: string | null;
   clients: Client[];
   stores: Store[];
+  products: Product[];
   onPoUpload: (est: Estimate) => void;
   onRefresh: () => void;
-}> = ({ data, token, clients, stores, onPoUpload, onRefresh }) => {
+}> = ({ data, token, clients, stores, products, onPoUpload, onRefresh }) => {
   const { estimate, projectDocuments } = data;
   const client = clients.find(c => c.id === estimate.clientId);
   const [uploading, setUploading] = React.useState(false);
@@ -1459,7 +1461,7 @@ const DocumentsTab: React.FC<{
                   const { fetchEstimateItems: fetchItems } = await import("../../../lib/api");
                   const { exportEstimateToExcel } = await import("../utils/exportHelpers");
                   const items = await fetchItems(token, estimate.id);
-                  await exportEstimateToExcel(estimate, items, client?.name, undefined, stores);
+                  await exportEstimateToExcel(estimate, items, client?.name, undefined, stores, products);
                 } else {
                   window.open(`/api/operations/estimates/export/xlsx/${estimate.id}`, "_blank");
                 }
@@ -1889,6 +1891,7 @@ const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({
   clients,
   brands,
   stores: masterStores,
+  products,
   token,
   onBack,
   onOpenWcc,
@@ -2088,6 +2091,7 @@ const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({
               token={token}
               clients={clients}
               stores={masterStores}
+              products={products}
               onPoUpload={onPoUpload}
               onRefresh={refresh}
             />

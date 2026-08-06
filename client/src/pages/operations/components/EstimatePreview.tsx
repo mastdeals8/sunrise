@@ -3,6 +3,7 @@ import { isBoltMode } from "../../../lib/supabase";
 import { fetchExecutionStores, createInvoice, uploadToStorage, registerExecutionDocument, openExecutionDocument } from "../../../lib/api";
 import { AlertTriangle, Briefcase, Camera, CheckCircle2, ChevronRight, Copy, Download, Edit3, Eye, File, FileCheck2, FilePlus, FileSpreadsheet, FileText, FileUp, Image as ImageIcon, Paperclip, Pen, Plus, Printer, ScanLine, Store as StoreIcon, Upload, X } from "lucide-react";
 import { isAblblFormat } from "../../../../../shared/textFormat";
+import { isServiceEstimateItem, serviceProductLabel } from "../../../../../shared/serviceProductDisplay";
 import { formatCurrency } from "../utils/formatters";
 import { orderedEstimateItems, orderedStoreKeysFromItems } from "../utils/estimateOrdering";
 import { exportEstimateToExcel } from "../utils/exportHelpers";
@@ -20,24 +21,7 @@ interface EstimatePreviewProps {
   [key: string]: any;
 }
 
-const SERVICE_LINE_TYPES = new Set(["packing", "installation", "transport"]);
-
-const isServiceItem = (item: EstimateItem) =>
-  SERVICE_LINE_TYPES.has(String(item.lineType || "").toLowerCase());
-
-const serviceRateValue = (item: EstimateItem) => Number(item.rate) || 0;
-
-const serviceLabel = (item: EstimateItem) => {
-  const lineType = String(item.lineType || "").toLowerCase();
-  const rate = serviceRateValue(item);
-  if (lineType === "packing") return rate > 0 ? `Packing Charges (${rate}%)` : "Packing Charges";
-  if (lineType === "installation") return rate > 0 ? `Installation Charges (${rate}%)` : "Installation Charges";
-  if (lineType === "transport" && String(item.unit || "").toLowerCase() === "km") {
-    return rate > 0 ? `Outstation Transportation (₹${rate}/KM)` : "Outstation Transportation";
-  }
-  if (lineType === "transport") return "Local Transportation";
-  return item.itemName || "";
-};
+const isServiceItem = (item: EstimateItem) => isServiceEstimateItem(item);
 
 
 type ExecutionStoreRow = {
@@ -498,7 +482,7 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
                   packingPercent: !Array.isArray(groupData) && groupData.packingPercent !== undefined ? Number(groupData.packingPercent) : Number(est.packingPercent || 0),
                   implementationPercent: !Array.isArray(groupData) && groupData.implementationPercent !== undefined ? Number(groupData.implementationPercent) : Number(est.implementationPercent || 0),
                   transportAmount: !Array.isArray(groupData) && groupData.transportAmount !== undefined ? Number(groupData.transportAmount) : 0,
-                  transportDescription: !Array.isArray(groupData) && groupData.transportDescription ? String(groupData.transportDescription) : "Local Transportation",
+                  transportDescription: !Array.isArray(groupData) && groupData.transportDescription ? String(groupData.transportDescription) : "",
                 };
               }).filter(section => section.materialItems.length > 0 || section.serviceItems.length > 0)
             : [{
@@ -509,7 +493,7 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
                 packingPercent: Number(est.packingPercent || 0),
                 implementationPercent: Number(est.implementationPercent || 0),
                 transportAmount: Number(est.transportAmount || 0),
-                transportDescription: "Local Transportation",
+                transportDescription: "",
               }];
 
           return sectionDefs.flatMap(section => {
@@ -529,7 +513,7 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
                 rows.push({
                   srNo: section.srNo,
                   vendorCode: est.vendorCode || "",
-                  activityName: serviceLabel(item),
+                  activityName: serviceProductLabel(item, products),
                   storeCode: section.storeCode,
                   qty: 1,
                   beforeGst: Number(item.totalPrice || 0),
@@ -540,9 +524,9 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
             }
 
             const syntheticServices = [
-              { label: `Packing Charges (${section.packingPercent}%)`, amount: materialBase * (section.packingPercent / 100), show: section.packingPercent > 0 },
-              { label: `Installation Charges (${section.implementationPercent}%)`, amount: materialBase * (section.implementationPercent / 100), show: section.implementationPercent > 0 },
-              { label: section.transportDescription || "Local Transportation", amount: section.transportAmount, show: section.transportAmount > 0 },
+              { label: serviceProductLabel({ lineType: "packing", rate: section.packingPercent, calculationType: "percentage" }, products), amount: materialBase * (section.packingPercent / 100), show: section.packingPercent > 0 },
+              { label: serviceProductLabel({ lineType: "installation", rate: section.implementationPercent, calculationType: "percentage" }, products), amount: materialBase * (section.implementationPercent / 100), show: section.implementationPercent > 0 },
+              { label: serviceProductLabel({ lineType: "transport", itemName: section.transportDescription }, products), amount: section.transportAmount, show: section.transportAmount > 0 },
             ];
             syntheticServices.forEach(service => {
               if (!service.show || service.amount <= 0) return;
@@ -923,7 +907,7 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
                     onClick={async () => {
                       if (isBoltMode) {
                         const client = clients.find((c: any) => c.id === selectedEstimate.clientId);
-                        await exportEstimateToExcel(selectedEstimate, previewItems, client?.name, sellerProfile, stores);
+                        await exportEstimateToExcel(selectedEstimate, previewItems, client?.name, sellerProfile, stores, products);
                       } else {
                         window.open(`/api/operations/estimates/${selectedEstimate.id}/export-excel`, "_blank");
                       }
@@ -959,7 +943,7 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
 	                      onClick={async () => {
 	                        if (isBoltMode) {
 	                          const client = clients.find((c: any) => c.id === selectedEstimate.clientId);
-	                          await exportEstimateToExcel(selectedEstimate, previewItems, client?.name, sellerProfile, stores);
+	                          await exportEstimateToExcel(selectedEstimate, previewItems, client?.name, sellerProfile, stores, products);
 	                        } else {
 	                          window.open(`/api/operations/estimates/${selectedEstimate.id}/export-excel`, "_blank");
 	                        }

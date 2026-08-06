@@ -16,6 +16,7 @@ import { orderedStoreKeysFromItems } from "./utils/estimateOrdering";
 import { buildStoreGrouping } from "./utils/storeGrouping";
 import { validateGstin, validatePan, validateEstimateItems, validateEstimateItemsBatch } from "../../../../shared/validation";
 import { formatProductDetails, sameDisplayText } from "../../../../shared/productDetails";
+import { serviceProductLabel } from "../../../../shared/serviceProductDisplay";
 import type {
   Client,
   Brand,
@@ -566,16 +567,6 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     const raw = String(value ?? "").trim();
     if (!raw) return "";
     return raw.includes("%") ? raw : `${raw}%`;
-  };
-
-  const serviceChargeLabel = (baseLabel: string, rateInput: any) => {
-    const rateValue = parseRateInput(rateInput);
-    return rateValue > 0 ? `${baseLabel} (${rateValue}%)` : baseLabel;
-  };
-
-  const outstationTransportLabel = (rateInput: any) => {
-    const rateValue = parseRateInput(rateInput);
-    return rateValue > 0 ? `Outstation Transportation (₹${rateValue}/KM)` : "Outstation Transportation";
   };
 
   const recalculateEstimateRows = (rows: EstimateItemInput[], gstTypeValue = estGstType): EstimateItemInput[] => {
@@ -1391,7 +1382,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     const rateInput = (sp?.calculationType ?? "percentage") === "percentage"
       ? settingsPercentRate(rateValue)
       : String(rateValue ?? "");
-    const label = serviceChargeLabel(sp?.name || "Packing Charges", rateInput);
+    const label = serviceProductLabel({ productId: sp?.id, lineType: "packing", itemName: sp?.name, calculationType: sp?.calculationType || "percentage", unit: sp?.unit, rate: parseRateInput(rateInput) }, products);
     addServiceItem(
       storeId,
       "packing",
@@ -1416,7 +1407,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     const rateInput = (sp?.calculationType ?? "percentage") === "percentage"
       ? settingsPercentRate(rateValue)
       : String(rateValue ?? "");
-    const label = serviceChargeLabel(sp?.name || "Installation Charges", rateInput);
+    const label = serviceProductLabel({ productId: sp?.id, lineType: "installation", itemName: sp?.name, calculationType: sp?.calculationType || "percentage", unit: sp?.unit, rate: parseRateInput(rateInput) }, products);
     addServiceItem(
       storeId,
       "installation",
@@ -1442,9 +1433,14 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
       ? String(sellerProfile.defaultOutstationTransportRate ?? "")
       : String(sellerProfile.defaultLocalTransport ?? estTransport ?? "");
     const rateInput = sp?.rate != null ? String(sp.rate) : fallbackRate;
-    const description = sp?.description
-      || sp?.name
-      || (mode === "outstation" ? outstationTransportLabel(rateInput) : "Local Transportation");
+    const description = serviceProductLabel({
+      productId: sp?.id,
+      lineType: "transport",
+      itemName: sp?.name,
+      calculationType: sp?.calculationType || (mode === "outstation" ? "per_km" : "fixed"),
+      unit: sp?.unit || (mode === "outstation" ? "km" : "job"),
+      rate: parseRateInput(rateInput),
+    }, products);
     addServiceItem(
       storeId,
       "transport",
@@ -2216,15 +2212,9 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
               : lineType === "transport" && parseRateInput(rawRate) === 0
                 ? settingsLocalTransport
                 : rawRate;
-        const normalizedServiceLabel = lineType === "packing"
-          ? serviceChargeLabel("Packing Charges", repairedRate)
-          : lineType === "installation"
-            ? serviceChargeLabel("Installation Charges", repairedRate)
-            : lineType === "transport" && String(item.unit || "").toLowerCase() === "km" && (!item.description || item.description === "Outstation Transport - Destination")
-              ? outstationTransportLabel(repairedRate)
-              : lineType === "transport" && ["", "Transport Charges", "Transportation Charges", "Local Transport"].includes(String(item.description || item.itemName || ""))
-                ? "Local Transportation"
-              : undefined;
+        const normalizedServiceLabel = isServiceLineType(lineType)
+          ? serviceProductLabel({ ...item, lineType, rate: parseRateInput(repairedRate) }, products)
+          : undefined;
         return {
           sl: Number(item.sl) || idx + 1,
           productId: item.productId ? String(item.productId) : "",
@@ -4155,6 +4145,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
           clients={clients}
           brands={brands}
           stores={stores}
+          products={products}
           token={token}
           onBack={() => {
             setSelectedEstimate(null);

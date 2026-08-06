@@ -1,4 +1,5 @@
 import { unzipSync, zipSync } from "fflate";
+import { isServiceEstimateItem, resolveServiceProduct, serviceProductLabel } from "../../../../../shared/serviceProductDisplay";
 import { orderedEstimateItems, orderedStoreKeysFromItems } from "./estimateOrdering";
 
 export const downloadBlob = (blob: Blob, fileName: string) => {
@@ -13,23 +14,7 @@ const s = (v: any) => (v == null ? "" : String(v));
 const n = (v: any) => Number(v) || 0;
 const r2 = (v: number) => Math.round((Number(v) || 0) * 100) / 100;
 
-const SERVICE_LINE_TYPES = new Set(["packing", "installation", "transport"]);
-const isServiceItem = (item: any) =>
-  SERVICE_LINE_TYPES.has(String(item.lineType || "").toLowerCase());
-
-const serviceItemLabel = (item: any) => {
-  const lineType = String(item?.lineType || "").toLowerCase();
-  const rate = Number(item?.rate) || 0;
-  if (lineType === "packing") return rate > 0 ? `Packing Charges (${rate}%)` : "Packing Charges";
-  if (lineType === "installation") return rate > 0 ? `Installation Charges (${rate}%)` : "Installation Charges";
-  if (lineType === "transport") return "Local Transportation";
-  return item?.itemName || "";
-};
-
-const serviceItemRateLabel = (item: any) => {
-  if (item?.calculationType === "percentage") return `${Number(item?.rate) || 0}%`;
-  return "";
-};
+const isServiceItem = (item: any) => isServiceEstimateItem(item);
 
 const wrapAddressForExcel = (value: any): string => {
   const raw = String(value || "");
@@ -159,6 +144,7 @@ export async function exportEstimateToExcel(
   clientName?: string,
   sellerProfile?: any,
   stores?: any[],
+  products: any[] = [],
 ): Promise<void> {
   const XLSX = (await import("xlsx-js-style")).default;
 
@@ -344,7 +330,7 @@ export async function exportEstimateToExcel(
         transportAmt: !Array.isArray(groupData) && groupData.transportAmount !== undefined
           ? Number(groupData.transportAmount) : 0,
         transportDescription: !Array.isArray(groupData) && groupData.transportDescription
-          ? String(groupData.transportDescription) : "Local Transportation",
+          ? String(groupData.transportDescription) : "",
       });
     });
   }
@@ -359,7 +345,7 @@ export async function exportEstimateToExcel(
       packingPercent: Number(estimate.packingPercent || 0),
       implPercent: Number(estimate.implementationPercent || 0),
       transportAmt: Number(estimate.transportAmount || 0),
-      transportDescription: "Local Transportation",
+      transportDescription: "",
     });
   }
 
@@ -444,13 +430,14 @@ export async function exportEstimateToExcel(
     const addSavedServiceRow = (item: any) => {
       const base = Number(item.totalPrice || 0);
       if (base <= 0) return;
+      const service = resolveServiceProduct(item, products);
       const ri = addRow((() => {
         const r = blankRow();
-        r[1] = serviceItemLabel(item); r[2] = item.hsn || "9987";
+        r[1] = service.label; r[2] = service.hsn || "9987";
         r[3] = item.isStandard === false ? "Non-standard" : "Standard";
-        r[4] = serviceItemLabel(item); r[7] = r2(Number(item.quantity) || 1);
-        r[9] = serviceItemRateLabel(item); r[10] = r2(base);
-        r[11] = isIgst ? Number(item.igstPercent) || 0 : (Number(item.sgstPercent) || 0) + (Number(item.cgstPercent) || 0);
+        r[4] = service.label; r[7] = r2(Number(item.quantity) || 1);
+        r[9] = service.rateLabel; r[10] = r2(base);
+        r[11] = service.gstPercent;
         r[12] = r2(isIgst ? Number(item.igstAmount) || 0 : (Number(item.sgstAmount) || 0) + (Number(item.cgstAmount) || 0));
         r[13] = r2(Number(item.totalAmount) || 0);
         return r;
@@ -463,9 +450,12 @@ export async function exportEstimateToExcel(
     if (hasSavedServices) {
       sec.serviceItems.forEach(addSavedServiceRow);
     } else {
-      addServiceRow(`Packing Charges (${sec.packingPercent}%)`, `Packing Charges (${sec.packingPercent}%)`, `${sec.packingPercent}%`, packAmt);
-      addServiceRow(`Installation Charges (${sec.implPercent}%)`, `Installation Charges (${sec.implPercent}%)`, `${sec.implPercent}%`, implAmt);
-      addServiceRow("Local Transportation", sec.transportDescription || "Local Transportation", "", transAmt);
+      const packingLabel = serviceProductLabel({ lineType: "packing", rate: sec.packingPercent, calculationType: "percentage" }, products);
+      const installationLabel = serviceProductLabel({ lineType: "installation", rate: sec.implPercent, calculationType: "percentage" }, products);
+      const transportLabel = serviceProductLabel({ lineType: "transport", itemName: sec.transportDescription }, products);
+      addServiceRow(packingLabel, packingLabel, `${sec.packingPercent}%`, packAmt);
+      addServiceRow(installationLabel, installationLabel, `${sec.implPercent}%`, implAmt);
+      addServiceRow(transportLabel, transportLabel, "", transAmt);
     }
 
     if (sIdx < sections.length - 1) addRow(blankRow());

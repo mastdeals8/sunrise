@@ -3,6 +3,7 @@
 
 import React from "react";
 import { formatProductDetails } from "../../../shared/productDetails";
+import { isServiceEstimateItem, resolveServiceProduct, serviceProductLabel } from "../../../shared/serviceProductDisplay";
 import { companyAssetUrl } from "../utils/companyAssets";
 import type { Estimate, EstimateItem, Store, Client, Brand, Product } from "../pages/operations/types";
 import { orderedEstimateItems, orderedStoreKeysFromItems } from "../pages/operations/utils/estimateOrdering";
@@ -18,19 +19,7 @@ export interface EstimateDocumentProps {
   assetToken?: string | null;
 }
 
-const SERVICE_LINE_TYPES = new Set(["packing", "installation", "transport"]);
-const isServiceItem = (item: EstimateItem) => SERVICE_LINE_TYPES.has(String(item.lineType || "").toLowerCase());
-const serviceRateValue = (item: EstimateItem) => Number(item.rate) || 0;
-const serviceLabel = (item: EstimateItem) => {
-  const lineType = String(item.lineType || "").toLowerCase();
-  const rate = serviceRateValue(item);
-  if (lineType === "packing") return rate > 0 ? `Packing Charges (${rate}%)` : "Packing Charges";
-  if (lineType === "installation") return rate > 0 ? `Installation Charges (${rate}%)` : "Installation Charges";
-  if (lineType === "transport" && String(item.unit || "").toLowerCase() === "km") return rate > 0 ? `Outstation Transportation (₹${rate}/KM)` : "Outstation Transportation";
-  if (lineType === "transport") return "Local Transportation";
-  return item.itemName || "";
-};
-const serviceRateLabel = (item: EstimateItem) => item.calculationType === "percentage" ? `${serviceRateValue(item)}%` : "";
+const isServiceItem = (item: EstimateItem) => isServiceEstimateItem(item);
 
 const wrapAddress = (value: string) => {
   const raw = String(value || "");
@@ -368,19 +357,18 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
 
   const savedServiceRow = (item: EstimateItem, sectionKey: string) => {
     const base = Number(item.totalPrice) || 0;
-    const rateLabel = serviceRateLabel(item);
-    const gstPercent = isIgst
-      ? Number(item.igstPercent) || 0
-      : (Number(item.sgstPercent) || 0) + (Number(item.cgstPercent) || 0);
+    const service = resolveServiceProduct(item, products);
+    const rateLabel = service.rateLabel;
+    const gstPercent = service.gstPercent;
     const gstAmount = isIgst
       ? Number(item.igstAmount) || 0
       : (Number(item.sgstAmount) || 0) + (Number(item.cgstAmount) || 0);
-    const label = serviceLabel(item);
+    const label = service.label;
     return (
       <tr className="estimate-service-row-keep" key={`${sectionKey}-${item.id || item.sl || item.itemName}`}>
         <td style={cellCenter}></td>
-        <td style={cellBase}>{serviceLabel(item)}</td>
-        <td style={cellBase}>{item.hsn || "9987"}</td>
+        <td style={cellBase}>{label}</td>
+        <td style={cellBase}>{service.hsn || "9987"}</td>
         <td style={cellBase}>{item.isStandard === false ? "Non-standard" : "Standard"}</td>
         <td style={cellBase}>{label}</td>
         <td style={cellBase}></td>
@@ -507,9 +495,9 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
       </tr>
       {sec.serviceRows.length > 0 ? sec.serviceRows.map(item => savedServiceRow(item, `s${sIdx}`)) : (
         <>
-          {sec.packingPercent > 0 && serviceRow(`Packing Charges (${sec.packingPercent}%)`, `Packing Charges (${sec.packingPercent}%)`, `${sec.packingPercent}%`, sec.packingBase, `s${sIdx}`)}
-          {sec.implPercent > 0 && serviceRow(`Installation Charges (${sec.implPercent}%)`, `Installation Charges (${sec.implPercent}%)`, `${sec.implPercent}%`, sec.implBase, `s${sIdx}`)}
-          {sec.transportAmt > 0 && serviceRow("Local Transportation", sec.transportDescription || "Local Transportation", "", sec.transportBase, `s${sIdx}`)}
+          {sec.packingPercent > 0 && (() => { const label = serviceProductLabel({ lineType: "packing", rate: sec.packingPercent, calculationType: "percentage" }, products); return serviceRow(label, label, `${sec.packingPercent}%`, sec.packingBase, `s${sIdx}`); })()}
+          {sec.implPercent > 0 && (() => { const label = serviceProductLabel({ lineType: "installation", rate: sec.implPercent, calculationType: "percentage" }, products); return serviceRow(label, label, `${sec.implPercent}%`, sec.implBase, `s${sIdx}`); })()}
+          {sec.transportAmt > 0 && (() => { const label = serviceProductLabel({ lineType: "transport", itemName: sec.transportDescription }, products); return serviceRow(label, label, "", sec.transportBase, `s${sIdx}`); })()}
         </>
       )}
       {sIdx < sections.length - 1 && (
