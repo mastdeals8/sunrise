@@ -53,39 +53,7 @@ import { useInvoiceWorkflow } from "./hooks/useInvoiceWorkflow";
 import { useWccDcEditor } from "./hooks/useWccDcEditor";
 import { importFieldsMap } from "./utils/importFieldsMap";
 import { displayFormatLabel, isAblblFormat, normalizeDisplayName, normalizeFormatMode, normalizeGstinPan } from "../../../../shared/textFormat";
-import {
-  Building2, 
-  Tag, 
-  MapPin, 
-  Package, 
-  FileText, 
-  Plus, 
-  CheckCircle, 
-  Trash,
-  ShoppingBag,
-  Download,
-  Upload,
-  Eye,
-  Check,
-  X,
-  FileSpreadsheet,
-  Image as ImageIcon,
-  FileUp,
-  Printer,
-  ChevronDown,
-  ChevronRight,
-  Scale,
-  AlertCircle,
-  Clock,
-  Briefcase,
-  Database,
-  Copy,
-  Truck,
-  Receipt,
-  Clipboard,
-  ClipboardPaste,
-  FolderOpen,
-} from "lucide-react";
+import { Building2, Tag, MapPin, Package, FileText, Plus, CircleCheck as CheckCircle, Trash, ShoppingBag, Download, Upload, Eye, Check, X, FileSpreadsheet, Image as ImageIcon, FileUp, Printer, ChevronDown, ChevronRight, Scale, CircleAlert as AlertCircle, Clock, Briefcase, Database, Copy, Truck, Receipt, Clipboard, ClipboardPaste, FolderOpen } from "lucide-react";
 
 const MATERIAL_CODE_MASTER = [
   { code: "MC-ABF-001", name: "Frontlit Flex Signage (Standard)" },
@@ -3283,12 +3251,12 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
   };
 
   const wccPrintFileName = (dc: DeliveryChallan): string => {
-    const storeName = String(dc.metadata?.storeName || stores.find((s: any) => s.id === Number(dc.metadata?.storeId || 0))?.name || "").trim();
+    const storeName = String(dc.metadata?.storeName || "").trim();
     const subjectVal = String(estimates.find(e => e.id === dc.estimateId)?.subject || "").trim();
-    const dcNum = String(dc.dcNumber || "").trim();
-    const safeName = (s: string) => s.replace(/[/\\:*?"<>|]/g, "-").trim();
-    const parts = ["DC", safeName(storeName), safeName(subjectVal)].filter(Boolean);
-    return parts.length > 1 ? parts.join("_") : dcNum || "DC";
+    const storePart = storeName ? storeName.split(/[ ,\-_/]+/)[0] : "";
+    const subjectPart = subjectVal ? subjectVal.split(/[ ,\-_/]+/)[0] : "";
+    const parts = ["Challan", storePart, subjectPart].filter(Boolean);
+    return parts.length > 1 ? parts.join("_") : "Challan";
   };
 
   const printWcc = async (dc: DeliveryChallan) => {
@@ -3516,51 +3484,48 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     return savedCount;
   };
 
-  // Export the current WCC as PDF — reuses the print CSS (same quality as window.print())
-  // by setting document.title (browsers use it as the default "Save as PDF" filename).
-  const handleExportCurrentPdf = () => {
-    const currentDc = activeWccsForEditor.find((dc: any) => dc.id === editingDcId)
-      || (editingDcId ? { dcNumber: dcNumberVal, estimateId: selectedEstimate?.id, metadata: {} } : null) as any;
-    const fileName = currentDc ? wccPrintFileName(currentDc) : dcNumberVal || "DC";
-    setWccPrintMode("current");
-    const prevTitle = document.title;
-    document.title = fileName;
-    window.setTimeout(() => {
-      window.print();
-      window.setTimeout(() => { document.title = prevTitle; }, 500);
-    }, 80);
+  // Export the current WCC canvas as a direct PDF download (no print dialog).
+  const handleExportCurrentPdf = async () => {
+    const { exportWccCanvasToPdf, wccExportFileName } = await import("../operations/utils/wccPdfExport");
+    const currentDc = activeWccsForEditor.find((dc: any) => dc.id === editingDcId);
+    const storeName = currentDc?.metadata?.storeName
+      || stores.find((s: any) => s.id === Number(currentDc?.metadata?.storeId || 0))?.name
+      || "";
+    const fileName = wccExportFileName({
+      storeName,
+      subject: selectedEstimate?.title,
+      dcNumber: currentDc?.dcNumber || dcNumberVal,
+    });
+    await exportWccCanvasToPdf(fileName);
   };
 
-  // Save the current WCC (keeping editor open), then print/export PDF.
+  // Save the current WCC (keeping editor open), then export PDF.
   const handleSaveAndExportPdf = async () => {
     const ok = await handleDcSubmit({ preventDefault: () => {} }, { keepOpen: true });
     if (ok) {
+      // Give React a tick to re-render with the saved DC number.
       await new Promise((r) => setTimeout(r, 150));
-      handleExportCurrentPdf();
+      await handleExportCurrentPdf();
     }
   };
 
-  // Save the current WCC (keeping editor open), print/export PDF, then open WhatsApp.
+  // Save the current WCC (keeping editor open), export PDF, then open WhatsApp.
   const handleSaveAndShareWhatsApp = async () => {
     const ok = await handleDcSubmit({ preventDefault: () => {} }, { keepOpen: true });
     if (!ok) return;
     await new Promise((r) => setTimeout(r, 150));
+    await handleExportCurrentPdf();
     const { shareWccOnWhatsApp } = await import("../operations/utils/wccPdfExport");
     const currentDc = activeWccsForEditor.find((dc: any) => dc.id === editingDcId);
     const storeName = currentDc?.metadata?.storeName
       || stores.find((s: any) => s.id === Number(currentDc?.metadata?.storeId || 0))?.name
       || "";
-    const shareMsg = () => {
-      shareWccOnWhatsApp({
-        storeName,
-        subject: selectedEstimate?.subject || selectedEstimate?.title,
-        dcNumber: currentDc?.dcNumber || dcNumberVal,
-        companyName: sellerProfile?.name,
-      });
-      window.removeEventListener("afterprint", shareMsg);
-    };
-    window.addEventListener("afterprint", shareMsg);
-    handleExportCurrentPdf();
+    shareWccOnWhatsApp({
+      storeName,
+      subject: selectedEstimate?.title,
+      dcNumber: currentDc?.dcNumber || dcNumberVal,
+      companyName: sellerProfile?.name,
+    });
   };
 
   const handleCreateInvoice = async (e: React.FormEvent) => {
