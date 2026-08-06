@@ -12,6 +12,7 @@
     "start": "NODE_ENV=production node dist/index.js",
     "check": "tsc",
     "check:bolt": "node scripts/audit-bolt-readiness.js",
+    "test:project-store-scope": "tsx scripts/test-project-store-scope.ts",
     "test:service-exports": "tsx scripts/test-service-product-display.ts",
     "db:push": "drizzle-kit push",
     "postinstall": "node scripts/generate-templates.mjs"

@@ -317,7 +317,9 @@ export async function fetchDeliveryChallans(token: string | null) {
   const rows = await sbSelect<any>("delivery_challans", (q) =>
     q.select("*").order("created_at", { ascending: false })
   );
-  return attachPhotoSignedUrls(rows);
+  // Register and project-list reads are metadata-only. Signing every historical
+  // WCC image here turns one list request into many sequential Storage calls.
+  return rows;
 }
 
 export async function fetchDeliveryChallansForEstimate(
@@ -337,7 +339,7 @@ export async function fetchDeliveryChallansForEstimate(
       .eq("estimate_id", estimateId)
       .order("created_at", { ascending: false })
   );
-  return attachPhotoSignedUrls(rows);
+  return rows;
 }
 
 export async function fetchExecutionDocuments(
@@ -1092,6 +1094,11 @@ async function attachPhotoSignedUrls<T extends { metadata?: any }>(rows: T[]): P
   });
 }
 
+/** Sign WCC image paths only when a document is opened for editing or preview. */
+export async function hydrateDeliveryChallanPhotos<T extends { metadata?: any }>(rows: T[]): Promise<T[]> {
+  return attachPhotoSignedUrls(rows);
+}
+
 export async function createDeliveryChallan(
   token: string | null,
   payload: Record<string, unknown>
@@ -1110,7 +1117,10 @@ export async function createDeliveryChallan(
     body: JSON.stringify(cleaned),
   });
   if (!res.ok) throw new Error((await res.json()).message ?? "Failed to create delivery challan");
-  return res.json();
+  // Edge Function responses are raw PostgREST rows (snake_case). Keep the
+  // newly-created canonical row in the same shape as list reads so the
+  // register and Project Workspace can consume it immediately.
+  return toCamel(await res.json());
 }
 
 export async function updateDeliveryChallan(

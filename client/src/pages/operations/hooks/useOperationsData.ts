@@ -113,6 +113,10 @@ export const useOperationsData = (token?: string | null, globalRange?: DateRange
       const t0 = performance.now();
 
       if (isBoltMode) {
+        // Ledger data is independent of the operations registers. Start it at
+        // the same time rather than adding its invoice/summary requests to the
+        // end of the critical path.
+        const ledgerPromise = fetchLedgerData();
         const [c, b, s, p, mc, e, dc] = await Promise.all([
           fetchClients(token ?? null),
           fetchBrands(token ?? null),
@@ -137,7 +141,7 @@ export const useOperationsData = (token?: string | null, globalRange?: DateRange
             (r as any).createdAt || (r as any).deliveryDate
           )
         );
-        await fetchLedgerData();
+        await ledgerPromise;
         console.log(`[fetchData bolt] ${Math.round(performance.now() - t0)}ms`);
         return;
       }

@@ -47,7 +47,7 @@ import ProjectWorkspace from "./components/ProjectWorkspace";
 import WccDcEditor from "./components/WccDcEditor";
 import { useOperationsData, type Invoice } from "./hooks/useOperationsData";
 import { isBoltMode, supabase } from "../../lib/supabase";
-import { createEstimate, updateEstimate, createDeliveryChallan, updateDeliveryChallan, fetchEstimateItems, fetchDeliveryChallansForEstimate, fetchBillingProfiles as apiFetchBillingProfiles, fetchCompanySettings, createInvoice, createPayment, fetchClientLedger, masterDataSave, uploadToStorage, registerExecutionDocument, deleteExecutionDocument, deleteWccPhotoArtifacts, normalizeWccPhotos } from "../../lib/api";
+import { createEstimate, updateEstimate, createDeliveryChallan, updateDeliveryChallan, fetchEstimateItems, fetchDeliveryChallansForEstimate, fetchBillingProfiles as apiFetchBillingProfiles, fetchCompanySettings, createInvoice, createPayment, fetchClientLedger, masterDataSave, uploadToStorage, registerExecutionDocument, deleteExecutionDocument, deleteWccPhotoArtifacts, hydrateDeliveryChallanPhotos, normalizeWccPhotos } from "../../lib/api";
 import { useEstimateBuilder } from "./hooks/useEstimateBuilder";
 import { useInvoiceWorkflow } from "./hooks/useInvoiceWorkflow";
 import { useWccDcEditor } from "./hooks/useWccDcEditor";
@@ -187,6 +187,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     estimates,
     setEstimates,
     challans,
+    setChallans,
     invoices,
     ledgerSummary,
     fetchLedgerData,
@@ -667,7 +668,6 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
   const [standaloneDcEditor, setStandaloneDcEditor] = useState(false);
   const [estimatePreviewMode, setEstimatePreviewMode] = useState<"estimate" | "project">("estimate");
   const [projectDashboardInitialTab, setProjectDashboardInitialTab] = useState<"overview" | "po" | "execution" | "documents" | "invoice">("overview");
-  const [wccSaveKey, setWccSaveKey] = useState(0);
   
   // PO Upload Panel State
   const [showPoModal, setShowPoModal] = useState(false);
@@ -2580,6 +2580,12 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     if (dRes.ok) setSelectedChallans(await dRes.json());
   };
 
+  const upsertCanonicalChallan = (next: DeliveryChallan) => {
+    const merge = (rows: DeliveryChallan[]) => [next, ...rows.filter(row => row.id !== next.id)];
+    setChallans(merge);
+    if (next.estimateId === selectedEstimate?.id) setSelectedChallans(merge);
+  };
+
   const patchWccChallansInBatches = async (
     targetDcs: DeliveryChallan[],
     updatesFor: (dc: DeliveryChallan) => Record<string, any>,
@@ -2991,6 +2997,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
 
     let createdCount = 0;
     let activeWccs = challans;
+    const createdWccs: DeliveryChallan[] = [];
     try {
       activeWccs = await fetchDeliveryChallansForEstimate(token, selectedEstimate.id);
     } catch (err) {
@@ -3050,12 +3057,17 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
       if (dcRes.ok) {
         createdCount++;
         const created = await dcRes.clone().json().catch(() => null);
-        if (created) activeWccs = [created, ...activeWccs];
+        if (created) {
+          activeWccs = [created, ...activeWccs];
+          createdWccs.push(created as DeliveryChallan);
+        }
       }
     }
     showSuccess(`Generated ${createdCount} of ${sids.length} WCC drafts.`);
-    await reloadSelectedChallans();
-    fetchData();
+    // delivery_challans is the canonical document state. Merge the successful
+    // responses once instead of reloading selected challans and then the whole
+    // register/project workspace.
+    createdWccs.forEach(upsertCanonicalChallan);
   };
 
   // opts.keepOpen: if true, do NOT close the modal or clear editingDcId — used
@@ -3120,11 +3132,13 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
       };
 
       let res: Response;
+      let savedChallan: DeliveryChallan | null = null;
       if (isBoltMode) {
         try {
           const data = editingDcId
             ? await updateDeliveryChallan(token, editingDcId, payload)
             : await createDeliveryChallan(token, payload);
+          savedChallan = data as DeliveryChallan;
           res = new Response(JSON.stringify(data), { status: 200 });
         } catch (err: any) {
           res = new Response(JSON.stringify({ message: err.message }), { status: 500 });
@@ -3138,15 +3152,14 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
       }
 
       if (res.ok) {
+        if (!savedChallan) savedChallan = await res.clone().json().catch(() => null);
         showSuccess(`WCC "${dcNumberVal}" ${editingDcId ? "updated" : "created"} successfully!`);
         if (!opts?.keepOpen) {
           setShowDcModal(false);
           setEditingDcId(null);
         }
         markWccPristine();
-        await reloadSelectedChallans();
-        fetchData();
-        setWccSaveKey(k => k + 1);
+        if (savedChallan) upsertCanonicalChallan(savedChallan);
         return true;
       }
       return false;
@@ -3213,10 +3226,11 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     const isStandaloneWorkflow = selectedEstimate?.id !== dc.estimateId;
     const est = await loadEstimateContextForDc(dc);
     if (!est) return;
-    const meta = dc.metadata || {};
-    setSelectedChallans((prev) => prev.some((row) => row.id === dc.id) ? prev : [dc, ...prev]);
-    setEditingDcId(dc.id);
-    setDcNumberVal(dc.dcNumber || "");
+    const visibleDc = isBoltMode ? (await hydrateDeliveryChallanPhotos([dc]))[0] : dc;
+    const meta = visibleDc.metadata || {};
+    setSelectedChallans((prev) => prev.some((row) => row.id === visibleDc.id) ? prev : [visibleDc, ...prev]);
+    setEditingDcId(visibleDc.id);
+    setDcNumberVal(visibleDc.dcNumber || "");
     setWccVisualBrief(meta.visualBrief || "");
     setWccShortageNotes(meta.shortageNotes || "");
     setWccAuthPerson(meta.authPerson || "");
@@ -3232,10 +3246,10 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     // Clone so wccChecklist state never aliases dc.metadata.checklist in the
     // challans cache (same isolation guarantee applied to dcPhotos above).
     setWccChecklist(meta.checklist ? { ...meta.checklist } : { window: true, inStore: false, nso: false, repairing: false, materialTransfer: false });
-    setDcFormat(dc.clientFormat || (isAblblFormat(est.clientFormat) ? "ABFRL" : "normal"));
-    setDcDeliveredBy(dc.deliveredBy || "Sunrise logistics team");
-    setDcReceivedBy(dc.receivedBy || "");
-    setDcRemarks(dc.remarks || "");
+    setDcFormat(visibleDc.clientFormat || (isAblblFormat(est.clientFormat) ? "ABFRL" : "normal"));
+    setDcDeliveredBy(visibleDc.deliveredBy || "Sunrise logistics team");
+    setDcReceivedBy(visibleDc.receivedBy || "");
+    setDcRemarks(visibleDc.remarks || "");
     setDcWccStoreScope(meta.storeId ? String(meta.storeId) : "");
     setShowDcPreviewModal(false);
     setSelectedDcForPreview(null);
@@ -3257,7 +3271,8 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     setStandaloneDcEditor(false);
     if (!keepProjectDashboardOwner) setSelectedEstimate(null);
     setShowDcModal(false);
-    setSelectedDcForPreview(dc);
+    const visibleDc = isBoltMode ? (await hydrateDeliveryChallanPhotos([dc]))[0] : dc;
+    setSelectedDcForPreview(visibleDc);
     setShowDcPreviewModal(true);
   };
 
@@ -4146,6 +4161,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
           brands={brands}
           stores={stores}
           products={products}
+          canonicalChallans={selectedChallans}
           token={token}
           onBack={() => {
             setSelectedEstimate(null);
@@ -4161,7 +4177,6 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
             await fetchData();
             await fetchLedgerData();
           }}
-          externalRefreshKey={wccSaveKey}
           initialTab={projectDashboardInitialTab as any}
         />
       )}

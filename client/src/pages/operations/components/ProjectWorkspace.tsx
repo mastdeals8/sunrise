@@ -75,6 +75,10 @@ interface ProjectData {
   stores: ExecStoreRow[];
   projectDocuments: ExecDoc[];
   invoices: ProjectInvoice[];
+  // Bolt-only source rows retained so a canonical delivery_challans update can
+  // rebuild the view without another project-wide fetch.
+  allExecutionDocuments?: any[];
+  executionOverlays?: any[];
 }
 
 interface AuditEntry {
@@ -93,6 +97,7 @@ interface ProjectWorkspaceProps {
   brands: Brand[];
   stores: Store[];
   products: Product[];
+  canonicalChallans?: DeliveryChallan[];
   token: string | null;
   onBack: () => void;
   onOpenWcc: (dc: DeliveryChallan, msg?: string) => void;
@@ -227,6 +232,8 @@ const normalizeProjectData = (payload: any): ProjectData => ({
   challans: Array.isArray(payload?.challans) ? payload.challans : [],
   stores: Array.isArray(payload?.stores) ? payload.stores.map(normalizeStoreRow) : [],
   projectDocuments: Array.isArray(payload?.projectDocuments) ? payload.projectDocuments.map(normalizeExecDoc) : [],
+  allExecutionDocuments: Array.isArray(payload?.allExecutionDocuments) ? payload.allExecutionDocuments : [],
+  executionOverlays: Array.isArray(payload?.executionOverlays) ? payload.executionOverlays : [],
   invoices: Array.isArray(payload?.invoices) ? payload.invoices.map((inv: any) => ({
     ...inv,
     id: Number(inv?.id || 0),
@@ -238,7 +245,100 @@ const normalizeProjectData = (payload: any): ProjectData => ({
   })) : [],
 });
 
-const loadProjectDataFallback = async (estimate: Estimate, authHeader: Record<string, string>, token?: string | null) => {
+const isActiveChallan = (challan: any) => challan?.status !== "deleted" && !challan?.metadata?.deleted;
+const challanStoreCode = (challan: any) => String(challan?.metadata?.storeCode ?? challan?.storeCode ?? "").trim();
+const isWccChallan = (challan: any) => isAblblFormat(challan?.clientFormat) || challan?.documentType === "wcc";
+
+const estimateStoreScope = (estimate: Estimate, items: any[], masterStores: Store[], challans: DeliveryChallan[]) => {
+  const grouping = (estimate.storeGrouping || {}) as Record<string, any>;
+  const scope = new Map<string, { storeId: number | null; storeCode: string; storeName: string | null; storeCity: string | null; storeState: string | null }>();
+  const add = (storeId: number | null, fallback: any = {}) => {
+    const master = storeId ? masterStores.find(store => store.id === storeId) : undefined;
+    const storeCode = String(master?.storeCode || fallback.storeCode || fallback.store_code || "").trim();
+    const key = String(storeId || storeCode || "").toLowerCase();
+    if (!key || scope.has(key)) return;
+    scope.set(key, {
+      storeId: master?.id ?? storeId,
+      storeCode,
+      storeName: master?.name || fallback.storeName || fallback.store_name || null,
+      storeCity: master?.city || fallback.storeCity || fallback.store_city || null,
+      storeState: master?.state || fallback.storeState || fallback.store_state || null,
+    });
+  };
+
+  Object.entries(grouping).forEach(([storeId, group]) => add(Number(storeId) || null, group));
+  if (scope.size === 0 && estimate.storeId) add(estimate.storeId);
+  if (scope.size === 0) {
+    items.forEach(item => {
+      const code = String(item?.storeCode || "").trim();
+      const master = masterStores.find(store => store.storeCode === code);
+      add(master?.id ?? null, { storeCode: code });
+    });
+  }
+  // Legacy estimates without grouping still remain visible when their saved
+  // WCC supplies the only historical store reference.
+  if (scope.size === 0) {
+    challans.filter(isActiveChallan).forEach(challan => add(Number(challan?.metadata?.storeId || 0) || null, {
+      storeCode: challanStoreCode(challan),
+      storeName: challan?.metadata?.storeName,
+      storeCity: challan?.metadata?.city,
+      storeState: challan?.metadata?.state,
+    }));
+  }
+  return Array.from(scope.values());
+};
+
+export const projectStoresFromCanonicalRecords = (
+  estimate: Estimate,
+  items: any[],
+  masterStores: Store[],
+  challans: DeliveryChallan[],
+  documents: any[],
+  executionOverlays: any[] = [],
+): ExecStoreRow[] => {
+  const activeChallans = challans.filter(isActiveChallan);
+  return estimateStoreScope(estimate, items, masterStores, activeChallans).map((scope, index) => {
+    const overlay = executionOverlays.find(row =>
+      (scope.storeId != null && Number(row.storeId) === scope.storeId) ||
+      String(row.storeCode || "").trim() === scope.storeCode,
+    );
+    const storeChallans = activeChallans.filter(challan => {
+      const code = challanStoreCode(challan);
+      return code === scope.storeCode || (scope.storeId != null && Number(challan?.metadata?.storeId || 0) === scope.storeId);
+    });
+    const storeDocs = documents.filter(doc => String(doc?.storeCode || "").trim() === scope.storeCode);
+    const wccRecords = storeChallans.filter(isWccChallan);
+    const dcRecords = storeChallans.filter(challan => !isWccChallan(challan));
+    const photoDocuments = storeDocs.filter(doc => doc.documentType === "photo" || doc.documentType === "wcc_photo");
+    const signedWccDocuments = storeDocs.filter(doc => doc.documentType === "signed_wcc" || doc.documentType === "signed_dc");
+    return normalizeStoreRow({
+      id: Number(overlay?.id || 0) || -(index + 1),
+      estimateId: estimate.id,
+      storeId: scope.storeId,
+      storeCode: scope.storeCode,
+      storeName: scope.storeName,
+      storeCity: scope.storeCity,
+      storeState: scope.storeState,
+      status: overlay?.status || "pending_execution",
+      billingReady: Boolean(overlay?.billingReady),
+      notes: overlay?.notes || null,
+      wccRecords,
+      dcRecords,
+      photoDocuments,
+      signedWccDocuments,
+      documents: storeDocs.filter(doc => !["photo", "wcc_photo", "signed_wcc", "signed_dc"].includes(doc.documentType)),
+      stats: {
+        photoCount: photoDocuments.length,
+        wccCount: wccRecords.length,
+        dcCount: dcRecords.length,
+        signedWccCount: signedWccDocuments.filter(doc => doc.documentType === "signed_wcc").length,
+        signedDcCount: signedWccDocuments.filter(doc => doc.documentType === "signed_dc").length,
+      },
+    });
+  });
+};
+
+const loadProjectDataFallback = async (estimate: Estimate, masterStores: Store[], authHeader: Record<string, string>, token?: string | null) => {
   const [items, challans, execStores, docs, invoice] = isBoltMode
     ? await Promise.all([
         fetchEstimateItems(token ?? null, estimate.id).catch(() => []),
@@ -255,54 +355,9 @@ const loadProjectDataFallback = async (estimate: Estimate, authHeader: Record<st
         fetchJson(`/api/finance/invoices/estimate/${estimate.id}`, { headers: authHeader }).catch(() => null),
       ]);
 
-  // In Bolt mode, execution_stores rows are flat — join docs + challans into each store.
-  let stores = execStores;
-  if (isBoltMode && Array.isArray(execStores)) {
-    const allDocs = Array.isArray(docs) ? docs : [];
-    const allChallans = Array.isArray(challans) ? challans : [];
-    stores = execStores.map((store: any) => {
-      const sc = store.storeCode;
-      const storeDocs = allDocs.filter((d: any) => d.storeCode === sc);
-      const photoDocs = storeDocs.filter((d: any) => d.documentType === "photo");
-      const signedDocs = storeDocs.filter((d: any) => d.documentType === "signed_wcc" || d.documentType === "signed_dc");
-      const otherDocs = storeDocs.filter((d: any) => !["photo", "signed_wcc", "signed_dc"].includes(d.documentType));
-      // Match how the save path actually writes challans: the store code lives in
-      // metadata.storeCode (the top-level store_code column is never populated),
-      // and WCCs are identified by their ABFRL/ABLBL clientFormat — not by a
-      // document_type set only on the edge-function create path. Grouping on the
-      // bare store_code column left every saved WCC unmatched → "Pending WCC".
-      const challanStoreCode = (c: any): string =>
-        String(c?.metadata?.storeCode ?? c?.storeCode ?? "").trim();
-      const isWccChallan = (c: any): boolean =>
-        isAblblFormat(c?.clientFormat) || c?.documentType === "wcc";
-      const storeChallans = allChallans.filter((c: any) => {
-        if (c?.status === "deleted" || c?.metadata?.deleted) return false;
-        const code = challanStoreCode(c);
-        if (code) return code === String(sc || "").trim();
-        // Legacy rows with neither metadata.storeCode nor store_code: fall back to
-        // matching by storeId so a single-store estimate still resolves.
-        if (store.storeId != null && Number(c?.metadata?.storeId || 0) === Number(store.storeId)) return true;
-        return false;
-      });
-      const wccRecords = storeChallans.filter((c: any) => isWccChallan(c));
-      const dcRecords = storeChallans.filter((c: any) => !isWccChallan(c));
-      return {
-        ...store,
-        wccRecords,
-        dcRecords,
-        photoDocuments: photoDocs,
-        signedWccDocuments: signedDocs,
-        documents: otherDocs,
-        stats: {
-          photoCount: photoDocs.length,
-          wccCount: wccRecords.length,
-          dcCount: dcRecords.length,
-          signedWccCount: signedDocs.filter((d: any) => d.documentType === "signed_wcc").length,
-          signedDcCount: signedDocs.filter((d: any) => d.documentType === "signed_dc").length,
-        },
-      };
-    });
-  }
+  const stores = isBoltMode
+    ? projectStoresFromCanonicalRecords(estimate, items, masterStores, challans, docs, execStores)
+    : execStores;
 
   const projectDocuments = Array.isArray(docs)
     ? docs.filter((doc: any) => !doc?.storeCode || ["po", "transport_receipt", "extra"].includes(doc?.documentType))
@@ -314,6 +369,8 @@ const loadProjectDataFallback = async (estimate: Estimate, authHeader: Record<st
     stores,
     projectDocuments,
     invoices: invoice ? [invoice] : [],
+    allExecutionDocuments: docs,
+    executionOverlays: execStores,
   });
 };
 
@@ -1892,6 +1949,7 @@ const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({
   brands,
   stores: masterStores,
   products,
+  canonicalChallans = [],
   token,
   onBack,
   onOpenWcc,
@@ -1919,14 +1977,14 @@ const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({
     try {
       if (isBoltMode) {
         // In Bolt mode the /api/projects/:id route doesn't exist — go straight to fallback.
-        setData(await loadProjectDataFallback(estimate, authHeader, token));
+        setData(await loadProjectDataFallback(estimate, masterStores, authHeader, token));
       } else {
         try {
           const payload = await fetchJson(`/api/projects/${estimate.id}`, { headers: authHeader });
           setData(normalizeProjectData(payload));
         } catch (err: any) {
           if (!String(err?.message || "").includes("instead of JSON")) throw err;
-          setData(await loadProjectDataFallback(estimate, authHeader, token));
+          setData(await loadProjectDataFallback(estimate, masterStores, authHeader, token));
         }
       }
     } catch (e: any) {
@@ -1934,9 +1992,34 @@ const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({
     } finally {
       setLoading(false);
     }
-  }, [estimate?.id, token, refreshKey, externalRefreshKey]);
+  }, [estimate?.id, token, refreshKey, externalRefreshKey, masterStores]);
 
   React.useEffect(() => { load(); }, [load]);
+
+  // The parent owns canonical delivery_challans state. A successful dc-save
+  // updates it once, and Project Workspace immediately rebuilds its derived
+  // store rows without waiting for a second network refresh.
+  React.useEffect(() => {
+    if (!isBoltMode || !data || !estimate?.id) return;
+    const challans = canonicalChallans.filter(challan => challan.estimateId === estimate.id);
+    // The selected-project cache begins empty while its first project request
+    // is in flight. Do not let that transient empty cache erase the canonical
+    // rows just fetched by the workspace; successful WCC saves always supply
+    // a concrete challan row and update immediately below.
+    if (challans.length === 0) return;
+    setData(prev => prev ? {
+      ...prev,
+      challans,
+      stores: projectStoresFromCanonicalRecords(
+        estimate,
+        prev.items,
+        masterStores,
+        challans,
+        prev.allExecutionDocuments || [],
+        prev.executionOverlays || [],
+      ),
+    } : prev);
+  }, [canonicalChallans, estimate, masterStores]);
 
   React.useEffect(() => {
     setActiveTab(initialTab);
