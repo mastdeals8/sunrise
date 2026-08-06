@@ -1151,110 +1151,103 @@ const WccTab: React.FC<{
         </div>
       </div>
 
-      {/* Per-store WCC status */}
+      {/* Per-store WCC status — compact table */}
       {stores.length === 0 ? (
         <div className="bg-white border border-slate-200 rounded-xl p-8 text-center text-slate-400">
           <FileCheck2 className="w-8 h-8 mx-auto mb-2 opacity-30" />
           <p className="text-sm font-semibold">No stores found</p>
         </div>
       ) : (
-        stores.map(store => {
-          const allDcs = [...store.wccRecords, ...store.dcRecords];
-          const hasDcs = allDcs.length > 0;
-          const hasSigned = store.signedWccDocuments.length > 0;
-
-          return (
-            <div key={store.id} className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-              {/* Store header */}
-              <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <MapPin className="w-3.5 h-3.5 text-orange-400 shrink-0" />
-                  <span className="font-bold text-sm text-slate-800">{store.storeName || store.storeCode}</span>
-                  <Chip label={store.storeCode} />
-                </div>
-                <div className="flex items-center gap-1.5">
-                  {hasDcs ? (
-                    <span className="text-[11px] font-black px-2 py-0.5 rounded bg-blue-100 text-blue-700">Generated</span>
-                  ) : (
-                    <span className="text-[11px] font-black px-2 py-0.5 rounded bg-slate-100 text-slate-500">Pending WCC</span>
-                  )}
-                  {hasSigned ? (
-                    <span className="text-[11px] font-black px-2 py-0.5 rounded bg-emerald-100 text-emerald-700">Signed Uploaded</span>
-                  ) : (
-                    <span className="text-[11px] font-black px-2 py-0.5 rounded bg-amber-100 text-amber-700">Pending Signed WCC</span>
-                  )}
-                </div>
-              </div>
-
-              <div className="p-4 space-y-3">
-                {/* WCC list */}
-                {hasDcs ? (
-                  <div>
-                    <p className="text-[10px] font-black uppercase tracking-wider text-slate-400 mb-1.5">WCC / DC Records</p>
-                    <div className="space-y-1.5">
-                      {allDcs.map(dc => (
-                        <div key={dc.id} className="flex items-center gap-2 px-3 py-2 border border-slate-100 rounded-lg hover:bg-slate-50">
-                          <FileCheck2 className="w-4 h-4 text-blue-500 shrink-0" />
-                          <span className="text-xs font-mono font-bold text-slate-700 flex-1">{dc.dcNumber}</span>
-                          <button type="button" onClick={() => onPreviewWcc(dc)} className="p-1 text-slate-400 hover:text-slate-700" title="View">
-                            <Eye className="w-3.5 h-3.5" />
-                          </button>
-                          <button type="button" onClick={() => onOpenWcc(dc)} className="p-1 text-slate-400 hover:text-slate-700" title="Edit">
-                            <Upload className="w-3.5 h-3.5" />
-                          </button>
-                          {isBoltMode ? (
-                            <button type="button" onClick={() => onPreviewWcc(dc)} className="p-1 text-slate-400 hover:text-slate-700" title="Print">
-                              <Printer className="w-3.5 h-3.5" />
-                            </button>
-                          ) : (
-                            <a
-                              href={`/api/operations/wcc-preview/${dc.id}`}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="p-1 text-slate-400 hover:text-slate-700"
-                              title="Print/Download"
-                            >
-                              <Printer className="w-3.5 h-3.5" />
-                            </a>
-                          )}
+        <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+          <table className="w-full text-xs">
+            <thead className="bg-slate-50 border-b border-slate-200">
+              <tr>
+                <th className="text-left px-3 py-2 text-[11px] font-black uppercase tracking-wide text-slate-500 w-8">#</th>
+                <th className="text-left px-3 py-2 text-[11px] font-black uppercase tracking-wide text-slate-500">Store</th>
+                <th className="text-left px-3 py-2 text-[11px] font-black uppercase tracking-wide text-slate-500">WCC / DC</th>
+                <th className="text-center px-3 py-2 text-[11px] font-black uppercase tracking-wide text-slate-500">WCC</th>
+                <th className="text-center px-3 py-2 text-[11px] font-black uppercase tracking-wide text-slate-500">Signed</th>
+                <th className="text-right px-3 py-2 text-[11px] font-black uppercase tracking-wide text-slate-500">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {stores.map((store, idx) => {
+                const allDcs = [...store.wccRecords, ...store.dcRecords];
+                const hasDcs = allDcs.length > 0;
+                const hasSigned = store.signedWccDocuments.length > 0;
+                return (
+                  <tr key={store.id} className="hover:bg-slate-50/60 align-middle">
+                    <td className="px-3 py-2 text-slate-400 font-mono">{idx + 1}</td>
+                    <td className="px-3 py-2">
+                      <div className="font-bold text-slate-800 leading-tight">{store.storeName || store.storeCode}</div>
+                      <div className="text-[10px] text-slate-400 font-mono mt-0.5">{store.storeCode}</div>
+                    </td>
+                    <td className="px-3 py-2">
+                      {hasDcs ? (
+                        <div className="flex flex-wrap gap-1">
+                          {allDcs.map(dc => (
+                            <span key={dc.id} className="inline-flex items-center gap-1 font-mono font-bold text-slate-700 bg-slate-50 border border-slate-200 rounded px-1.5 py-0.5">
+                              {dc.dcNumber}
+                            </span>
+                          ))}
                         </div>
-                      ))}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-2 py-1">
-                    <AlertCircle className="w-3.5 h-3.5 text-slate-300" />
-                    <span className="text-xs text-slate-400">No WCC generated yet</span>
-                    <button
-                      type="button"
-                      onClick={() => onGenerateWcc(store.storeCode, store.storeId ?? null)}
-                      className="ml-auto inline-flex items-center gap-1 px-2.5 py-1 rounded border text-xs font-bold bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
-                    >
-                      <FilePlus className="w-3 h-3" /> Generate
-                    </button>
-                  </div>
-                )}
-
-                {/* Signed WCC */}
-                <div>
-                  <p className="text-[10px] font-black uppercase tracking-wider text-slate-400 mb-1.5">Signed WCC</p>
-                  {hasSigned ? (
-                    <div className="space-y-1.5">
-                      {store.signedWccDocuments.map(doc => (
-                        <DocRow key={doc.id} doc={doc} token={token} onDelete={deleteDoc} />
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="flex items-center gap-2 py-1">
-                      <AlertCircle className="w-3.5 h-3.5 text-slate-300" />
-                      <span className="text-xs text-slate-400">Pending Signed WCC</span>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          );
-        })
+                      ) : (
+                        <span className="text-slate-400 italic">—</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 text-center">
+                      {hasDcs ? (
+                        <span className="inline-block px-2 py-0.5 rounded text-[10px] font-black bg-blue-100 text-blue-700">Done</span>
+                      ) : (
+                        <span className="inline-block px-2 py-0.5 rounded text-[10px] font-black bg-slate-100 text-slate-400">Pending</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 text-center">
+                      {hasSigned ? (
+                        <span className="inline-block px-2 py-0.5 rounded text-[10px] font-black bg-emerald-100 text-emerald-700">Uploaded</span>
+                      ) : (
+                        <span className="inline-block px-2 py-0.5 rounded text-[10px] font-black bg-amber-100 text-amber-700">Pending</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      <div className="inline-flex items-center gap-1 justify-end">
+                        {hasDcs ? (
+                          allDcs.map(dc => (
+                            <React.Fragment key={dc.id}>
+                              <button type="button" onClick={() => onPreviewWcc(dc)} className="p-1 text-slate-400 hover:text-blue-600" title="View">
+                                <Eye className="w-3.5 h-3.5" />
+                              </button>
+                              <button type="button" onClick={() => onOpenWcc(dc)} className="p-1 text-slate-400 hover:text-slate-700" title="Edit">
+                                <Upload className="w-3.5 h-3.5" />
+                              </button>
+                              {isBoltMode ? (
+                                <button type="button" onClick={() => onPreviewWcc(dc)} className="p-1 text-slate-400 hover:text-slate-700" title="Print">
+                                  <Printer className="w-3.5 h-3.5" />
+                                </button>
+                              ) : (
+                                <a href={`/api/operations/wcc-preview/${dc.id}`} target="_blank" rel="noreferrer" className="p-1 text-slate-400 hover:text-slate-700" title="Print">
+                                  <Printer className="w-3.5 h-3.5" />
+                                </a>
+                              )}
+                            </React.Fragment>
+                          ))
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => onGenerateWcc(store.storeCode, store.storeId ?? null)}
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded border text-[11px] font-bold bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
+                          >
+                            <FilePlus className="w-3 h-3" /> Generate
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   );
