@@ -118,7 +118,7 @@ const ProjectDocumentsPage: React.FC = () => {
     const list: DocRow[] = [];
 
     if (executionDocs.length > 0) {
-      executionDocs.forEach((doc) => {
+      executionDocs.filter((doc) => doc.documentType !== "wcc_photo").forEach((doc) => {
         const est = estimates.find((e) => e.id === doc.estimateId);
         const dc = doc.deliveryChallanId ? challans.find((c) => c.id === doc.deliveryChallanId) : null;
         list.push({

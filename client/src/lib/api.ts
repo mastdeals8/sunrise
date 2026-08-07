@@ -150,6 +150,28 @@ export interface DashboardStats {
   }>;
 }
 
+/**
+ * Canonical delivery_challans predicates used by every Bolt summary.  WCC
+ * images are deliberately not execution documents; they live only in a
+ * challan's metadata.photos collection.
+ */
+export const isActiveDeliveryChallan = (challan: any) =>
+  challan?.status !== "deleted" && !challan?.metadata?.deleted;
+
+export const isWccDeliveryChallan = (challan: any) =>
+  String(challan?.documentType ?? challan?.document_type ?? "").toLowerCase() === "wcc"
+  || /^(abfrl|ablbl)$/i.test(String(challan?.clientFormat ?? challan?.client_format ?? ""));
+
+export const deliveryChallanCounts = (challans: any[]) => {
+  const active = challans.filter(isActiveDeliveryChallan);
+  const wcc = active.filter(isWccDeliveryChallan);
+  return {
+    active: active.length,
+    wcc: wcc.length,
+    pending: active.filter((challan: any) => challan.status === "pending" || challan.status === "draft").length,
+  };
+};
+
 export async function fetchDashboard(
   token: string | null,
   startDate: string,
@@ -197,6 +219,10 @@ export async function fetchDashboard(
   const filteredDc = deliveryChallans.filter((dc: any) =>
     inRange(dc.createdAt || dc.deliveryDate)
   );
+  // Financial widgets honor the selected date range. Workflow counters do
+  // not: Projects and the WCC register show the current canonical register,
+  // so filtering this subset by a dashboard-only date range caused drift.
+  const challanCounts = deliveryChallanCounts(deliveryChallans);
 
   const recentItems = [
     ...filteredEst.slice(-5).map((e: any) => ({
@@ -228,10 +254,10 @@ export async function fetchDashboard(
       estimatesAwaitingPo: filteredEst.filter((e: any) => e.status === "awaiting_po").length,
       estimatesApproved: filteredEst.filter((e: any) => e.status === "approved").length,
       poReceived: filteredEst.filter((e: any) => e.status === "po_received").length,
-      dcPending: filteredDc.filter((dc: any) => dc.status === "pending").length,
-      dcDelivered: filteredDc.filter(
-        (dc: any) => dc.status === "delivered" || dc.status === "completed"
-      ).length,
+      // The dashboard WCC number intentionally has no status shortcut: it is
+      // the same active WCC set used by Projects and the WCC register.
+      dcPending: challanCounts.pending,
+      dcDelivered: challanCounts.wcc,
       invoicePending: invoices.filter((inv: any) => inv.status === "unpaid").length,
       invoicePaid: invoices.filter((inv: any) => inv.status === "paid").length,
       invoiceOverdue: invoices.filter((inv: any) => inv.status === "overdue").length,
@@ -241,7 +267,7 @@ export async function fetchDashboard(
       storesPending: executionStores.filter((s: any) => s.status === "pending_execution").length,
       invoicesReady: invoices.filter((inv: any) => inv.status === "unpaid").length,
       invoicesSubmitted: invoices.filter((inv: any) => inv.status === "submitted").length,
-      dcWccPending: filteredDc.filter((dc: any) => dc.status === "pending").length,
+      dcWccPending: challanCounts.pending,
     },
     recentActivity: recentItems,
   };

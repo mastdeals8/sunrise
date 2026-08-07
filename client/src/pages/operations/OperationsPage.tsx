@@ -2479,18 +2479,9 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
             hPct: h,
             z: tileIndex + 1,
           });
-          if (eid) {
-            registerExecutionDocument(token, {
-              estimateId: eid,
-              storeCode: sc !== "wcc" ? sc : "",
-              documentType: "wcc_photo",
-              filePath: saved,
-              originalFileName: arr[i].name,
-              mimeType: arr[i].type || null,
-              fileSize: arr[i].size || null,
-              uploadedVia: "wcc_builder",
-            }).catch(console.warn);
-          }
+          // Embedded WCC artwork belongs only to metadata.photos on the
+          // delivery_challans record. Do not create an execution_documents
+          // row: doing so made it appear as an installation photo elsewhere.
         }
       } else {
         for (let i = 0; i < arr.length; i++) {
@@ -3121,7 +3112,13 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
 
       if (res.ok) {
         if (!savedChallan) savedChallan = await res.clone().json().catch(() => null);
-        showSuccess(`WCC "${savedChallan?.dcNumber || dcNumberVal}" ${editingDcId ? "updated" : "created"} successfully!`);
+        // dc-save owns numbering. Replace an empty/client placeholder with
+        // its returned canonical number before any editor/preview/print can
+        // render, and merge that exact row into every local consumer.
+        const finalDcNumber = String(savedChallan?.dcNumber || (savedChallan as any)?.dc_number || dcNumberVal || "").trim();
+        if (!finalDcNumber) throw new Error("Delivery challan saved without a document number.");
+        setDcNumberVal(finalDcNumber);
+        showSuccess(`WCC "${finalDcNumber}" ${editingDcId ? "updated" : "created"} successfully!`);
         if (!opts?.keepOpen) {
           setShowDcModal(false);
           setEditingDcId(null);
@@ -3130,10 +3127,10 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
           // user sees the real DC number (replacing any temporary value)
           // and subsequent saves become updates rather than duplicate creates.
           setEditingDcId(savedChallan.id);
-          setDcNumberVal(savedChallan.dcNumber || dcNumberVal);
+          setDcNumberVal(finalDcNumber);
         }
         markWccPristine();
-        if (savedChallan) upsertCanonicalChallan(savedChallan);
+        if (savedChallan) upsertCanonicalChallan({ ...savedChallan, dcNumber: finalDcNumber });
         return true;
       }
       return false;

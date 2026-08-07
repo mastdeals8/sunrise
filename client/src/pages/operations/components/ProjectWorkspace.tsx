@@ -1,6 +1,6 @@
 import React from "react";
 import { isBoltMode, supabase } from "../../../lib/supabase";
-import { fetchEstimateItems, fetchDeliveryChallansForEstimate, fetchExecutionStores, fetchExecutionDocuments, fetchInvoiceForEstimate, uploadToStorage, registerExecutionDocument, deleteExecutionDocument, openExecutionDocument } from "../../../lib/api";
+import { fetchEstimateItems, fetchDeliveryChallansForEstimate, fetchExecutionStores, fetchExecutionDocuments, fetchInvoiceForEstimate, uploadToStorage, registerExecutionDocument, deleteExecutionDocument, openExecutionDocument, isActiveDeliveryChallan, isWccDeliveryChallan } from "../../../lib/api";
 import { ArrowLeft, Camera, CircleCheck as CheckCircle, CircleCheck as CheckCircle2, ChevronRight, Clock, Download, ExternalLink, Eye, File, FileCheck2, FilePlus, FileText, FileUp, Image as ImageIcon, IndianRupee, MapPin, Package, Paperclip, Printer, RefreshCw, Trash2, TrendingUp, Truck, Upload, X, CircleAlert as AlertCircle, Activity as ActivityIcon, Zap } from "lucide-react";
 import { StatusBadge } from "@/components/ui-kit";
 import type { Client, Brand, Store, Estimate, DeliveryChallan, Product } from "../types";
@@ -246,9 +246,14 @@ const normalizeProjectData = (payload: any): ProjectData => ({
   })) : [],
 });
 
-const isActiveChallan = (challan: any) => challan?.status !== "deleted" && !challan?.metadata?.deleted;
+const isActiveChallan = isActiveDeliveryChallan;
 const challanStoreCode = (challan: any) => String(challan?.metadata?.storeCode ?? challan?.storeCode ?? "").trim();
-const isWccChallan = (challan: any) => isAblblFormat(challan?.clientFormat) || challan?.documentType === "wcc";
+const isWccChallan = isWccDeliveryChallan;
+
+// Installation photos are exclusively files uploaded through Upload Photos.
+// `wcc_photo` is a historic, internal WCC-builder artifact and must never
+// leak into project photos, execution counts, or general documents.
+const isInstallationPhoto = (doc: any) => doc?.documentType === "photo";
 
 const estimateStoreScope = (estimate: Estimate, items: any[], masterStores: Store[], challans: DeliveryChallan[]) => {
   const grouping = (estimate.storeGrouping || {}) as Record<string, any>;
@@ -310,7 +315,7 @@ export const projectStoresFromCanonicalRecords = (
     const storeDocs = documents.filter(doc => String(doc?.storeCode || "").trim() === scope.storeCode);
     const wccRecords = storeChallans.filter(isWccChallan);
     const dcRecords = storeChallans.filter(challan => !isWccChallan(challan));
-    const photoDocuments = storeDocs.filter(doc => doc.documentType === "photo" || doc.documentType === "wcc_photo");
+    const photoDocuments = storeDocs.filter(isInstallationPhoto);
     const signedWccDocuments = storeDocs.filter(doc => doc.documentType === "signed_wcc" || doc.documentType === "signed_dc");
     return normalizeStoreRow({
       id: Number(overlay?.id || 0) || -(index + 1),
@@ -380,13 +385,17 @@ const isImg = (doc: ExecDoc) =>
     /\.(png|jpe?g|gif|webp)$/i.test(doc.originalFileName || doc.filePath));
 
 const statusBillingLabel = (row: ExecStoreRow) => {
-  if (row.billingReady) return { label: "Billing Ready", cls: "bg-emerald-50 text-emerald-700 border-emerald-200" };
-  const p = row.stats.photoCount > 0;
-  const w = (row.stats.wccCount + row.stats.dcCount) > 0;
-  const s = (row.stats.signedWccCount + row.stats.signedDcCount) > 0;
-  if (s && w && p) return { label: "Complete", cls: "bg-blue-50 text-blue-700 border-blue-200" };
-  if (w || p) return { label: "In Progress", cls: "bg-amber-50 text-amber-700 border-amber-200" };
-  return { label: "Pending", cls: "bg-slate-50 text-slate-500 border-slate-200" };
+  const hasPhotos = row.stats.photoCount > 0;
+  const hasWcc = row.stats.wccCount > 0;
+  const hasSignedWcc = row.stats.signedWccCount > 0;
+  // A single, data-derived progression. Existing completed rows remain
+  // completed; every other stage is derived from its canonical record.
+  if (row.status === "completed") return { label: "Completed", cls: "bg-slate-100 text-slate-700 border-slate-200" };
+  if (row.billingReady) return { label: "Invoice Ready", cls: "bg-emerald-50 text-emerald-700 border-emerald-200" };
+  if (hasSignedWcc) return { label: "Signed WCC Uploaded", cls: "bg-blue-50 text-blue-700 border-blue-200" };
+  if (hasWcc) return { label: "WCC Generated", cls: "bg-amber-50 text-amber-700 border-amber-200" };
+  if (hasPhotos) return { label: "Photos Uploaded", cls: "bg-amber-50 text-amber-700 border-amber-200" };
+  return { label: "No Photos", cls: "bg-slate-50 text-slate-500 border-slate-200" };
 };
 
 const actionLabel = (entry: AuditEntry) => {
@@ -1076,7 +1085,7 @@ const WccTab: React.FC<{
   const [wccPickerOpen, setWccPickerOpen] = React.useState(false);
   const authHeader = { Authorization: `Bearer ${token}` };
 
-  const totalWcc = stores.reduce((s, r) => s + r.stats.wccCount + r.stats.dcCount, 0);
+  const totalWcc = stores.reduce((s, r) => s + r.stats.wccCount, 0);
   const totalSigned = stores.reduce((s, r) => s + r.stats.signedWccCount + r.stats.signedDcCount, 0);
 
   const deleteDoc = async (doc: ExecDoc) => {
@@ -1272,7 +1281,7 @@ const ExecutionTab: React.FC<{
   const stores = data.stores;
 
   const totalPhotos = stores.reduce((s, r) => s + r.stats.photoCount, 0);
-  const totalWcc = stores.reduce((s, r) => s + r.stats.wccCount + r.stats.dcCount, 0);
+  const totalWcc = stores.reduce((s, r) => s + r.stats.wccCount, 0);
   const totalSigned = stores.reduce((s, r) => s + r.stats.signedWccCount + r.stats.signedDcCount, 0);
   const totalBilling = stores.filter(s => s.billingReady).length;
 
@@ -2033,7 +2042,7 @@ const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({
   const brand = brands.find(b => b.id === estimate.brandId);
 
   const totalPhotos = data?.stores.reduce((s, r) => s + r.stats.photoCount, 0) ?? 0;
-  const totalWcc = data?.stores.reduce((s, r) => s + r.stats.wccCount + r.stats.dcCount, 0) ?? 0;
+  const totalWcc = data?.stores.reduce((s, r) => s + r.stats.wccCount, 0) ?? 0;
 
   const tabs: { key: ProjectTab; label: string; count?: number }[] = [
     { key: "overview", label: "Overview" },
