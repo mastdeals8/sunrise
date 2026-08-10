@@ -194,7 +194,9 @@ const InvoicePacketPage: React.FC = () => {
           const estimateId = Number(data.estimate?.id || 0);
           const docs = (data.executionDocuments || []).filter((d: any) => d.status !== "deleted" && d.status !== "replaced");
           const seen = new Set<string>();
-          const list: PacketPage[] = [{ id: "inv", label: "Client Billing Invoice", kind: "invoice", included: true }];
+          // Client-facing packet order is fixed: Estimate, Invoice, PO, then
+          // execution documents and installation photos.
+          const list: PacketPage[] = [];
           const byUploadTime = (a: any, b: any) => new Date(a.uploadedAt || a.createdAt || 0).getTime() - new Date(b.uploadedAt || b.createdAt || 0).getTime();
           const addFile = async (page: Omit<PacketPage, "included">) => {
             const raw = String(page.storagePath || page.filePath || "");
@@ -204,12 +206,14 @@ const InvoicePacketPage: React.FC = () => {
             if (signed) list.push(signed);
           };
 
+          if (data.estimate) list.push({ id: "est", label: `Estimate ${data.estimate.estimateNumber}`, kind: "estimate", included: true });
+          list.push({ id: "inv", label: "Client Billing Invoice", kind: "invoice", included: true });
+
           // Prefer the Estimate's PO reference, then fall back to the active PO
           // upload row used by the existing documents workflow.
           const poUpload = docs.filter((doc: any) => isPoType(doc.documentType)).sort(byUploadTime)[0];
           const poStoragePath = data.estimate?.poFilePath || poUpload?.storagePath || poUpload?.filePath;
           if (poStoragePath) await addFile({ id: "po", label: `Purchase Order (${data.estimate?.poNumber || "PO"})`, kind: "po", storagePath: poStoragePath, mimeType: poUpload?.mimeType });
-          if (data.estimate) list.push({ id: "est", label: `Estimate ${data.estimate.estimateNumber}`, kind: "estimate", included: true });
 
           // Project-level uploads sit after the Estimate and before store
           // execution. Preserve the same order in which users uploaded them.
@@ -406,10 +410,10 @@ const InvoicePacketPage: React.FC = () => {
             }
           } else {
             // EstimateDocument and InvoiceDocument are the canonical document
-            // renderers. Capture their dedicated A4 render surface, never the
-            // responsive packet preview (which has dashboard padding/columns).
-            const el = document.querySelector(`[data-packet-pdf-page="${p.id}"]`) as HTMLElement | null;
-            if (!el) continue;
+            // renderers. Capture the mounted packet page itself; an off-screen
+            // clone is not safe here because html2canvas paints it as blank.
+            const el = document.querySelector(`[data-packet-page="${p.id}"]`) as HTMLElement | null;
+            if (!el) throw new Error(`Missing rendered document page: ${p.label}`);
             const canvas = await html2canvas(el, {
               scale: 3,
               useCORS: true,
@@ -441,6 +445,17 @@ const InvoicePacketPage: React.FC = () => {
                 }
               },
             });
+            // Never append a silent blank page. This catches renderer/capture
+            // regressions at generation time instead of producing a broken
+            // packet that looks successful to the user.
+            const pixels = canvas.getContext("2d")?.getImageData(0, 0, canvas.width, canvas.height).data;
+            let hasInk = false;
+            if (pixels) {
+              for (let i = 0; i < pixels.length; i += 4 * 64) {
+                if (pixels[i] < 245 || pixels[i + 1] < 245 || pixels[i + 2] < 245) { hasInk = true; break; }
+              }
+            }
+            if (!hasInk) throw new Error(`Rendered document is blank: ${p.label}`);
             // Slice using the same 194 x 281 mm printable box as native print.
             const sliceHeight = PRINTABLE_CSS_H * 3;
             for (let offset = 0; offset < canvas.height; offset += sliceHeight) {
@@ -461,6 +476,9 @@ const InvoicePacketPage: React.FC = () => {
           }
         } catch (err) {
           console.warn(`[packet-pdf] Failed to add page ${p.label}:`, err);
+          // Estimate and Invoice are required generated documents. Never
+          // replace a failed renderer with a blank/unavailable placeholder.
+          if (p.kind === "estimate" || p.kind === "invoice") throw err;
           addUnavailablePage(p.label);
         }
       }
@@ -659,15 +677,6 @@ const InvoicePacketPage: React.FC = () => {
           )}
         </div>
       </div>
-      {/* The PDF source is deliberately separate from the responsive preview.
-          It mounts the same existing renderers at the exact 194 mm printable
-          width used by the normal Estimate print flow. */}
-      {packet && (
-        <div aria-hidden="true" style={{ position: "fixed", left: "-10000px", top: 0, width: `${STANDARD_PRINTABLE_CSS_WIDTH}px`, background: "#fff", pointerEvents: "none" }}>
-          <div data-packet-pdf-page="inv"><InvoicePacketDocument packet={packet} sellerProfile={sellerProfile} assetToken={token} /></div>
-          {packet.estimate && <div data-packet-pdf-page="est"><EstimatePacketPage packet={packet} sellerProfile={sellerProfile} assetToken={token} /></div>}
-        </div>
-      )}
     </div>
   );
 };

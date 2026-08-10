@@ -2,9 +2,9 @@
  * Server-side Invoice Packet PDF builder.
  *
  * Assembly order:
- *   1. Tax Invoice  — playwright renders the existing EstimateDocument/InvoiceFrontPage
- *   2. PO PDF       — all pages copied exactly via pdf-lib copyPages()
- *   3. Estimate     — playwright renders the existing EstimateDocument
+ *   1. Estimate     — playwright renders the existing EstimateDocument
+ *   2. Tax Invoice  — playwright renders the existing InvoiceDocument
+ *   3. PO PDF       — all pages copied exactly via pdf-lib copyPages()
  *   4. Per DC (non-deleted), in creation order:
  *      a. Transport receipt  — image → A4 page  |  PDF → copyPages
  *      b. Signed WCC/challan — image → A4 page  |  PDF → copyPages
@@ -258,9 +258,9 @@ export interface PacketBuildResult {
  * Build the complete invoice packet PDF server-side.
  *
  * Page order:
- *   1. Tax Invoice (browser-rendered)
- *   2. Purchase Order PDF (pdf-lib copyPages, ALL original pages)
- *   3. Estimate (browser-rendered)
+ *   1. Estimate (browser-rendered)
+ *   2. Tax Invoice (browser-rendered)
+ *   3. Purchase Order PDF (pdf-lib copyPages, ALL original pages)
  *   4. Per non-deleted DC:
  *      a. Transport receipt
  *      b. Signed WCC / Signed challan
@@ -306,39 +306,41 @@ export async function buildInvoicePacketPdf(params: {
   pageLog.push("=== Invoice Packet PDF — page sequence ===");
 
   // ------------------------------------------------------------------
-  // 2. Tax Invoice (browser-rendered via playwright)
-  // ------------------------------------------------------------------
-  pageLog.push("\n[Section 1] Tax Invoice");
-  try {
-    const invBuffer = await renderPageToPdf(invoiceId, "invoice", userId, username, role, port);
-    totalPages += await appendRenderedPdf(merged, invBuffer, "Tax Invoice", pageLog);
-  } catch (err: any) {
-    console.error("[pdfPacket] Failed to render Tax Invoice:", err.message);
-    pageLog.push(`  ⚠ FAILED to render Tax Invoice: ${err.message}`);
-  }
-
-  // ------------------------------------------------------------------
-  // 3. Purchase Order PDF (pdf-lib copyPages — all original pages)
-  // ------------------------------------------------------------------
-  if (estimate?.poFilePath) {
-    pageLog.push("\n[Section 2] Purchase Order");
-    totalPages += await appendPdfFile(merged, estimate.poFilePath, `PO (${estimate.poNumber || "PO"})`, pageLog);
-  } else {
-    pageLog.push("\n[Section 2] Purchase Order — no PO attached, skipped");
-  }
-
-  // ------------------------------------------------------------------
-  // 4. Estimate (browser-rendered via playwright)
+  // 2. Estimate (browser-rendered via the existing production renderer)
   // ------------------------------------------------------------------
   if (estimate) {
-    pageLog.push("\n[Section 3] Estimate");
+    pageLog.push("\n[Section 1] Estimate");
     try {
       const estBuffer = await renderPageToPdf(invoiceId, "estimate", userId, username, role, port);
       totalPages += await appendRenderedPdf(merged, estBuffer, `Estimate ${estimate.estimateNumber}`, pageLog);
     } catch (err: any) {
       console.error("[pdfPacket] Failed to render Estimate:", err.message);
       pageLog.push(`  ⚠ FAILED to render Estimate: ${err.message}`);
+      throw new Error(`Estimate PDF generation failed: ${err.message}`);
     }
+  }
+
+  // ------------------------------------------------------------------
+  // 3. Tax Invoice (browser-rendered via the existing production renderer)
+  // ------------------------------------------------------------------
+  pageLog.push("\n[Section 2] Tax Invoice");
+  try {
+    const invBuffer = await renderPageToPdf(invoiceId, "invoice", userId, username, role, port);
+    totalPages += await appendRenderedPdf(merged, invBuffer, "Tax Invoice", pageLog);
+  } catch (err: any) {
+    console.error("[pdfPacket] Failed to render Tax Invoice:", err.message);
+    pageLog.push(`  ⚠ FAILED to render Tax Invoice: ${err.message}`);
+    throw new Error(`Invoice PDF generation failed: ${err.message}`);
+  }
+
+  // ------------------------------------------------------------------
+  // 4. Purchase Order PDF (pdf-lib copyPages — all original pages)
+  // ------------------------------------------------------------------
+  if (estimate?.poFilePath) {
+    pageLog.push("\n[Section 3] Purchase Order");
+    totalPages += await appendPdfFile(merged, estimate.poFilePath, `PO (${estimate.poNumber || "PO"})`, pageLog);
+  } else {
+    pageLog.push("\n[Section 3] Purchase Order — no PO attached, skipped");
   }
 
   // ------------------------------------------------------------------
