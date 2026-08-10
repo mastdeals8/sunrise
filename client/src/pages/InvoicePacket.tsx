@@ -3,7 +3,7 @@ import { formatCurrency } from "@/utils/format";
 import { useAuth } from "../contexts/AuthContext";
 import { isAblblFormat } from "../../../shared/textFormat";
 import { Package, Search, Printer, Loader as Loader2, FileDown, TriangleAlert as AlertTriangle } from "lucide-react";
-import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
+import { PDFDocument, rgb } from "pdf-lib";
 import html2canvas from "html2canvas";
 import EstimateDocument from "../components/EstimateDocument";
 import InvoiceDocument from "../components/InvoiceDocument";
@@ -55,6 +55,10 @@ interface PacketPage {
   caption?: string | null;
   included: boolean;
 }
+
+// 194 mm is the printable width of the normal Estimate A4 flow: A4 less its
+// standard 8 mm print margins, expressed at the browser's 96 CSS dpi.
+const STANDARD_PRINTABLE_CSS_WIDTH = 733;
 
 const fitText = (value: unknown, max = 80) => {
   const text = String(value || "").replace(/\s+/g, " ").trim();
@@ -117,6 +121,7 @@ const InvoicePacketPage: React.FC = () => {
   const [sellerProfile, setSellerProfile] = useState<any>({});
   const [fromUrl, setFromUrl] = useState(false);
   const [pdfMode, setPdfMode] = useState<string | null>(null);
+  const [generatedPacketPdf, setGeneratedPacketPdf] = useState<Blob | null>(null);
 
   useEffect(() => {
     const u = new URLSearchParams(window.location.search);
@@ -153,7 +158,7 @@ const InvoicePacketPage: React.FC = () => {
 
   useEffect(() => {
     if (!selectedId) {
-      setPacket(null); setPages([]);
+      setPacket(null); setPages([]); setGeneratedPacketPdf(null);
       return;
     }
     const load = async () => {
@@ -182,6 +187,9 @@ const InvoicePacketPage: React.FC = () => {
           if (res.ok) data = await res.json();
         }
         if (data) {
+          // A generated PDF is the immutable source used by both Download and
+          // Print. Invalidate it whenever a different packet is assembled.
+          setGeneratedPacketPdf(null);
           setPacket(data);
           const estimateId = Number(data.estimate?.id || 0);
           const docs = (data.executionDocuments || []).filter((d: any) => d.status !== "deleted" && d.status !== "replaced");
@@ -274,12 +282,11 @@ const InvoicePacketPage: React.FC = () => {
                 : isPhotoType(d.documentType) ? 4 : 5;
               return rank(a) - rank(b) || new Date(a.uploadedAt || a.createdAt).getTime() - new Date(b.uploadedAt || b.createdAt).getTime();
             });
-            let installationPhotoNumber = 0;
-            let completionPhotoNumber = 0;
-            let additionalPhotoNumber = 0;
             for (const doc of ordered) await addFile({
               id: `exec-${doc.id}`,
-              label: `${storeLabel} — ${docTypeLabel(doc.documentType)}${isPhotoType(doc.documentType) ? ` ${["execution_photo", "completion_photo"].includes(doc.documentType) ? ++completionPhotoNumber : doc.documentType === "additional_photo" ? ++additionalPhotoNumber : ++installationPhotoNumber}` : ""}`,
+              label: isPhotoType(doc.documentType)
+                ? `${store?.name || "Store"} — ${storeCode || "—"}`
+                : `${storeLabel} — ${docTypeLabel(doc.documentType)}`,
               kind: isPhotoType(doc.documentType) ? "photo" : isSignedType(doc.documentType) ? "wcc" : "store-file",
               storagePath: doc.storagePath || doc.filePath,
               mimeType: doc.mimeType,
@@ -311,22 +318,6 @@ const InvoicePacketPage: React.FC = () => {
     return invoices.filter(i => i.invoiceNumber.toLowerCase().includes(q) || i.partyName.toLowerCase().includes(q));
   }, [invoices, search]);
 
-  const doPrint = () => {
-    const modeClass = `estimate-print-mode-${estimatePrintMode()}`;
-    document.body.classList.add(modeClass);
-    let cleaned = false;
-    const cleanup = () => {
-      if (cleaned) return;
-      cleaned = true;
-      document.body.classList.remove(modeClass);
-      window.removeEventListener("afterprint", cleanup);
-      window.removeEventListener("focus", cleanup);
-    };
-    window.addEventListener("afterprint", cleanup);
-    window.addEventListener("focus", cleanup);
-    window.print();
-  };
-
   const [building, setBuilding] = useState(false);
   const [missingDocs, setMissingDocs] = useState<{ store: string; missing: string[] }[] | null>(null);
 
@@ -353,26 +344,17 @@ const InvoicePacketPage: React.FC = () => {
     return gaps;
   };
 
-  const generateInvoicePacket = async (force = false) => {
-    if (!packet) return;
-    const gaps = computeMissing();
-    if (gaps.length && !force) {
-      setMissingDocs(gaps);
-      return;
-    }
-    setMissingDocs(null);
-    setBuilding(true);
-    try {
-      const pdf = await PDFDocument.create();
-      const A4_W = 595.28;
-      const A4_H = 841.89;
-      const MARGIN = 42;
-      const PRINT_MARGIN = 22.68; // 8 mm, identical to the native @page rule
-      const PRINTABLE_W = A4_W - PRINT_MARGIN * 2;
-      const PRINTABLE_H = A4_H - PRINT_MARGIN * 2;
-      const PRINTABLE_CSS_W = 733; // 194 mm at 96 CSS dpi
-      const PRINTABLE_CSS_H = 1062; // 281 mm at 96 CSS dpi
-      const invNum = packet.invoice?.invoiceNumber || String(selectedId);
+  const buildInvoicePacketPdf = async (): Promise<Blob> => {
+    if (!packet) throw new Error("No invoice packet is loaded");
+    const pdf = await PDFDocument.create();
+    const A4_W = 595.28;
+    const A4_H = 841.89;
+    const MARGIN = 42;
+    const PRINT_MARGIN = 22.68; // 8 mm, identical to the native @page rule
+    const PRINTABLE_W = A4_W - PRINT_MARGIN * 2;
+    const PRINTABLE_H = A4_H - PRINT_MARGIN * 2;
+    const PRINTABLE_CSS_W = STANDARD_PRINTABLE_CSS_WIDTH;
+    const PRINTABLE_CSS_H = 1062; // 281 mm at 96 CSS dpi
 
       const addUnavailablePage = (label: string) => {
         const page = pdf.addPage([A4_W, A4_H]);
@@ -404,20 +386,18 @@ const InvoicePacketPage: React.FC = () => {
               const img = isPng ? await pdf.embedPng(buf) : await pdf.embedJpg(buf);
               const maxW = A4_W - MARGIN * 2;
               // WCC scans are preserved as captured; photo pages reserve room
-              // for the document type and optional field caption.
+              // for the store identifier and optional field caption.
               const isPhoto = p.kind === "photo";
               const maxH = A4_H - (isPhoto ? 230 : MARGIN * 2);
               const scale = Math.min(maxW / img.width, maxH / img.height);
               const drawW = img.width * scale;
               const drawH = img.height * scale;
               const page = pdf.addPage([A4_W, A4_H]);
-              const [, documentType = p.kind === "photo" ? "Installation Photo" : "Signed Work Completion Certificate"] = p.label.split(" — ");
               if (isPhoto) {
-                page.drawText("Store Name:", { x: MARGIN, y: A4_H - 62, size: 8, color: rgb(0.4, 0.44, 0.5) });
-                page.drawText(fitText(p.storeName || "Store", 52), { x: MARGIN + 58, y: A4_H - 63, size: 13, color: rgb(0.08, 0.12, 0.18) });
-                page.drawText("Store Code:", { x: MARGIN, y: A4_H - 84, size: 8, color: rgb(0.4, 0.44, 0.5) });
-                page.drawText(fitText(p.storeCode || "—", 30), { x: MARGIN + 58, y: A4_H - 85, size: 11, color: rgb(0.08, 0.12, 0.18) });
-                page.drawText(documentType, { x: MARGIN, y: A4_H - 111, size: 11, color: rgb(0.85, 0.3, 0.07) });
+                page.drawText(
+                  fitText(`${p.storeName || "Store"} — ${p.storeCode || "—"}`, 72),
+                  { x: MARGIN, y: A4_H - 72, size: 13, color: rgb(0.08, 0.12, 0.18) },
+                );
                 if (p.caption) page.drawText(fitText(p.caption, 90), { x: MARGIN, y: 52, size: 9, color: rgb(0.35, 0.39, 0.45) });
               }
               page.drawImage(img, { x: (A4_W - drawW) / 2, y: isPhoto ? 70 + (maxH - drawH) / 2 : (A4_H - drawH) / 2, width: drawW, height: drawH });
@@ -425,7 +405,10 @@ const InvoicePacketPage: React.FC = () => {
               throw new Error(`Unsupported packet file type: ${contentType || pathname}`);
             }
           } else {
-            const el = document.querySelector(`[data-packet-page="${p.id}"]`) as HTMLElement | null;
+            // EstimateDocument and InvoiceDocument are the canonical document
+            // renderers. Capture their dedicated A4 render surface, never the
+            // responsive packet preview (which has dashboard padding/columns).
+            const el = document.querySelector(`[data-packet-pdf-page="${p.id}"]`) as HTMLElement | null;
             if (!el) continue;
             const canvas = await html2canvas(el, {
               scale: 3,
@@ -434,6 +417,9 @@ const InvoicePacketPage: React.FC = () => {
               logging: false,
               windowWidth: PRINTABLE_CSS_W,
               onclone: (doc: Document) => {
+                // Reuse the normal Estimate print rules verbatim. The packet
+                // does not add a second document stylesheet or resize the
+                // renderer; it only supplies the standard A4 printable width.
                 doc.body.classList.add(`estimate-print-mode-${estimatePrintMode()}`);
                 const printRules: string[] = [];
                 Array.from(doc.styleSheets).forEach(sheet => {
@@ -453,23 +439,6 @@ const InvoicePacketPage: React.FC = () => {
                   printStyle.textContent = printRules.join("\n");
                   doc.head.appendChild(printStyle);
                 }
-                const node = doc.querySelector(`[data-packet-page="${p.id}"]`) as HTMLElement | null;
-                if (!node) return;
-                node.style.width = `${PRINTABLE_CSS_W}px`;
-                node.style.padding = "0";
-                node.style.margin = "0";
-                node.style.maxWidth = "none";
-                node.style.overflow = "visible";
-                node.querySelectorAll<HTMLElement>(".a4-sheet, .invoice-print, .estimate-print").forEach(documentNode => {
-                  documentNode.style.width = "100%";
-                  documentNode.style.maxWidth = "none";
-                  documentNode.style.margin = "0";
-                  documentNode.style.paddingLeft = "0";
-                  documentNode.style.paddingRight = "0";
-                  documentNode.style.boxSizing = "border-box";
-                });
-                const sheet = node.querySelector(".a4-sheet") as HTMLElement | null;
-                if (sheet) sheet.style.minHeight = `${PRINTABLE_CSS_H}px`;
               },
             });
             // Slice using the same 194 x 281 mm printable box as native print.
@@ -496,26 +465,60 @@ const InvoicePacketPage: React.FC = () => {
         }
       }
 
-      if (pdf.getPageCount() === 0) {
-        alert("No pages could be assembled into a PDF. Check that documents are loaded.");
-        return;
-      }
+    if (pdf.getPageCount() === 0) {
+      throw new Error("No pages could be assembled into a PDF. Check that documents are loaded.");
+    }
 
-      const regular = await pdf.embedFont(StandardFonts.Helvetica);
-      const pageCount = pdf.getPageCount();
-      pdf.getPages().forEach((page, index) => {
-        const pageLabel = `Page ${index + 1} of ${pageCount}`;
-        page.drawText(pageLabel, { x: A4_W - MARGIN - regular.widthOfTextAtSize(pageLabel, 7), y: 14, size: 7, font: regular, color: rgb(0.4, 0.44, 0.5) });
-      });
-      const pdfBytes = await pdf.save();
-      const blob = new Blob([pdfBytes as BlobPart], { type: "application/pdf" });
+    const pdfBytes = await pdf.save();
+    return new Blob([pdfBytes as BlobPart], { type: "application/pdf" });
+  };
+
+  const runPacketAction = async (action: "download" | "print", force = false) => {
+    if (!packet) return;
+    const gaps = computeMissing();
+    if (gaps.length && !force) {
+      setMissingDocs(gaps);
+      return;
+    }
+    setMissingDocs(null);
+
+    // Open the print target during the user's click so popup protection does
+    // not turn Print into a second DOM/CSS rendering path.
+    const printWindow = action === "print" ? window.open("about:blank", "_blank") : null;
+    if (printWindow) {
+      printWindow.document.title = "Preparing invoice packet…";
+      printWindow.document.body.textContent = "Preparing invoice packet…";
+    }
+
+    setBuilding(true);
+    try {
+      const blob = generatedPacketPdf || await buildInvoicePacketPdf();
+      if (!generatedPacketPdf) setGeneratedPacketPdf(blob);
       const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `Invoice_Packet_${invNum}.pdf`;
-      a.click();
-      URL.revokeObjectURL(url);
+      if (action === "download") {
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `Invoice_Packet_${packet.invoice?.invoiceNumber || selectedId}.pdf`;
+        a.click();
+        window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      } else if (printWindow) {
+        printWindow.location.replace(url);
+        // The browser's PDF viewer owns printing from here. It prints these
+        // exact bytes instead of re-laying out the packet's preview DOM.
+        window.setTimeout(() => {
+          try { printWindow.print(); } catch { /* PDF viewer still exposes its own Print action */ }
+          window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+        }, 1000);
+      } else {
+        const a = document.createElement("a");
+        a.href = url;
+        a.target = "_blank";
+        a.rel = "noreferrer";
+        a.click();
+        window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      }
     } catch (err: any) {
+      printWindow?.close();
       alert("Invoice Packet generation failed: " + (err?.message || err));
     } finally {
       setBuilding(false);
@@ -585,11 +588,11 @@ const InvoicePacketPage: React.FC = () => {
               <div className="px-4 py-2 border-b border-slate-200 bg-slate-50 flex items-center justify-between gap-2">
                 <h3 className="font-bold text-sm shrink-0">Packet Pages ({included.length})</h3>
                 <div className="flex gap-1.5 flex-wrap">
-                  <button onClick={doPrint} className="flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold">
+                  <button onClick={() => runPacketAction("print")} disabled={building} className="flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-slate-900 hover:bg-slate-800 disabled:opacity-60 text-white text-xs font-semibold">
                     <Printer className="w-3 h-3" /> Print
                   </button>
                   <button
-                    onClick={() => generateInvoicePacket()}
+                    onClick={() => runPacketAction("download")}
                     disabled={building}
                     className="flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-orange-600 hover:bg-orange-700 disabled:opacity-60 text-white text-xs font-semibold"
                     title="Generate a single client-ready PDF in submission order"
@@ -633,7 +636,7 @@ const InvoicePacketPage: React.FC = () => {
                           <li key={i} className="rounded-lg bg-white/70 border border-amber-200 p-3"><b className="block mb-1">{g.store}</b>{g.missing.map(item => <span key={item} className="block text-rose-700">✕ {item}</span>)}</li>
                         ))}
                       </ul>
-                      <div className="mt-3 flex flex-wrap gap-2"><button onClick={() => generateInvoicePacket(true)} className="px-3 py-2 rounded-md bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold">Generate Anyway</button><button onClick={() => window.location.href = packet.estimate?.id ? `/operations?estimateId=${packet.estimate.id}#documents` : "/operations#documents"} className="px-3 py-2 rounded-md border border-amber-300 bg-white text-amber-900 text-xs font-semibold">Go Upload Documents</button></div>
+                      <div className="mt-3 flex flex-wrap gap-2"><button onClick={() => runPacketAction("download", true)} className="px-3 py-2 rounded-md bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold">Generate Anyway</button><button onClick={() => window.location.href = packet.estimate?.id ? `/operations?estimateId=${packet.estimate.id}#documents` : "/operations#documents"} className="px-3 py-2 rounded-md border border-amber-300 bg-white text-amber-900 text-xs font-semibold">Go Upload Documents</button></div>
                     </div>
                   </div>
                 </div>
@@ -656,33 +659,15 @@ const InvoicePacketPage: React.FC = () => {
           )}
         </div>
       </div>
-
-      <style>{`
-        @media print {
-          body { background: white !important; }
-          .packet-layout, .packet-preview-column { display: block !important; width: 100% !important; max-width: none !important; margin: 0 !important; padding: 0 !important; }
-          aside, header, nav, .print\\:hidden { display: none !important; }
-          .packet-print-root { width: 100% !important; max-width: none !important; margin: 0 !important; padding: 0 !important; }
-          .packet-page { display: block !important; width: 100% !important; max-width: none !important; min-height: 281mm !important; margin: 0 !important; padding: 0 !important; overflow: visible !important; }
-          .packet-page-break { break-after: page !important; page-break-after: always !important; }
-          .a4-sheet, .invoice-print, .estimate-print { width: 100% !important; max-width: none !important; min-height: 281mm !important; margin: 0 !important; padding-left: 0 !important; padding-right: 0 !important; box-sizing: border-box !important; }
-          .doc-preview-frame {
-            height: 270mm !important;
-            width: 100% !important;
-            border: none !important;
-            display: block;
-          }
-          .document-image { width: 100% !important; height: 270mm !important; object-fit: contain !important; }
-        }
-        .a4-sheet, .invoice-print { width: 100%; max-width: none; min-height: 281mm; margin: 0; padding: 0; box-sizing: border-box; }
-        .invoice-lines { border-collapse: collapse; }
-        .invoice-lines th, .invoice-lines td { border: 1px solid #cbd5e1; padding: 6px; text-align: center; vertical-align: top; }
-        .invoice-lines th { background: #f1f5f9; font-weight: 800; }
-        @media print { .invoice-lines thead { display: table-header-group; } .invoice-lines tr { break-inside: avoid; page-break-inside: avoid; } }
-        .summary-table > div { display: flex; justify-content: space-between; gap: 16px; padding: 5px 8px; border: 1px solid #cbd5e1; border-bottom: 0; }
-        .summary-table > div:last-child { border-bottom: 1px solid #cbd5e1; }
-        .summary-table .grand { font-size: 14px; background: #f1f5f9; border-top: 2px solid #0f172a; }
-      `}</style>
+      {/* The PDF source is deliberately separate from the responsive preview.
+          It mounts the same existing renderers at the exact 194 mm printable
+          width used by the normal Estimate print flow. */}
+      {packet && (
+        <div aria-hidden="true" style={{ position: "fixed", left: "-10000px", top: 0, width: `${STANDARD_PRINTABLE_CSS_WIDTH}px`, background: "#fff", pointerEvents: "none" }}>
+          <div data-packet-pdf-page="inv"><InvoicePacketDocument packet={packet} sellerProfile={sellerProfile} assetToken={token} /></div>
+          {packet.estimate && <div data-packet-pdf-page="est"><EstimatePacketPage packet={packet} sellerProfile={sellerProfile} assetToken={token} /></div>}
+        </div>
+      )}
     </div>
   );
 };

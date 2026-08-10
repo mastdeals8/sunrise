@@ -49,7 +49,19 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({ invoice: inv, estimat
   const companyName = sellerProfile?.name || sellerProfile?.companyName || "Sunrise Media";
   const logoSrc = companyAssetUrl(sellerProfile?.logoPath, assetToken);
 
-  return <article className="invoice-print a4-sheet bg-white text-slate-900" data-source="invoice-print" data-print-document="true">
+  return <>
+    {/* Keep the Invoice renderer self-contained so every caller (normal view,
+        packet preview, and packet PDF) receives the identical document. */}
+    <style>{`
+      .invoice-print { width: 100%; max-width: none; min-height: 281mm; margin: 0; padding: 0; box-sizing: border-box; }
+      .invoice-print .invoice-lines { border-collapse: collapse; }
+      .invoice-print .invoice-lines th, .invoice-print .invoice-lines td { border: 1px solid #cbd5e1; padding: 6px; text-align: center; vertical-align: top; }
+      .invoice-print .invoice-lines th { background: #f1f5f9; font-weight: 800; }
+      .invoice-print .summary-table > div { display: flex; justify-content: space-between; gap: 16px; padding: 5px 8px; border: 1px solid #cbd5e1; border-bottom: 0; }
+      .invoice-print .summary-table > div:last-child { border-bottom: 1px solid #cbd5e1; }
+      .invoice-print .summary-table .grand { font-size: 14px; background: #f1f5f9; border-top: 2px solid #0f172a; }
+    `}</style>
+    <article className="invoice-print a4-sheet bg-white text-slate-900" data-source="invoice-print" data-print-document="true">
     <header className="flex justify-between gap-6 border-b-2 border-slate-900 pb-4">
       <div className="flex gap-3 items-start">
         <InvoiceLogo src={logoSrc} companyName={companyName} />
@@ -79,7 +91,8 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({ invoice: inv, estimat
     <p className="mt-4 border-t border-slate-300 pt-3 text-xs"><b>Amount in words:</b> {amountInWords(inv.totalAmount || 0)}</p>
     {inv.remarks && <p className="mt-2 text-xs"><b>Remarks:</b> {inv.remarks}</p>}
     <footer className="mt-12 text-right text-xs"><p>For <b>{companyName.toUpperCase()}</b></p><div className="h-12"/><p className="font-bold">Authorised Signatory</p></footer>
-  </article>;
+    </article>
+  </>;
 };
 
 export default InvoiceDocument;
