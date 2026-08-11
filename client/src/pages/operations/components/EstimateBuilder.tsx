@@ -2756,7 +2756,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                       </div>
                       {headerExpanded && (
                         <>
-                          <label>
+                          <label className="eb-meta-estimate-number">
                             <span>Estimate No</span>
                             <input required readOnly value={estNumber} placeholder="System generated" className="eb-mono" />
                           </label>
@@ -2783,7 +2783,13 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                             <span>Estimate Type</span>
                             <select
                               value={normalizeFormatMode(estFormat)}
-                              onChange={(e) => setEstFormat(normalizeFormatMode(e.target.value))}
+                              onChange={(e) => {
+                                const nextFormat = normalizeFormatMode(e.target.value);
+                                setEstFormat(nextFormat);
+                                // Preserve the existing ABFRL default when a
+                                // user switches into that workflow.
+                                if (isAblblFormat(nextFormat) && !estAbfrlProjectType) setEstAbfrlProjectType("SELEX");
+                              }}
                             >
                               <option value="normal">Normal / Non-ABFRL</option>
                               <option value="ABLBL">ABFRL Estimate</option>
@@ -2815,24 +2821,37 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                               <select
                                 value={estAbfrlProjectType}
                                 onKeyDown={handleGstStepKeyDown}
-                                onChange={(e) => setEstAbfrlProjectType(e.target.value as "SELEX" | "CAPEX")}
+                              onChange={(e) => setEstAbfrlProjectType(e.target.value as "SELEX" | "CAPEX")}
                               >
                                 <option value="SELEX">SELEX</option>
                                 <option value="CAPEX">CAPEX</option>
                               </select>
                             </label>
                           ) : (
-                            <label>
-                              <span>GST Type</span>
-                              <select
-                                value={estGstType}
-                                onKeyDown={handleGstStepKeyDown}
-                                onChange={(e) => setEstGstType(e.target.value)}
-                              >
-                                <option value="CGST+SGST">CGST + SGST</option>
-                                <option value="IGST">IGST</option>
-                              </select>
-                            </label>
+                            <>
+                              <label>
+                                <span>GST Type</span>
+                                <select
+                                  value={estGstType}
+                                  onKeyDown={handleGstStepKeyDown}
+                                  onChange={(e) => setEstGstType(e.target.value)}
+                                >
+                                  <option value="CGST+SGST">CGST + SGST</option>
+                                  <option value="IGST">IGST</option>
+                                </select>
+                              </label>
+                              <label>
+                                <span>Project Type</span>
+                                <select
+                                  value={estAbfrlProjectType}
+                                  onChange={(e) => setEstAbfrlProjectType(e.target.value as "" | "SELEX" | "CAPEX")}
+                                >
+                                  <option value="">Not applicable</option>
+                                  <option value="SELEX">SELEX</option>
+                                  <option value="CAPEX">CAPEX</option>
+                                </select>
+                              </label>
+                            </>
                           )}
                           {clientBillingProfilesList.length > 0 && (
                             <div className="eb-meta-profile">
@@ -2932,7 +2951,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
 
                     <div className="eb-v2-shell" tabIndex={-1} onKeyDown={handleWorkspaceKeyDown}>
                       <div className="eb-v2-toolbar">
-                        {eIsAbfrl && <button type="button" onClick={openStorePickerAndFocusSearch}><Plus className="w-3 h-3" />Add Store</button>}
+                        {eIsAbfrl && <button type="button" data-est-add-store onClick={openStorePickerAndFocusSearch}><Plus className="w-3 h-3" />Add Store</button>}
                         <button type="button" onClick={addRowBelowSelection} disabled={!eClientIdNum || (eIsAbfrl && activeStoreIds.length === 0)}><Plus className="w-3 h-3" />Add Row</button>
                         <button type="button" onClick={copySelectedRows} disabled={selectedRowIndexes.length === 0}><Copy className="w-3 h-3" />Copy</button>
                         <button type="button" onClick={pasteAfterSelection} disabled={!rowClipboard || selectedRowIndexes.length === 0}>Paste</button>

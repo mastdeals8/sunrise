@@ -397,7 +397,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
   const [estFormat, setEstFormat] = useState("normal");
   // ABFRL project type: SELEX (no material code required) | CAPEX (material code required per row).
   // Only relevant when estFormat is ABLBL. See ARCHITECTURE_NOTES.md.
-  const [estAbfrlProjectType, setEstAbfrlProjectType] = useState<"SELEX" | "CAPEX">("SELEX");
+  const [estAbfrlProjectType, setEstAbfrlProjectType] = useState<"" | "SELEX" | "CAPEX">("");
   // Source/target stores for ABFRL multi-store row duplication.
   const [storeDupSource, setStoreDupSource] = useState("");
   const [storeDupTarget, setStoreDupTarget] = useState("");
@@ -1888,7 +1888,9 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
         transportAmount: 0,
         storeGrouping: isAbfrl && Object.keys(storeGrouping).length > 0 ? storeGrouping : null,
         billingProfileId: estBillingProfileId ? Number(estBillingProfileId) : null,
-        abfrlProjectType: isAblblFormat(estFormat) ? estAbfrlProjectType : null,
+        // CAPEX/SELEX uses the existing persisted project-type field. Normal
+        // estimates may record it without inheriting ABFRL validation/rules.
+        abfrlProjectType: estAbfrlProjectType || null,
       };
 
       const url = editingEstimateId ? `/api/operations/estimates/${editingEstimateId}` : "/api/operations/estimates";
@@ -2134,7 +2136,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
       setEstTitle(est.title || "");
       setEstDescription(est.description || "");
       setEstFormat(normalizeFormatMode(est.clientFormat));
-      setEstAbfrlProjectType((est.abfrlProjectType as "SELEX" | "CAPEX") || "SELEX");
+      setEstAbfrlProjectType((est.abfrlProjectType as "" | "SELEX" | "CAPEX") || (isAblblFormat(est.clientFormat) ? "SELEX" : ""));
       setEstSubject(est.subject || est.title || "");
       setEstBillingTo(est.billingTo || "");
       setEstShippingTo(est.shippingTo || "");
