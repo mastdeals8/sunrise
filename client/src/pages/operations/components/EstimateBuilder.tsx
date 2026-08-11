@@ -1092,7 +1092,9 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
     const baseIndex = selectedRowIndexes[selectedRowIndexes.length - 1] ?? activeCell?.rowIndex ?? estItems.length - 1;
     const baseRow = estItems[baseIndex];
     const sid = String(baseRow?.storeId || estItems[0]?.storeId || "");
-    if (!sid) return;
+    // Normal estimates use the existing unscoped-row model (`storeId: ""`).
+    // Only ABFRL rows require a selected Store Master scope.
+    if (isAblblFormat(estFormat) && !sid) return;
     const insertAt = Math.min(estItems.length, Math.max(0, baseIndex + 1));
     applyGridMutation(rows => [
       ...rows.slice(0, insertAt),
@@ -1393,8 +1395,12 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
 
   const storeBreakdownMemo = React.useMemo(() => {
     let grandMaterial = 0, grandSgst = 0, grandCgst = 0, grandIgst = 0;
-    const breakdown = activeStoreIds.map((sid: string) => {
-      const rows = estItems.filter((it: any) => String(it.storeId) === sid);
+    const isAbfrlEstimate = isAblblFormat(estFormat);
+    // A normal estimate is one unscoped item section. Empty storeId is the
+    // pre-existing representation and intentionally creates no store grouping.
+    const sectionIds = isAbfrlEstimate ? activeStoreIds : (estItems.length > 0 ? [""] : []);
+    const breakdown = sectionIds.map((sid: string) => {
+      const rows = sid ? estItems.filter((it: any) => String(it.storeId) === sid) : estItems;
       const productRows = rows.filter((r: any) => r.lineType === "product" || !r.lineType);
       const packingRows = rows.filter((r: any) => r.lineType === "packing");
       const installRows = rows.filter((r: any) => r.lineType === "installation");
@@ -1416,7 +1422,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
       return { sid, rows, productRows, packingRows, installRows, transportRows, materialBase, materialSgst, materialCgst, materialIgst, packAmt, implAmt, trans };
     });
     return { breakdown, grandMaterial, grandSgst, grandCgst, grandIgst, grandTotal: grandMaterial + grandSgst + grandCgst + grandIgst };
-  }, [estItems, activeStoreIds]);
+  }, [estItems, activeStoreIds, estFormat]);
 
   return (
         <div className="space-y-6">
@@ -2926,8 +2932,8 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
 
                     <div className="eb-v2-shell" tabIndex={-1} onKeyDown={handleWorkspaceKeyDown}>
                       <div className="eb-v2-toolbar">
-                        <button type="button" onClick={openStorePickerAndFocusSearch}><Plus className="w-3 h-3" />Add Store</button>
-                        <button type="button" onClick={addRowBelowSelection} disabled={activeStoreIds.length === 0}><Plus className="w-3 h-3" />Add Row</button>
+                        {eIsAbfrl && <button type="button" onClick={openStorePickerAndFocusSearch}><Plus className="w-3 h-3" />Add Store</button>}
+                        <button type="button" onClick={addRowBelowSelection} disabled={!eClientIdNum || (eIsAbfrl && activeStoreIds.length === 0)}><Plus className="w-3 h-3" />Add Row</button>
                         <button type="button" onClick={copySelectedRows} disabled={selectedRowIndexes.length === 0}><Copy className="w-3 h-3" />Copy</button>
                         <button type="button" onClick={pasteAfterSelection} disabled={!rowClipboard || selectedRowIndexes.length === 0}>Paste</button>
                         <button type="button" onClick={duplicateSelectedRows} disabled={selectedRowIndexes.length === 0}>Duplicate</button>
@@ -2985,7 +2991,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                         <span>Estimate Total <b>{formatCurrency(grandTotal)}</b></span>
                       </div>
 
-                      {(storePickerOpen || (activeStoreIds.length === 0 && storeEntryBlocked)) && (
+                      {eIsAbfrl && (storePickerOpen || (activeStoreIds.length === 0 && storeEntryBlocked)) && (
                         <div className="eb-store-picker-panel">
                           {storeEntryBlocked ? (
                             <div className="eb-store-gate">
@@ -3076,13 +3082,19 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                       )}
 
                       <div className="eb-sheet-grid-viewport">
-                        {activeStoreIds.length === 0 && (
+                        {eIsAbfrl && activeStoreIds.length === 0 && (
                           <div className="eb-empty-sheet">
                             Select a store to begin the estimate.
                           </div>
                         )}
+                        {!eIsAbfrl && estItems.length === 0 && (
+                          <div className="eb-empty-sheet">
+                            Add a row to begin the estimate.
+                          </div>
+                        )}
 
                     {storeBreakdown.map(({ sid, productRows, packingRows, installRows, transportRows, materialBase, materialSgst, materialCgst, materialIgst }) => {
+                      const isNormalEstimateScope = !eIsAbfrl && !sid;
                       const store = stores.find(s => String(s.id) === sid);
                       const hasPacking = packingRows.length > 0;
                       const hasInstall = installRows.length > 0;
@@ -3090,7 +3102,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                       const collapsed = collapsedStoreIds.includes(sid);
                       const previousStoreId = activeStoreIds[activeStoreIds.indexOf(sid) - 1] || "";
                       const nextStoreId = activeStoreIds[activeStoreIds.indexOf(sid) + 1] || "";
-                      const storeNameLabel = store?.name || estStoreOverrides[sid]?.storeName || `#${sid}`;
+                      const storeNameLabel = isNormalEstimateScope ? "Estimate Items" : (store?.name || estStoreOverrides[sid]?.storeName || `#${sid}`);
                       const storeCodeLabel = store?.storeCode || "";
                       const storeCityLabel = store?.city || estStoreOverrides[sid]?.storeCity || estStoreOverrides[sid]?.storeLocation || "";
                       return (

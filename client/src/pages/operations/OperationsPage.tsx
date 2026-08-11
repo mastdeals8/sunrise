@@ -1844,7 +1844,11 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
       }
       setEstItems(cleanedItems);
 
-      const storeGrouping = buildStoreGrouping(cleanedItems, estStoreOverrides, "0", "0");
+      // Normal estimates deliberately use unscoped rows. Store grouping is an
+      // ABFRL execution construct and must not be inferred for a normal job.
+      const storeGrouping = isAbfrl
+        ? buildStoreGrouping(cleanedItems, estStoreOverrides, "0", "0")
+        : {};
       const estimateSubtotal = normalizedItems.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
       const estimateTax = normalizedItems.reduce(
         (sum, item) => sum
@@ -1882,7 +1886,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
         packingPercent: 0,
         implementationPercent: 0,
         transportAmount: 0,
-        storeGrouping: Object.keys(storeGrouping).length > 0 ? storeGrouping : null,
+        storeGrouping: isAbfrl && Object.keys(storeGrouping).length > 0 ? storeGrouping : null,
         billingProfileId: estBillingProfileId ? Number(estBillingProfileId) : null,
         abfrlProjectType: isAblblFormat(estFormat) ? estAbfrlProjectType : null,
       };
@@ -2169,8 +2173,13 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
       });
       setEstStoreOverrides(overrides);
 
+      const editingAbfrl = isAblblFormat(est.clientFormat);
       const hydratedItems = items.map((item, idx) => {
-        const storeId = slToStore.get(Number(item.sl)) || String(est.storeId || "");
+        // Historical normal estimates are represented by unscoped rows, not
+        // an execution/store group. Keep that distinction when editing.
+        const storeId = editingAbfrl
+          ? (slToStore.get(Number(item.sl)) || String(est.storeId || ""))
+          : "";
         const lineType = (item.lineType || "product") as EstimateItemInput["lineType"];
         const rawRate = item.rate != null ? String(item.rate) : "0";
         const repairedRate = lineType === "packing" && parseRateInput(rawRate) === 0
