@@ -1398,9 +1398,17 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
     const isAbfrlEstimate = isAblblFormat(estFormat);
     // A normal estimate is one unscoped item section. Empty storeId is the
     // pre-existing representation and intentionally creates no store grouping.
-    const sectionIds = isAbfrlEstimate ? activeStoreIds : (estItems.length > 0 ? [""] : []);
+    const hasUnscopedRows = estItems.some((item: any) => !String(item.storeId || ""));
+    // Normal estimates may contain both ordinary unscoped rows and optional
+    // manually-added sites. Keep those optional sites as separate sections
+    // without making either one mandatory.
+    const sectionIds = isAbfrlEstimate
+      ? activeStoreIds
+      : [...(hasUnscopedRows ? [""] : []), ...activeStoreIds];
     const breakdown = sectionIds.map((sid: string) => {
-      const rows = sid ? estItems.filter((it: any) => String(it.storeId) === sid) : estItems;
+      const rows = sid
+        ? estItems.filter((it: any) => String(it.storeId) === sid)
+        : estItems.filter((it: any) => !String(it.storeId || ""));
       const productRows = rows.filter((r: any) => r.lineType === "product" || !r.lineType);
       const packingRows = rows.filter((r: any) => r.lineType === "packing");
       const installRows = rows.filter((r: any) => r.lineType === "installation");
@@ -2932,7 +2940,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
 
                     <div className="eb-v2-shell" tabIndex={-1} onKeyDown={handleWorkspaceKeyDown}>
                       <div className="eb-v2-toolbar">
-                        {eIsAbfrl && <button type="button" onClick={openStorePickerAndFocusSearch}><Plus className="w-3 h-3" />Add Store</button>}
+                        <button type="button" onClick={openStorePickerAndFocusSearch}><Plus className="w-3 h-3" />Add Store</button>
                         <button type="button" onClick={addRowBelowSelection} disabled={!eClientIdNum || (eIsAbfrl && activeStoreIds.length === 0)}><Plus className="w-3 h-3" />Add Row</button>
                         <button type="button" onClick={copySelectedRows} disabled={selectedRowIndexes.length === 0}><Copy className="w-3 h-3" />Copy</button>
                         <button type="button" onClick={pasteAfterSelection} disabled={!rowClipboard || selectedRowIndexes.length === 0}>Paste</button>
@@ -2991,7 +2999,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                         <span>Estimate Total <b>{formatCurrency(grandTotal)}</b></span>
                       </div>
 
-                      {eIsAbfrl && (storePickerOpen || (activeStoreIds.length === 0 && storeEntryBlocked)) && (
+                      {(storePickerOpen || (eIsAbfrl && activeStoreIds.length === 0 && storeEntryBlocked)) && (
                         <div className="eb-store-picker-panel">
                           {storeEntryBlocked ? (
                             <div className="eb-store-gate">
