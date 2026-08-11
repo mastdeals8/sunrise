@@ -1380,13 +1380,6 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
     setGstProfileSearch(`${normalizeDisplayName(bp.state || bp.branchLocationName)} — ${normalizeDisplayName(bp.legalCompanyName)} (${normalizeGstinPan(bp.gstin)})`);
   };
 
-  // Keep format and title in sync with client selection — in effects, not during render.
-  React.useEffect(() => {
-    const eClient = clients.find((c: any) => c.id === Number(estClientId));
-    const derived = normalizeFormatMode(eClient?.format);
-    if (estFormat !== derived) setEstFormat(derived);
-  }, [estClientId, clients]);
-
   React.useEffect(() => {
     const wanted = estSubject || estNumber || "";
     if (estTitle !== wanted) setEstTitle(wanted);
@@ -1732,8 +1725,10 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
               <div id="step-preview" />
               {(() => {
                 const eClient = clients.find(c => c.id === Number(estClientId));
-                const eClientFormat = normalizeFormatMode(eClient?.format);
-                const eIsAbfrl = isAblblFormat(eClientFormat);
+                // Estimate type is an explicit, persisted estimate field. It
+                // must not be inferred from (or overwritten by) the client:
+                // the same client can legitimately have normal and ABFRL jobs.
+                const eIsAbfrl = isAblblFormat(estFormat);
 
                 // activeStoreIds is memoized at component level — do not redeclare here
                 const eClientIdNum = Number(estClientId) || null;
@@ -2777,6 +2772,16 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                               required
                               autoFocus={!editingEstimateId}
                             />
+                          </label>
+                          <label>
+                            <span>Estimate Type</span>
+                            <select
+                              value={normalizeFormatMode(estFormat)}
+                              onChange={(e) => setEstFormat(normalizeFormatMode(e.target.value))}
+                            >
+                              <option value="normal">Normal / Non-ABFRL</option>
+                              <option value="ABLBL">ABFRL Estimate</option>
+                            </select>
                           </label>
                           <label>
                             <span>Brand{eIsAbfrl ? " *" : ""}</span>

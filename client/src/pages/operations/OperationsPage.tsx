@@ -1635,7 +1635,9 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     setEstStoreOverrides({});
     const selectedCli = clients.find(c => c.id === Number(clientIdVal));
     if (selectedCli) {
-      setEstFormat(normalizeFormatMode(selectedCli.format));
+      // Estimate type is chosen in the builder and persisted on the estimate.
+      // Do not overwrite it when a client is selected: one client can have
+      // both a normal job and an ABFRL project.
       // Seed Billing block with company name on line 1, address below.
       // Print/export expects this multi-line shape (whiteSpace: pre-wrap).
       const billingText = [
