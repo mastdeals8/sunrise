@@ -1396,16 +1396,11 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
   const storeBreakdownMemo = React.useMemo(() => {
     let grandMaterial = 0, grandSgst = 0, grandCgst = 0, grandIgst = 0;
     const isAbfrlEstimate = isAblblFormat(estFormat);
-    // Normal estimates retain their unscoped item section.  Manually added
-    // sites are optional, separate sections; neither makes the other required.
-    const hasUnscopedRows = estItems.some((item: any) => !String(item.storeId || ""));
-    const sectionIds = isAbfrlEstimate
-      ? activeStoreIds
-      : [...(hasUnscopedRows ? [""] : []), ...activeStoreIds];
+    // A normal estimate is one unscoped item section. Empty storeId is the
+    // pre-existing representation and intentionally creates no store grouping.
+    const sectionIds = isAbfrlEstimate ? activeStoreIds : (estItems.length > 0 ? [""] : []);
     const breakdown = sectionIds.map((sid: string) => {
-      const rows = sid
-        ? estItems.filter((it: any) => String(it.storeId) === sid)
-        : estItems.filter((it: any) => !String(it.storeId || ""));
+      const rows = sid ? estItems.filter((it: any) => String(it.storeId) === sid) : estItems;
       const productRows = rows.filter((r: any) => r.lineType === "product" || !r.lineType);
       const packingRows = rows.filter((r: any) => r.lineType === "packing");
       const installRows = rows.filter((r: any) => r.lineType === "installation");
@@ -1820,16 +1815,6 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                   setStoreHighlightIndex(0);
                   focusStoreSearch();
                 };
-                const openManualStoreEntry = () => {
-                  setStorePickerOpen(true);
-                  window.requestAnimationFrame(() => {
-                    document.querySelector<HTMLInputElement>("[data-est-manual-store-name]")?.focus();
-                  });
-                };
-                const openAddStore = () => {
-                  if (eIsAbfrl) openStorePickerAndFocusSearch();
-                  else openManualStoreEntry();
-                };
                 const selectHighlightedGstProfile = () => {
                   const profile = visibleBillingProfiles[gstProfileHighlightIndex] || visibleBillingProfiles[0];
                   if (!profile) return false;
@@ -1864,13 +1849,13 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                     } else {
                       setGstProfileOpen(false);
                     }
-                    openAddStore();
+                    openStorePickerAndFocusSearch();
                   }
                 };
                 const handleGstStepKeyDown = (event: React.KeyboardEvent<HTMLSelectElement>) => {
                   if (event.key !== "Tab" || event.shiftKey || clientBillingProfilesList.length > 0) return;
                   event.preventDefault();
-                  openAddStore();
+                  openStorePickerAndFocusSearch();
                 };
                 const availableStores = eligibleStores.filter(s => !activeStoreIds.includes(String(s.id)));
                 const filteredStores = availableStores
@@ -2255,7 +2240,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                   // Ctrl+Shift+S: open store picker (checked before Ctrl+S)
                   if ((event.ctrlKey || event.metaKey) && event.shiftKey && key === "s") {
                     event.preventDefault();
-                    openAddStore();
+                    openStorePickerAndFocusSearch();
                     return;
                   }
                   if ((event.ctrlKey || event.metaKey) && !event.shiftKey && key === "s") {
@@ -2395,7 +2380,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                   if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "s") {
                     event.preventDefault();
                     if (editing) { commit?.(); stopEditCell(); }
-                    openAddStore();
+                    openStorePickerAndFocusSearch();
                     return;
                   }
                   // Ctrl+S: save (always intercept — works while editing or not)
@@ -2966,11 +2951,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
 
                     <div className="eb-v2-shell" tabIndex={-1} onKeyDown={handleWorkspaceKeyDown}>
                       <div className="eb-v2-toolbar">
-                        <button
-                          type="button"
-                          data-est-add-store
-                          onClick={openAddStore}
-                        ><Plus className="w-3 h-3" />Add Store</button>
+                        {eIsAbfrl && <button type="button" data-est-add-store onClick={openStorePickerAndFocusSearch}><Plus className="w-3 h-3" />Add Store</button>}
                         <button type="button" onClick={addRowBelowSelection} disabled={!eClientIdNum || (eIsAbfrl && activeStoreIds.length === 0)}><Plus className="w-3 h-3" />Add Row</button>
                         <button type="button" onClick={copySelectedRows} disabled={selectedRowIndexes.length === 0}><Copy className="w-3 h-3" />Copy</button>
                         <button type="button" onClick={pasteAfterSelection} disabled={!rowClipboard || selectedRowIndexes.length === 0}>Paste</button>
@@ -3029,7 +3010,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                         <span>Estimate Total <b>{formatCurrency(grandTotal)}</b></span>
                       </div>
 
-                      {(storePickerOpen || (eIsAbfrl && activeStoreIds.length === 0 && storeEntryBlocked)) && (
+                      {eIsAbfrl && (storePickerOpen || (activeStoreIds.length === 0 && storeEntryBlocked)) && (
                         <div className="eb-store-picker-panel">
                           {storeEntryBlocked ? (
                             <div className="eb-store-gate">
@@ -3043,7 +3024,6 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                               {!eIsAbfrl && (
                                 <div className="eb-manual-store">
                                   <input
-                                    data-est-manual-store-name
                                     value={manualStoreName}
                                     onChange={(e) => setManualStoreName(e.target.value)}
                                     placeholder="Manual Store / Site / Location name"
