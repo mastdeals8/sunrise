@@ -80,6 +80,8 @@ const SafeImage: React.FC<React.ImgHTMLAttributes<HTMLImageElement> & { fallback
   return <img {...props} onError={(event) => { props.onError?.(event); setFailed(true); }} />;
 };
 
+import { orderedStoreKeysFromGrouping } from "./operations/utils/estimateOrdering";
+
 const docTypeLabel = (type: string) => ({
   photo: "Installation Photo", installation_photo: "Installation Photo", execution_photo: "Completion Photo",
   completion_photo: "Completion Photo", additional_photo: "Additional Photo",
@@ -235,19 +237,33 @@ const InvoicePacketPage: React.FC = () => {
             });
           }
 
-          // Order stores by execution-workflow order (the order they were added to the
-          // project), never alphabetical. Fall back to challan id for legacy data.
+          // Order stores by the Estimate's store sequence (the master order),
+          // never alphabetical, by store ID, by WCC/DC number, or by upload
+          // date. Fall back to challan id for legacy data.
+          const estimateGrouping = (data.estimate?.storeGrouping || {}) as Record<string, any>;
+          const estimateOrderedSids = orderedStoreKeysFromGrouping(estimateGrouping);
+          const estimateStoreCodeOrder = new Map<string, number>();
+          estimateOrderedSids.forEach((sid, i) => {
+            const masterStore = (data.stores || []).find((s: any) => s.id === Number(sid));
+            const code = String(masterStore?.storeCode || (masterStore as any)?.code || "").trim();
+            if (code) estimateStoreCodeOrder.set(code, i);
+          });
           const execOrder = new Map<string, number>();
           (data.executionStores || []).forEach((s: any, i: number) => {
             const code = String(s.code || s.storeCode || "");
-            if (code) execOrder.set(code, i);
+            if (code && !estimateStoreCodeOrder.has(code)) execOrder.set(code, estimateOrderedSids.length + i);
           });
+          const storeRank = (code: string): number => {
+            const er = estimateStoreCodeOrder.get(code);
+            if (er !== undefined) return er;
+            const xr = execOrder.get(code);
+            if (xr !== undefined) return xr;
+            return Infinity;
+          };
           const challans = [...(data.challans || [])].sort((a: any, b: any) => {
-            const oa = execOrder.get(storeCodeFor(a));
-            const ob = execOrder.get(storeCodeFor(b));
-            if (oa !== undefined && ob !== undefined) return oa - ob;
-            if (oa !== undefined) return -1;
-            if (ob !== undefined) return 1;
+            const oa = storeRank(storeCodeFor(a));
+            const ob = storeRank(storeCodeFor(b));
+            if (oa !== ob) return oa - ob;
             return Number(a.id) - Number(b.id);
           });
           const storeContexts: { storeCode: string; challans: any[] }[] = [];
@@ -255,9 +271,17 @@ const InvoicePacketPage: React.FC = () => {
             if (!storeCode || storeContexts.some(row => row.storeCode === storeCode)) return;
             storeContexts.push({ storeCode, challans: challans.filter(dc => storeCodeFor(dc) === storeCode) });
           };
+          // First: stores in Estimate order
+          estimateOrderedSids.forEach(sid => {
+            const masterStore = (data.stores || []).find((s: any) => s.id === Number(sid));
+            const code = String(masterStore?.storeCode || (masterStore as any)?.code || "").trim();
+            if (code) ensureStore(code);
+          });
+          // Then: any execution stores not in the estimate grouping (legacy)
           [...(data.executionStores || [])]
-            .sort((a: any, b: any) => Number(a.id || 0) - Number(b.id || 0))
+            .sort((a: any, b: any) => storeRank(String(a.storeCode || a.code || "").trim()) - storeRank(String(b.storeCode || b.code || "").trim()))
             .forEach((row: any) => ensureStore(String(row.storeCode || row.code || "").trim()));
+          // Then: any challans/docs whose store wasn't seen yet
           challans.forEach((dc: any) => ensureStore(storeCodeFor(dc)));
           docs.filter(isStoreScopeDoc).forEach((doc: any) => ensureStore(storeCodeFor(doc)));
           if (challans.some((dc: any) => !storeCodeFor(dc)) || docs.some((doc: any) => (isSignedType(doc.documentType) || isPhotoType(doc.documentType) || isStoreScopeDoc(doc)) && !storeCodeFor(doc))) {
@@ -332,7 +356,16 @@ const InvoicePacketPage: React.FC = () => {
     if (!pages.some(p => p.kind === "po" && p.filePath)) coreMissing.push("Purchase Order");
     if (!pages.some(p => p.kind === "estimate")) coreMissing.push("Estimate");
     if (coreMissing.length) gaps.push({ store: "Project-level", missing: coreMissing });
+    const estimateGrouping = (packet?.estimate?.storeGrouping || {}) as Record<string, any>;
+    const estimateOrderedSids = orderedStoreKeysFromGrouping(estimateGrouping);
+    const estimateOrderedStoreCodes = estimateOrderedSids
+      .map(sid => {
+        const masterStore = (packet?.stores || []).find((store: any) => store.id === Number(sid));
+        return String(masterStore?.storeCode || (masterStore as any)?.code || "").trim();
+      })
+      .filter(Boolean);
     const storeCodes = Array.from(new Set([
+      ...estimateOrderedStoreCodes,
       ...pages.map(p => p.storeCode),
       ...(packet?.executionStores || []).map((row: any) => String(row.storeCode || row.code || "").trim()),
       ...(packet?.challans || []).map((dc: any) => storeCodeFor(dc)),

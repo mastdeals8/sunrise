@@ -30,6 +30,39 @@ export const compareEstimateItems = <T extends EstimateLikeItem>(a: T, b: T) => 
 export const orderedEstimateItems = <T extends EstimateLikeItem>(items: T[]) =>
   [...items].sort(compareEstimateItems);
 
+/**
+ * Ordered store keys derived from storeGrouping alone (no estimate items).
+ * Uses the `itemSls` array in each group to determine the first (lowest)
+ * item SL per store, then sorts stores by that value. Stores without any
+ * matching SL fall back to their insertion order in the grouping object.
+ *
+ * This is the right helper when only `estimate.storeGrouping` is available
+ * (e.g. ProjectTrackerPanel, InvoicePacket). When estimate items are also
+ * available, prefer `orderedStoreKeysFromItems` which respects rowSortOrder.
+ */
+export const orderedStoreKeysFromGrouping = (
+  storeGrouping: Record<string, any> | null | undefined,
+): string[] => {
+  const grouping = storeGrouping || {};
+  const entries = Object.entries(grouping);
+  if (entries.length === 0) return [];
+
+  const firstSlPerStore: { sid: string; sl: number; insertOrder: number }[] = [];
+  entries.forEach(([sid, groupData], index) => {
+    const itemSls: number[] = Array.isArray(groupData) ? groupData : (groupData?.itemSls || []);
+    const sls = itemSls.map(Number).filter(n => Number.isFinite(n) && n > 0);
+    const minSl = sls.length ? Math.min(...sls) : Infinity;
+    firstSlPerStore.push({ sid, sl: minSl, insertOrder: index });
+  });
+
+  firstSlPerStore.sort((a, b) => {
+    if (a.sl !== b.sl) return a.sl - b.sl;
+    return a.insertOrder - b.insertOrder;
+  });
+
+  return firstSlPerStore.map(entry => entry.sid);
+};
+
 export const orderedStoreKeysFromItems = <T extends EstimateLikeItem>(
   items: T[],
   storeGrouping: Record<string, any> | null | undefined,

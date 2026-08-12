@@ -1,10 +1,11 @@
 import React from "react";
 import { Link } from "wouter";
-import { Clock, Briefcase, CheckCircle, MapPin } from "lucide-react";
+import { Clock, Briefcase, CircleCheck as CheckCircle, MapPin } from "lucide-react";
 import type { Client, Brand, Store, Estimate, DeliveryChallan } from "../types";
 import { displayFormatLabel, isAblblFormat, normalizeDisplayName } from "../../../../../shared/textFormat";
+import { orderedStoreKeysFromGrouping } from "../utils/estimateOrdering";
 import { KpiCard, StatusBadge, SectionHeader, Card } from "@/components/ui-kit";
-import { TrendingUp, Package, IndianRupee, AlertTriangle, Link2, ChevronDown } from "lucide-react";
+import { TrendingUp, Package, IndianRupee, TriangleAlert as AlertTriangle, Link2, ChevronDown } from "lucide-react";
 import { FieldLinkManager } from "@/components/FieldLinkManager";
 
 interface Invoice {
@@ -94,9 +95,11 @@ const ProjectTrackerPanel: React.FC<ProjectTrackerPanelProps> = ({
             const isAbfrl = isAblblFormat(est.clientFormat);
 
             // Build store rows: ABFRL = one row per store group; normal = one row for main store
+            // Preserve the exact sequence in which stores appear in the Estimate.
             const storeRows: { storeId: number; label: string }[] = [];
             if (isAbfrl && est.storeGrouping) {
-              Object.keys(est.storeGrouping as Record<string, any>).forEach(sid => {
+              const orderedSids = orderedStoreKeysFromGrouping(est.storeGrouping as Record<string, any>);
+              orderedSids.forEach(sid => {
                 const s = stores.find(x => x.id === Number(sid));
                 storeRows.push({ storeId: Number(sid), label: s ? `${s.storeCode || ""} — ${s.name}` : `Store #${sid}` });
               });

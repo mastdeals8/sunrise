@@ -6,6 +6,7 @@ import { StatusBadge } from "@/components/ui-kit";
 import type { Client, Brand, Store, Estimate, DeliveryChallan, Product } from "../types";
 import ProjectUploadModal, { type UploadMode } from "./ProjectUploadModal";
 import { isAblblFormat } from "../../../../../shared/textFormat";
+import { orderedStoreKeysFromGrouping } from "../utils/estimateOrdering";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -272,7 +273,11 @@ const estimateStoreScope = (estimate: Estimate, items: any[], masterStores: Stor
     });
   };
 
-  Object.entries(grouping).forEach(([storeId, group]) => add(Number(storeId) || null, group));
+  // Preserve the exact sequence in which stores appear in the Estimate.
+  orderedStoreKeysFromGrouping(grouping).forEach(sid => {
+    const group = grouping[sid];
+    add(Number(sid) || null, group);
+  });
   if (scope.size === 0 && estimate.storeId) add(estimate.storeId);
   if (scope.size === 0) {
     items.forEach(item => {
