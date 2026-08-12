@@ -1,7 +1,7 @@
 import React from "react";
 import { isBoltMode } from "../../../lib/supabase";
 import { fetchExecutionStores, createInvoice, uploadToStorage, registerExecutionDocument, openExecutionDocument } from "../../../lib/api";
-import { AlertTriangle, Briefcase, Camera, CheckCircle2, ChevronRight, Copy, Download, Edit3, Eye, File, FileCheck2, FilePlus, FileSpreadsheet, FileText, FileUp, Image as ImageIcon, Paperclip, Pen, Plus, Printer, ScanLine, Store as StoreIcon, Upload, X } from "lucide-react";
+import { TriangleAlert as AlertTriangle, Briefcase, Camera, CircleCheck as CheckCircle2, ChevronRight, Copy, Download, CreditCard as Edit3, Eye, File, FileCheck2, FilePlus, FileSpreadsheet, FileText, FileUp, Image as ImageIcon, Paperclip, Pen, Plus, Printer, ScanLine, Store as StoreIcon, Upload, X } from "lucide-react";
 import { isAblblFormat } from "../../../../../shared/textFormat";
 import { isServiceEstimateItem, serviceProductLabel } from "../../../../../shared/serviceProductDisplay";
 import { formatCurrency } from "../utils/formatters";
@@ -218,7 +218,7 @@ type EstimatePrintOptions = {
 };
 
 const DEFAULT_PRINT_OPTIONS: EstimatePrintOptions = {
-  layout: "portrait",
+  layout: "landscape",
   scale: "100",
   mode: "compact",
 };
