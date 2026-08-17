@@ -34,6 +34,25 @@ function normalizeInvoicePayload(body: Record<string, unknown>) {
   return payload;
 }
 
+function synchronizeInvoiceTotals(payload: Record<string, unknown>): string | null {
+  if (!Array.isArray(payload.line_items)) return null;
+  let amount = 0;
+  let taxAmount = 0;
+  for (const [index, line] of payload.line_items.entries()) {
+    if (!line || typeof line !== "object") return `Invalid line item at position ${index + 1}`;
+    const row = line as Record<string, unknown>;
+    const rowAmount = Number(row.amount ?? row.totalPrice ?? row.total_price);
+    const rowTax = Number(row.taxAmount ?? row.tax_amount ?? 0);
+    if (!Number.isFinite(rowAmount) || !Number.isFinite(rowTax)) return `Invalid commercial values at line ${index + 1}`;
+    amount += rowAmount;
+    taxAmount += rowTax;
+  }
+  payload.amount = +amount.toFixed(2);
+  payload.tax_amount = +taxAmount.toFixed(2);
+  payload.total_amount = +(amount + taxAmount).toFixed(2);
+  return null;
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return corsResponse();
 
@@ -50,6 +69,8 @@ Deno.serve(async (req: Request) => {
   try {
     const body = await req.json() as Record<string, unknown>;
     const payload = normalizeInvoicePayload(body);
+    const totalsError = synchronizeInvoiceTotals(payload);
+    if (totalsError) return errorResponse(totalsError, 400);
 
     // Required: at minimum partyName and amount
     if (!payload.party_name) {

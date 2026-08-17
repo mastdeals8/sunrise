@@ -714,7 +714,7 @@ const InvoicePacketPage: React.FC = () => {
   );
 };
 
-const InvoicePacketDocument: React.FC<{ packet: PacketData; sellerProfile: any; assetToken?: string | null }> = ({ packet, sellerProfile, assetToken }) => <InvoiceDocument invoice={packet.invoice} estimate={packet.estimate} estimateItems={packet.estimateItems || []} client={packet.client} sellerProfile={sellerProfile} assetToken={assetToken} />;
+const InvoicePacketDocument: React.FC<{ packet: PacketData; sellerProfile: any; assetToken?: string | null }> = ({ packet, sellerProfile, assetToken }) => <InvoiceDocument invoice={packet.invoice} estimate={packet.estimate} client={packet.client} sellerProfile={sellerProfile} assetToken={assetToken} />;
 
 // Estimate page (inside a packet) — same A4 template, "Estimate" labeling.
 const EstimatePacketPage: React.FC<{ packet: PacketData; sellerProfile: any; assetToken?: string | null }> = ({ packet, sellerProfile, assetToken }) => {

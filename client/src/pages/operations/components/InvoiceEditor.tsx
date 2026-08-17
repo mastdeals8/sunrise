@@ -5,6 +5,7 @@ import { fetchEstimates, fetchEstimateItems, fetchDeliveryChallans, fetchInvoice
 import { Link } from "wouter";
 import { X, Plus, Trash2, Save, Send, Printer, ChevronLeft } from "lucide-react";
 import { normalizeDisplayName } from "../../../../../shared/textFormat";
+import { estimateItemsToInvoiceLines, invoiceLineToEditorLine } from "../utils/invoiceConversion";
 
 export interface InvoiceLineItem {
   itemName: string;
@@ -83,18 +84,7 @@ const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ open, invoiceId, estimate
                 setAttachments(docs as any[]);
               }
               const lines = Array.isArray(inv.lineItems || inv.line_items) ? (inv.lineItems || inv.line_items) : [];
-              setItems(lines.length > 0 ? lines.map((l: any) => ({
-                itemName: l.itemName || l.item_name || "",
-                description: l.description || "",
-                hsn: l.hsn || "",
-                quantity: Number(l.quantity || 0),
-                unit: l.unit || "nos",
-                rate: Number(l.rate || 0),
-                taxPercent: Number(l.taxPercent ?? l.tax_percent ?? 18),
-                amount: Number(l.amount || 0),
-                taxAmount: Number(l.taxAmount || l.tax_amount || 0),
-                totalAmount: Number(l.totalAmount || l.total_amount || 0),
-              })) : [blankRow()]);
+              setItems(lines.length > 0 ? lines.map(invoiceLineToEditorLine) : [blankRow()]);
             }
           } else {
             const r = await fetch(`/api/finance/invoices/${invoiceId}`, { headers: { Authorization: `Bearer ${token}` } });
@@ -114,20 +104,9 @@ const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ open, invoiceId, estimate
               setLinkedDc(data.deliveryChallan || null);
               const lines = Array.isArray(data.invoice.lineItems) ? data.invoice.lineItems : [];
               if (lines.length > 0) {
-                setItems(lines.map((l: any) => ({
-                  itemName: l.itemName || "",
-                  description: l.description || "",
-                  hsn: l.hsn || "",
-                  quantity: Number(l.quantity || 0),
-                  unit: l.unit || "nos",
-                  rate: Number(l.rate || 0),
-                  taxPercent: Number(l.taxPercent ?? 18),
-                  amount: Number(l.amount || 0),
-                  taxAmount: Number(l.taxAmount || 0),
-                  totalAmount: Number(l.totalAmount || 0),
-                })));
+                setItems(lines.map(invoiceLineToEditorLine));
               } else if (data.estimateItems && data.estimateItems.length > 0) {
-                setItems(estimateItemsToLines(data.estimateItems));
+                setItems(estimateItemsToInvoiceLines(data.estimateItems));
               } else {
                 setItems([blankRow()]);
               }
@@ -152,7 +131,7 @@ const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ open, invoiceId, estimate
               setPoNumber(est.poNumber || "");
             }
             const its_ = its as any[];
-            setItems(its_.length > 0 ? estimateItemsToLines(its_) : [blankRow()]);
+            setItems(its_.length > 0 ? estimateItemsToInvoiceLines(its_) : [blankRow()]);
             if (deliveryChallanId) {
               const dc = (allDcs as any[]).find((d: any) => d.id === deliveryChallanId);
               if (dc) setLinkedDc(dc);
@@ -179,7 +158,7 @@ const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ open, invoiceId, estimate
             }
             if (iRes.ok) {
               const its = await iRes.json();
-              setItems(estimateItemsToLines(its));
+              setItems(estimateItemsToInvoiceLines(its));
             } else {
               setItems([blankRow()]);
             }
@@ -212,10 +191,12 @@ const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ open, invoiceId, estimate
       const merged = { ...row, ...patch };
       const qty = Number(merged.quantity) || 0;
       const rate = Number(merged.rate) || 0;
-      const amount = +(qty * rate).toFixed(2);
+      const priceChanged = patch.quantity !== undefined || patch.rate !== undefined;
+      const taxChanged = patch.taxPercent !== undefined;
+      if (!priceChanged && !taxChanged) return merged;
+      const amount = priceChanged ? +(qty * rate).toFixed(2) : Number(merged.amount) || 0;
       const taxAmount = +(amount * ((Number(merged.taxPercent) || 0) / 100)).toFixed(2);
-      const totalAmount = +(amount + taxAmount).toFixed(2);
-      return { ...merged, amount, taxAmount, totalAmount };
+      return { ...merged, amount, taxAmount, totalAmount: +(amount + taxAmount).toFixed(2) };
     }));
   };
   const removeRow = (idx: number) => setItems(prev => prev.filter((_, i) => i !== idx));
@@ -449,28 +430,6 @@ const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ open, invoiceId, estimate
 
 function blankRow(): InvoiceLineItem {
   return { itemName: "", description: "", hsn: "", quantity: 1, unit: "nos", rate: 0, taxPercent: 18, amount: 0, taxAmount: 0, totalAmount: 0 };
-}
-
-function estimateItemsToLines(its: any[]): InvoiceLineItem[] {
-  return its.map((it) => {
-    const qty = Number(it.quantity || 0);
-    const rate = Number(it.rate || 0);
-    const amount = +(qty * rate).toFixed(2);
-    const taxPercent = (Number(it.cgstPercent || 0) + Number(it.sgstPercent || 0)) || Number(it.igstPercent || 0) || 18;
-    const taxAmount = Number(it.cgstAmount || 0) + Number(it.sgstAmount || 0) + Number(it.igstAmount || 0);
-    return {
-      itemName: it.itemName || "",
-      description: it.description || "",
-      hsn: it.hsn || "",
-      quantity: qty,
-      unit: it.unit || "nos",
-      rate,
-      taxPercent,
-      amount,
-      taxAmount: +taxAmount.toFixed(2),
-      totalAmount: +(amount + taxAmount).toFixed(2),
-    };
-  });
 }
 
 function statusClass(s: string): string {

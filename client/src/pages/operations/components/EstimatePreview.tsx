@@ -7,6 +7,7 @@ import { isServiceEstimateItem, serviceProductLabel } from "../../../../../share
 import { formatCurrency } from "../utils/formatters";
 import { orderedEstimateItems, orderedStoreKeysFromItems } from "../utils/estimateOrdering";
 import { exportEstimateToExcel } from "../utils/exportHelpers";
+import { estimateItemsToInvoiceLines } from "../utils/invoiceConversion";
 import type { Brand, Client, Estimate, EstimateItem, Product, Store } from "../types";
 import EstimateDocument from "../../../components/EstimateDocument";
 
@@ -427,26 +428,6 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
               });
             }
           };
-
-          const estimateItemsToInvoiceLines = (items: EstimateItem[]) => items.map((it) => {
-            const qty = Number(it.quantity || 0);
-            const rate = Number(it.rate || 0);
-            const amount = +(qty * rate).toFixed(2);
-            const taxPercent = (Number(it.cgstPercent || 0) + Number(it.sgstPercent || 0)) || Number(it.igstPercent || 0) || 18;
-            const taxAmount = Number(it.cgstAmount || 0) + Number(it.sgstAmount || 0) + Number(it.igstAmount || 0);
-            return {
-              itemName: it.itemName || "",
-              description: it.description || "",
-              hsn: it.hsn || "",
-              quantity: qty,
-              unit: it.unit || "nos",
-              rate,
-              taxPercent,
-              amount,
-              taxAmount: +taxAmount.toFixed(2),
-              totalAmount: +(amount + taxAmount).toFixed(2),
-            };
-          });
 
           React.useEffect(() => {
             const options = loadPrintOptionsForUser(printSettingsUserKey);

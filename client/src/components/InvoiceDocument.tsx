@@ -6,13 +6,11 @@
 
 import React, { useState } from "react";
 import { formatProductDetails } from "../../../shared/productDetails";
-import { isServiceLineType } from "../pages/operations/utils/estimateCalculations";
 import { companyAssetUrl } from "../utils/companyAssets";
 
 export interface InvoiceDocumentProps {
   invoice: any;
   estimate?: any;
-  estimateItems?: any[];
   client?: any;
   sellerProfile?: any;
   assetToken?: string | null;
@@ -44,15 +42,24 @@ const InvoiceLogo: React.FC<{ src: string; companyName: string }> = ({ src, comp
 
 const num = (n: number) => (Number(n) || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({ invoice: inv, estimate: est, estimateItems = [], client, sellerProfile = {}, assetToken: token }) => {
-  const sourceLines = estimateItems.length ? estimateItems : (inv.lineItems || []);
-  const lines = sourceLines.filter((row: any) => !isServiceLineType(row.lineType));
+const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({ invoice: inv, estimate: est, client, sellerProfile = {}, assetToken: token }) => {
+  // Saved invoice lines are the sole commercial source for invoice preview,
+  // print and packet rendering. Estimate rows are not a fallback here.
+  const lines = Array.isArray(inv.lineItems || inv.line_items) ? (inv.lineItems || inv.line_items) : [];
   const subtotal = Number(inv.amount ?? lines.reduce((sum: number, row: any) => sum + Number(row.amount ?? row.totalPrice ?? Number(row.quantity || 0) * Number(row.rate || 0)), 0));
   const totalTax = Number(inv.taxAmount ?? Math.max(0, Number(inv.totalAmount || 0) - subtotal));
-  const isIgst = Boolean(est?.gstType === "IGST" || (est?.igstAmount && Number(est.igstAmount) > 0));
-  const igst = isIgst ? totalTax : 0;
-  const cgst = isIgst ? 0 : Number(est?.cgstAmount ?? totalTax / 2);
-  const sgst = isIgst ? 0 : Number(est?.sgstAmount ?? totalTax - cgst);
+  const componentTax = lines.reduce((totals: { cgst: number; sgst: number; igst: number }, row: any) => ({
+    cgst: totals.cgst + Number(row.cgstAmount ?? row.cgst_amount ?? 0),
+    sgst: totals.sgst + Number(row.sgstAmount ?? row.sgst_amount ?? 0),
+    igst: totals.igst + Number(row.igstAmount ?? row.igst_amount ?? 0),
+  }), { cgst: 0, sgst: 0, igst: 0 });
+  const hasComponentTax = componentTax.cgst !== 0 || componentTax.sgst !== 0 || componentTax.igst !== 0;
+  const isIgst = hasComponentTax ? componentTax.igst > 0 : Boolean(est?.gstType === "IGST" || (est?.igstAmount && Number(est.igstAmount) > 0));
+  const componentTotal = componentTax.cgst + componentTax.sgst + componentTax.igst;
+  const useSavedComponents = hasComponentTax && Math.abs(componentTotal - totalTax) < 0.01;
+  const igst = useSavedComponents ? componentTax.igst : (isIgst ? totalTax : 0);
+  const cgst = useSavedComponents ? componentTax.cgst : (isIgst ? 0 : totalTax / 2);
+  const sgst = useSavedComponents ? componentTax.sgst : (isIgst ? 0 : totalTax - cgst);
   const grandTotal = Number(inv.totalAmount || subtotal + cgst + sgst + igst);
 
   const companyName = sellerProfile?.name || sellerProfile?.companyName || "Sunrise Media";
