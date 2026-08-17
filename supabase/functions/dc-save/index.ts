@@ -78,7 +78,9 @@ Deno.serve(async (req: Request) => {
   const db = adminClient();
   const url = new URL(req.url);
   const pathParts = url.pathname.replace(/^\/functions\/v1\/dc-save/, "").split("/").filter(Boolean);
-  const dcId = pathParts[0] ? parseInt(pathParts[0], 10) : null;
+  const pathId = pathParts[0] ? parseInt(pathParts[0], 10) : null;
+  const queryId = url.searchParams.get("id") ? parseInt(url.searchParams.get("id")!, 10) : null;
+  const dcId = pathId ?? queryId;
 
   try {
     if (req.method === "PATCH" && dcId) {
@@ -104,7 +106,8 @@ Deno.serve(async (req: Request) => {
         delete updates.deliveryDate;
       }
 
-      // Re-derive documentType and check WCC uniqueness if relevant fields changed
+      // Re-derive documentType, persist the resolved store code and check WCC
+      // uniqueness. The column is a queryable mirror of metadata.storeCode.
       const relevantChange =
         updates.client_format !== undefined ||
         updates.document_type !== undefined ||
@@ -112,31 +115,33 @@ Deno.serve(async (req: Request) => {
         updates.store_code !== undefined ||
         updates.estimate_id !== undefined;
 
+      const uniquenessPayload = {
+        ...existing,
+        ...updates,
+        metadata: updates.metadata !== undefined ? updates.metadata : existing.metadata,
+      } as Record<string, unknown>;
       if (relevantChange) {
-        const uniquenessPayload = {
-          ...existing,
-          ...updates,
-          metadata: updates.metadata !== undefined ? updates.metadata : existing.metadata,
-        } as Record<string, unknown>;
         updates.document_type = documentTypeForDc(uniquenessPayload);
+      }
 
-        if (updates.document_type === "wcc") {
-          const storeCode = storeCodeForDc({ ...uniquenessPayload, document_type: updates.document_type });
-          const estimateId = Number(uniquenessPayload.estimate_id);
-          if (estimateId && storeCode) {
-            const { data: siblings } = await db
-              .from("delivery_challans")
-              .select("*")
-              .eq("estimate_id", estimateId);
-            const conflict = (siblings ?? []).find((row: any) => {
-              if (Number(row.id) === dcId) return false;
-              if (row.status === "deleted" || (row.metadata as any)?.deleted) return false;
-              if (documentTypeForDc(row) !== "wcc") return false;
-              return storeCodeForDc(row) === storeCode;
-            });
-            if (conflict) {
-              return jsonResponse({ message: "WCC already exists for this store", existingWcc: conflict }, 409);
-            }
+      const effectiveType = documentTypeForDc({ ...uniquenessPayload, ...updates });
+      if (effectiveType === "wcc") {
+        const storeCode = storeCodeForDc({ ...uniquenessPayload, ...updates, document_type: effectiveType });
+        if (storeCode) updates.store_code = storeCode;
+        const estimateId = Number(uniquenessPayload.estimate_id);
+        if (estimateId && storeCode) {
+          const { data: siblings } = await db
+            .from("delivery_challans")
+            .select("*")
+            .eq("estimate_id", estimateId);
+          const conflict = (siblings ?? []).find((row: any) => {
+            if (Number(row.id) === dcId) return false;
+            if (row.status === "deleted" || (row.metadata as any)?.deleted) return false;
+            if (documentTypeForDc(row) !== "wcc") return false;
+            return storeCodeForDc(row) === storeCode;
+          });
+          if (conflict) {
+            return jsonResponse({ message: "WCC already exists for this store", existingWcc: conflict }, 409);
           }
         }
       }
@@ -185,6 +190,7 @@ Deno.serve(async (req: Request) => {
       // Prevent duplicate WCC for the same store/estimate
       if (payload.document_type === "wcc") {
         const storeCode = storeCodeForDc(payload);
+        if (storeCode) payload.store_code = storeCode;
         const estimateId = Number(payload.estimate_id);
         if (estimateId && storeCode) {
           const { data: siblings } = await db

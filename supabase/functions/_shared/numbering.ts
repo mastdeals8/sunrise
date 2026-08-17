@@ -56,6 +56,15 @@ export async function nextDocumentNumber(
   db: SupabaseClient,
   kind: "invoice" | "estimate" | "dc",
 ): Promise<string> {
+  // The SQL function serializes allocations when its migration is installed.
+  // Retain the existing scan as a compatibility fallback for undeployed/local
+  // environments; unique document-number constraints remain the final guard.
+  try {
+    const { data, error } = await db.rpc("next_sunrise_document_number", { p_kind: kind });
+    if (!error && typeof data === "string" && data) return data;
+  } catch {
+    // Migration has not been applied yet.
+  }
   const cfg = await loadNumberingConfig(db, kind);
   const map = tableForKind[kind];
   const fy = fyForDate(new Date());

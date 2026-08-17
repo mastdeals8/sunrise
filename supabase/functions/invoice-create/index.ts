@@ -13,6 +13,7 @@
 
 import { corsHeaders, corsResponse, jsonResponse, errorResponse } from "../_shared/cors.ts";
 import { requireUser, adminClient } from "../_shared/auth.ts";
+import { nextDocumentNumber } from "../_shared/numbering.ts";
 
 function preprocessDate(value: unknown): string | null {
   if (value === null || value === undefined) return null;
@@ -90,6 +91,13 @@ Deno.serve(async (req: Request) => {
         .order("created_at", { ascending: true }).limit(1).maybeSingle();
       if (lookupError) return errorResponse(lookupError.message, 400);
       if (existing) return jsonResponse(existing, 200);
+    }
+
+    // Bolt's old editor used INV-<timestamp> as a display placeholder.  The
+    // established Sunrise invoice convention is allocated on the server.
+    const requestedNumber = String(payload.invoice_number ?? "").trim();
+    if (!requestedNumber || /^INV-\d+$/i.test(requestedNumber)) {
+      payload.invoice_number = await nextDocumentNumber(db, "invoice");
     }
 
     const { data: created, error } = await db
