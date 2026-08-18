@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { formatCurrency } from "@/utils/format";
 import { useAuth } from "../contexts/AuthContext";
+import { fetchLedgerSummary, fetchClientLedger } from "../lib/api";
 import { Users, Search, ChevronRight, FileText, ArrowRight } from "lucide-react";
 
 interface Client { id: number; name: string }
@@ -35,8 +36,7 @@ const ClientLedgerPage: React.FC = () => {
   useEffect(() => {
     const load = async () => {
       try {
-        const res = await fetch("/api/finance/ledgers/summary", { headers: { Authorization: `Bearer ${token}` } });
-        if (res.ok) setSummary(await res.json());
+        setSummary(await fetchLedgerSummary(token) as LedgerSummary[]);
       } catch (err) {
         console.error(err);
       } finally {
@@ -53,14 +53,32 @@ const ClientLedgerPage: React.FC = () => {
     }
     const load = async () => {
       try {
-        const res = await fetch(`/api/finance/ledgers/client/${selected}`, { headers: { Authorization: `Bearer ${token}` } });
-        if (res.ok) setDetail(await res.json());
+        const [ledger, row] = await Promise.all([
+          fetchClientLedger(token, selected),
+          Promise.resolve(summary.find((item) => item.clientId === selected)),
+        ]);
+        if (row) {
+          setDetail({
+            client: { id: row.clientId, name: row.clientName },
+            statement: (ledger.statement || []).map((item: any) => ({
+              ...item,
+              ref: item.ref || item.description || "",
+              amount: item.amount ?? (item.debit || item.credit || 0),
+              debitAmount: item.debitAmount ?? item.debit ?? 0,
+              creditAmount: item.creditAmount ?? item.credit ?? 0,
+              details: item.details || item.description || "",
+            })),
+            totalBilled: row.totalBilled,
+            totalPaid: row.totalPaid,
+            totalOutstanding: row.totalOutstanding,
+          });
+        }
       } catch (err) {
         console.error(err);
       }
     };
     load();
-  }, [selected, token]);
+  }, [selected, token, summary]);
 
   const filtered = useMemo(() => {
     if (!search.trim()) return summary;

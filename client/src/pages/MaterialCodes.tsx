@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useAuth } from "../contexts/AuthContext";
+import { fetchMaterialCodes, fetchClients, fetchBrands, saveMaterialCode, deleteMaterialCode } from "../lib/api";
 import { Database, Plus, Edit, Trash2, Search, X, Tag } from "lucide-react";
 
 interface Client { id: number; name: string; format?: string }
@@ -64,14 +65,12 @@ const MaterialCodesPage: React.FC = () => {
   const loadAll = async () => {
     setLoading(true);
     try {
-      const [r1, r2, r3] = await Promise.all([
-        fetch("/api/operations/material-codes", { headers: { Authorization: `Bearer ${token}` } }),
-        fetch("/api/operations/clients", { headers: { Authorization: `Bearer ${token}` } }),
-        fetch("/api/operations/brands", { headers: { Authorization: `Bearer ${token}` } }),
+      const [materialRows, clientRows, brandRows] = await Promise.all([
+        fetchMaterialCodes(token), fetchClients(token), fetchBrands(token),
       ]);
-      if (r1.ok) setRows(await r1.json());
-      if (r2.ok) setClients(await r2.json());
-      if (r3.ok) setBrands(await r3.json());
+      setRows(materialRows as MaterialCode[]);
+      setClients(clientRows as Client[]);
+      setBrands(brandRows as Brand[]);
     } catch (err) {
       console.error(err);
     } finally {
@@ -125,18 +124,7 @@ const MaterialCodesPage: React.FC = () => {
       notes: form.notes || null,
     };
     try {
-      const url = editId ? `/api/operations/material-codes/${editId}` : "/api/operations/material-codes";
-      const method = editId ? "PATCH" : "POST";
-      const res = await fetch(url, {
-        method,
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify(payload),
-      });
-      if (!res.ok) {
-        const e = await res.json().catch(() => ({ message: "Save failed" }));
-        showMsg("err", e.message || "Save failed");
-        return;
-      }
+      await saveMaterialCode(token, editId, payload);
       showMsg("ok", editId ? "Updated" : "Created");
       setShowForm(false); setEditId(null); setForm(emptyForm);
       loadAll();
@@ -148,16 +136,9 @@ const MaterialCodesPage: React.FC = () => {
   const remove = async (m: MaterialCode) => {
     if (!confirm(`Delete material code "${m.code}"?`)) return;
     try {
-      const res = await fetch(`/api/operations/material-codes/${m.id}`, {
-        method: "DELETE",
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (res.ok) {
-        showMsg("ok", "Deleted");
-        loadAll();
-      } else {
-        showMsg("err", "Delete failed");
-      }
+      await deleteMaterialCode(token, m.id);
+      showMsg("ok", "Deleted");
+      loadAll();
     } catch (err: any) {
       showMsg("err", err.message || "Failed");
     }

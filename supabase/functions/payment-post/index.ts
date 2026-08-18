@@ -57,6 +57,30 @@ Deno.serve(async (req: Request) => {
     if (error) return errorResponse(error.message, 400);
     if (!created) return errorResponse("Failed to create payment", 500);
 
+    // Preserve the existing Sunrise payment behavior: a receipt linked to an
+    // invoice updates only the invoice's stored paid/balance/status fields.
+    // Journal generation is intentionally not added here; its accounting
+    // treatment is outside this Bolt stabilization change.
+    const invoiceId = Number(payload.invoice_id ?? payload.invoiceId ?? 0);
+    if (invoiceId > 0) {
+      const { data: invoice, error: invoiceError } = await db
+        .from("invoices")
+        .select("id, total_amount, paid_amount")
+        .eq("id", invoiceId)
+        .maybeSingle();
+      if (invoiceError) return errorResponse(invoiceError.message, 400);
+      if (!invoice) return errorResponse("Linked invoice not found", 400);
+      const paidAmount = Math.round((Number(invoice.paid_amount || 0) + Number(payload.amount || 0)) * 100) / 100;
+      const balanceAmount = Math.max(0, Math.round((Number(invoice.total_amount || 0) - paidAmount) * 100) / 100);
+      const status = balanceAmount <= 0 ? "paid" : paidAmount > 0 ? "partial" : "unpaid";
+      const { error: updateError } = await db.from("invoices").update({
+        paid_amount: paidAmount,
+        balance_amount: balanceAmount,
+        status,
+      }).eq("id", invoiceId);
+      if (updateError) return errorResponse(updateError.message, 400);
+    }
+
     return jsonResponse(created, 201);
   } catch (err: any) {
     console.error("[payment-post]", err);

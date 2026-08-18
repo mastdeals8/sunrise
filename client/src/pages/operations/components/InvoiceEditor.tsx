@@ -18,6 +18,11 @@ export interface InvoiceLineItem {
   amount: number;
   taxAmount: number;
   totalAmount: number;
+  totalPrice?: number;
+  width?: number | null;
+  height?: number | null;
+  totalSize?: number | null;
+  lineType?: string;
 }
 
 interface InvoiceEditorProps {
@@ -136,7 +141,8 @@ const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ open, invoiceId, estimate
               const dc = (allDcs as any[]).find((d: any) => d.id === deliveryChallanId);
               if (dc) setLinkedDc(dc);
             }
-            setInvoiceNumber(`INV-${Date.now().toString().slice(-6)}`);
+            // The server allocates the established Sunrise number on save.
+            setInvoiceNumber("");
           } else {
             const [eRes, iRes, dRes, numRes] = await Promise.all([
               fetch(`/api/operations/estimates`, { headers: { Authorization: `Bearer ${token}` } }),
@@ -194,7 +200,18 @@ const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ open, invoiceId, estimate
       const priceChanged = patch.quantity !== undefined || patch.rate !== undefined;
       const taxChanged = patch.taxPercent !== undefined;
       if (!priceChanged && !taxChanged) return merged;
-      const amount = priceChanged ? +(qty * rate).toFixed(2) : Number(merged.amount) || 0;
+      // Area-based estimate rows carry the saved commercial amount in
+      // totalPrice. Editing a display quantity/rate must not silently turn
+      // that saved area value into qty × rate (the P0 invoice defect).
+      const isAreaPriced = merged.totalPrice !== undefined
+        || merged.lineType === "product_area"
+        || merged.unit === "sqft"
+        || merged.width != null
+        || merged.height != null
+        || merged.totalSize != null;
+      const amount = priceChanged && !isAreaPriced
+        ? +(qty * rate).toFixed(2)
+        : Number(merged.amount) || 0;
       const taxAmount = +(amount * ((Number(merged.taxPercent) || 0) / 100)).toFixed(2);
       return { ...merged, amount, taxAmount, totalAmount: +(amount + taxAmount).toFixed(2) };
     }));
@@ -204,7 +221,7 @@ const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ open, invoiceId, estimate
 
   const save = async (mode: "draft" | "approved" | "stay") => {
     if (!token) return;
-    if (!invoiceNumber.trim()) { alert("Invoice number required"); return; }
+    if (!invoiceNumber.trim() && (!isBoltMode || invoiceId)) { alert("Invoice number required"); return; }
     if (items.length === 0 || items.every(it => !it.itemName)) { alert("Add at least one line item"); return; }
     setSaving(true);
     try {

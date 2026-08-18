@@ -315,6 +315,32 @@ export async function fetchMaterialCodes(token: string | null) {
   return sbSelect("material_codes", (q) => q.select("*").order("code"));
 }
 
+export async function saveMaterialCode(token: string | null, id: number | null, payload: Record<string, unknown>) {
+  if (!isBoltMode) {
+    const res = await apiFetch(id ? `/api/operations/material-codes/${id}` : "/api/operations/material-codes", token, {
+      method: id ? "PATCH" : "POST", body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error((await res.json()).message ?? "Failed to save material code");
+    return res.json();
+  }
+  const row: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(payload)) row[key.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`)] = value;
+  const query = id ? supabase.from("material_codes").update(row).eq("id", id) : supabase.from("material_codes").insert(row);
+  const { data, error } = await query.select().single();
+  if (error) throw new Error(error.message);
+  return toCamel(data);
+}
+
+export async function deleteMaterialCode(token: string | null, id: number) {
+  if (!isBoltMode) {
+    const res = await apiFetch(`/api/operations/material-codes/${id}`, token, { method: "DELETE" });
+    if (!res.ok) throw new Error((await res.json()).message ?? "Failed to delete material code");
+    return;
+  }
+  const { error } = await supabase.from("material_codes").delete().eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
 export async function fetchEstimates(token: string | null) {
   if (!isBoltMode) {
     const res = await apiFetch("/api/operations/estimates", token);
@@ -910,64 +936,15 @@ export async function updateEstimate(
     if (!res.ok) throw new Error((await res.json()).message ?? "Failed to update estimate");
     return res.json();
   }
-  // Bypass the edge function — use Supabase JS client directly (PostgREST always works in Bolt mode).
-  const toSnake = (s: string) => s.replace(/([A-Z])/g, "_$1").toLowerCase();
-
-  const { items: rawItems, ...estimateFields } = payload as Record<string, unknown> & { items?: unknown };
-  const replaceItems = Array.isArray(rawItems) ? (rawItems as Record<string, unknown>[]) : undefined;
-
-  // Convert estimate field keys to snake_case
-  const updates: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(estimateFields)) {
-    updates[toSnake(k)] = v;
-  }
-
-  // Billing profile snapshot
-  if (updates.billing_profile_id) {
-    const { data: bp } = await supabase
-      .from("client_billing_profiles")
-      .select("*")
-      .eq("id", Number(updates.billing_profile_id))
-      .maybeSingle();
-    if (bp) {
-      updates.billing_legal_name_snapshot = (bp as any).legal_company_name;
-      updates.billing_gstin_snapshot = (bp as any).gstin;
-      updates.billing_state_snapshot = (bp as any).state;
-      updates.billing_state_code_snapshot = (bp as any).state_code;
-      updates.billing_address_snapshot = (bp as any).billing_address;
-      updates.shipping_address_snapshot = (bp as any).shipping_address;
-      updates.billing_to = (bp as any).legal_company_name;
-      updates.gstin = (bp as any).gstin;
-      if ((bp as any).pan) updates.pan = (bp as any).pan;
-      updates.state_code = (bp as any).state_code;
-    }
-  }
-
-  // Update the estimate row
-  const { data: updated, error: updateErr } = await supabase
-    .from("estimates")
-    .update(updates)
-    .eq("id", id)
-    .select()
-    .single();
-  if (updateErr) throw new Error(updateErr.message ?? "Failed to update estimate");
-  if (!updated) throw new Error("Estimate not found");
-
-  // Replace items if provided
-  if (replaceItems !== undefined) {
-    await supabase.from("estimate_items").delete().eq("estimate_id", id);
-    if (replaceItems.length > 0) {
-      const itemRows = replaceItems.map((it) => {
-        const row: Record<string, unknown> = { estimate_id: id };
-        for (const [k, v] of Object.entries(it)) row[toSnake(k)] = v;
-        return row;
-      });
-      const { error: itemErr } = await supabase.from("estimate_items").insert(itemRows);
-      if (itemErr) throw new Error(`Items replace failed: ${itemErr.message}`);
-    }
-  }
-
-  return toCamel(updated);
+  // Keep update validation and normalization on the same Edge Function path
+  // as estimate creation (including existing CAPEX checks and snapshots).
+  const res = await edgeFetch("estimate-save", token, {
+    method: "PATCH",
+    pathSuffix: `?id=${encodeURIComponent(String(id))}`,
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error((await res.json()).message ?? "Failed to update estimate");
+  return toCamel(await res.json());
 }
 
 // ─── Invoices ─────────────────────────────────────────────────────────────────

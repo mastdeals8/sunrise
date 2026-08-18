@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { formatCurrency } from "@/utils/format";
 import { useAuth } from "../contexts/AuthContext";
 import { useGlobalDate } from "../contexts/GlobalDateContext";
+import { fetchInvoices, createPayment } from "../lib/api";
 import { Link } from "wouter";
 import { AlertCircle, Search, Plus, X, CheckCircle } from "lucide-react";
 
@@ -43,11 +44,8 @@ const PendingPaymentsPage: React.FC = () => {
   const load = async () => {
     setLoading(true);
     try {
-      const res = await fetch("/api/finance/invoices", { headers: { Authorization: `Bearer ${token}` } });
-      if (res.ok) {
-        const rows = await res.json();
-        setInvoices(rows.filter((row: Invoice) => globalDate.isInRange(row.date || row.dueDate)));
-      }
+      const rows = await fetchInvoices(token);
+      setInvoices((rows as Invoice[]).filter((row) => globalDate.isInRange(row.date || row.dueDate)));
     } catch (err) {
       console.error(err);
     } finally {
@@ -97,29 +95,12 @@ const PendingPaymentsPage: React.FC = () => {
     }
     try {
       const voucherNumber = `RV/${new Date().getFullYear()}/${Date.now().toString().slice(-6)}`;
-      const res = await fetch("/api/finance/payments/allocate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({
-          payment: {
-            voucherNumber,
-            type: "receipt",
-            partyName: showPayFor.partyName,
-            amount,
-            date: payForm.date,
-            method: payForm.method,
-            description: payForm.notes || payForm.reference || null,
-            clientId: showPayFor.clientId ?? null,
-            invoiceId: showPayFor.id,
-          },
-          allocations: [{ invoiceId: showPayFor.id, amount }],
-        }),
+      await createPayment(token, {
+        voucherNumber, type: "receipt", partyName: showPayFor.partyName, amount,
+        date: payForm.date, method: payForm.method,
+        description: payForm.notes || payForm.reference || null,
+        clientId: showPayFor.clientId ?? null, invoiceId: showPayFor.id,
       });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ message: "Payment failed" }));
-        showMsg("err", err.message || "Payment failed");
-        return;
-      }
       showMsg("ok", "Payment recorded");
       setShowPayFor(null);
       setPayForm({ amount: "", date: new Date().toISOString().slice(0, 10), method: "bank_transfer", reference: "", notes: "" });
