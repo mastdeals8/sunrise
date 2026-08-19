@@ -13,6 +13,7 @@ export interface InvoiceDocumentProps {
   client?: any;
   sellerProfile?: any;
   assetToken?: string | null;
+  products?: any[];
 }
 
 const amountInWords = (num: number): string => {
@@ -41,7 +42,19 @@ const InvoiceLogo: React.FC<{ src: string; companyName: string; maxWidth?: numbe
 
 const num = (n: number) => (Number(n) || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({ invoice: inv, estimate: est, client, sellerProfile = {}, assetToken: token }) => {
+const PlaceholderNames = new Set(["all", "alll", "item", "", "-", "n/a", "na"]);
+const resolveItemName = (row: any, products: any[]): string => {
+  const saved = String(row.itemName ?? row.item_name ?? "").trim();
+  if (saved && !PlaceholderNames.has(saved.toLowerCase())) return saved;
+  const productId = Number(row.productId ?? row.product_id ?? 0);
+  if (productId) {
+    const product = products.find((p: any) => Number(p.id) === productId);
+    if (product?.name) return product.name;
+  }
+  return saved || "Item";
+};
+
+const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({ invoice: inv, estimate: est, client, sellerProfile = {}, assetToken: token, products = [] }) => {
   // Saved invoice lines are the sole commercial source for invoice preview,
   // print and packet rendering. Estimate rows are not a fallback here.
   const lines = Array.isArray(inv.lineItems || inv.line_items) ? (inv.lineItems || inv.line_items) : [];
@@ -198,7 +211,7 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({ invoice: inv, estimat
             return (
               <tr key={row.id || index}>
                 <td style={cellCenter}>{index + 1}</td>
-                <td style={{ ...cellBase, fontWeight: 600 }}>{row.itemName || row.productName || "Item"}</td>
+                <td style={{ ...cellBase, fontWeight: 600 }}>{resolveItemName(row, products)}</td>
                 <td style={{ ...cellBase, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{description}</td>
                 <td style={cellCenter}>{row.hsn || ""}</td>
                 <td style={cellRight}>{taxPercent > 0 ? `${taxPercent}%` : ""}</td>
