@@ -219,7 +219,7 @@ type EstimatePrintOptions = {
 };
 
 const DEFAULT_PRINT_OPTIONS: EstimatePrintOptions = {
-  layout: "landscape",
+  layout: "portrait",
   scale: "100",
   mode: "compact",
 };
@@ -231,7 +231,9 @@ const clampPrintScale = (value: any) => {
 };
 
 const normalizePrintOptions = (value: any): EstimatePrintOptions => ({
-  layout: (PRINT_LAYOUT_VALUES as readonly string[]).includes(value?.layout) ? value.layout : DEFAULT_PRINT_OPTIONS.layout,
+  // Estimate print is a fixed A4 portrait document. Ignore stale landscape
+  // preferences so Chrome and Safari receive the same canonical page rule.
+  layout: "portrait",
   scale: clampPrintScale(value?.scale),
   mode: (PRINT_MODE_VALUES as readonly string[]).includes(value?.mode) ? value.mode : DEFAULT_PRINT_OPTIONS.mode,
 });
@@ -275,7 +277,7 @@ const applyPrintOptionClasses = (options: EstimatePrintOptions) => {
   clearPrintOptionClasses();
   const style = document.createElement("style");
   style.id = "estimate-print-options-style";
-  style.textContent = `@media print { @page { size: A4 ${options.layout}; margin: 8mm; } }`;
+  style.textContent = "@media print { @page { size: A4 portrait; margin: 8mm; } }";
   document.head.appendChild(style);
   document.body.classList.add(
     `estimate-print-layout-${options.layout}`,

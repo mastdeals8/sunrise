@@ -315,8 +315,8 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
 
   // Cell + table styles for dense print-grade layout. Inline styles so
   // they survive print without depending on Tailwind classes.
-  const cellBase: React.CSSProperties = { border: "1px solid #000", padding: "2px 4px", fontSize: "10px", lineHeight: 1.25, verticalAlign: "top" };
-  const cellRight: React.CSSProperties = { ...cellBase, textAlign: "right" };
+  const cellBase: React.CSSProperties = { border: "1px solid #000", padding: "2px 4px", fontSize: "10px", lineHeight: 1.25, verticalAlign: "top", overflowWrap: "anywhere", wordBreak: "break-word" };
+  const cellRight: React.CSSProperties = { ...cellBase, textAlign: "right", whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" };
   const cellCenter: React.CSSProperties = { ...cellBase, textAlign: "center" };
   const headCell: React.CSSProperties = { ...cellBase, fontWeight: 700, textAlign: "center", backgroundColor: "#fff" };
   const yellowRow: React.CSSProperties = { backgroundColor: "#fff066" };
@@ -384,7 +384,10 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
     );
   };
 
-  const columnWidths = ["3%", "13.5%", "4.8%", "7.9%", "20.4%", "4.2%", "4.2%", "4.2%", "5.5%", "5.5%", "6.7%", "4.8%", "7.9%", "7.4%"];
+  // Portrait A4 printable width is 194mm at the 8mm page margins below.
+  // Numeric columns are intentionally wide enough for Indian-formatted
+  // five/six-digit values; the product-details column absorbs wrapping.
+  const columnWidths = ["3.5%", "10%", "4.5%", "7%", "18%", "4%", "4%", "5%", "6%", "7.5%", "9.5%", "5.5%", "8%", "7.5%"];
 
   const renderDocumentHeader = () => (
     <table className="estimate-document-header" style={{ width: "100%", borderCollapse: "collapse" }}>
@@ -594,6 +597,7 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
       data-print-document="true"
       style={{ background: "#fff", color: "#000", fontFamily: "Arial, Helvetica, sans-serif" }}
     >
+      <h1 className="estimate-print-title">ESTIMATE</h1>
       {renderDocumentHeader()}
       <table className="estimate-table" style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
         <colgroup>

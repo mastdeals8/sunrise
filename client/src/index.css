@@ -135,7 +135,7 @@
 /* ============================================================ */
 @media print {
   @page {
-    size: A4 landscape;
+    size: A4 portrait;
     margin: 8mm;
   }
   /* Document exports must print only an explicit document subtree. */
@@ -224,7 +224,10 @@
     display: none !important;
   }
   .estimate-print .estimate-table {
-    font-size: 9px !important;
+    width: 194mm !important;
+    max-width: 194mm !important;
+    table-layout: fixed !important;
+    font-size: 7.5px !important;
     border-collapse: separate !important;
     border-spacing: 0 !important;
     break-after: auto;
@@ -242,6 +245,17 @@
     border: 0 !important;
     border-right: 1px solid #000 !important;
     border-bottom: 1px solid #000 !important;
+    overflow-wrap: anywhere !important;
+    word-break: break-word !important;
+    white-space: normal;
+    font-size: 7.5px !important;
+    line-height: 1.18 !important;
+  }
+  .estimate-print .estimate-table td[style*="text-align: right"] {
+    white-space: nowrap !important;
+    word-break: normal !important;
+    overflow-wrap: normal !important;
+    font-variant-numeric: tabular-nums;
   }
   .estimate-print .estimate-table tr > td:first-child {
     border-left: 1px solid #000 !important;
@@ -292,6 +306,17 @@
   .estimate-print thead {
     display: table-header-group !important;
   }
+  .estimate-print-title {
+    display: block !important;
+    margin: 0 0 3mm !important;
+    padding: 0 !important;
+    text-align: center !important;
+    font-family: Arial, Helvetica, sans-serif !important;
+    font-size: 15px !important;
+    line-height: 1.1 !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.4px !important;
+  }
   .estimate-print tfoot {
     display: table-footer-group !important;
   }
@@ -308,6 +333,10 @@
   .estimate-store-section-keep tr:first-child {
     break-after: avoid;
     page-break-after: avoid;
+  }
+  .estimate-totals-keep {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
   }
   .estimate-footer-block {
     break-inside: avoid;
@@ -450,6 +479,9 @@
   font-size: 10px;
   line-height: 1.25;
   vertical-align: top;
+}
+.estimate-print-title {
+  display: none;
 }
 .estimate-print .summary-copy-table th,
 .estimate-print .summary-copy-table td {
