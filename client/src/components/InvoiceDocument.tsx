@@ -36,7 +36,7 @@ const InvoiceLogo: React.FC<{ src: string; companyName: string; maxWidth?: numbe
   const [failed, setFailed] = useState(!src);
   return failed
     ? <div style={{ fontWeight: 900, fontSize: "22px", lineHeight: 1.1, textAlign: "right" }}>{companyName}</div>
-    : <img src={src} alt={companyName} onError={() => setFailed(true)} style={{ width: maxWidth, maxWidth: "100%", height: "auto", objectFit: "contain" }} />;
+    : <img src={src} alt={companyName} crossOrigin="anonymous" onError={() => setFailed(true)} style={{ width: maxWidth, maxWidth: "100%", height: "auto", objectFit: "contain" }} />;
 };
 
 const num = (n: number) => (Number(n) || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -103,7 +103,7 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({ invoice: inv, estimat
 
   // Inline styles — same paradigm as EstimateDocument, so they survive
   // print without depending on Tailwind classes.
-  const cellBase: React.CSSProperties = { border: "1px solid #000", padding: "3px 5px", fontSize: "10px", lineHeight: 1.3, verticalAlign: "top" };
+  const cellBase: React.CSSProperties = { border: "1px solid #000", padding: "3px 5px", fontSize: "10px", lineHeight: 1.3, verticalAlign: "middle", pageBreakInside: "avoid" };
   const cellRight: React.CSSProperties = { ...cellBase, textAlign: "right" };
   const cellCenter: React.CSSProperties = { ...cellBase, textAlign: "center" };
   const headCell: React.CSSProperties = { ...cellBase, fontWeight: 700, textAlign: "center", backgroundColor: "#fff" };
@@ -184,7 +184,7 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({ invoice: inv, estimat
         <colgroup>
           {columnWidths.map((w, i) => <col key={i} style={{ width: w }} />)}
         </colgroup>
-        <thead>
+        <thead style={{ display: "table-header-group" }}>
           <tr>
             <td style={headCell}>Sr.</td>
             <td style={headCell}>Item</td>
@@ -204,13 +204,13 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({ invoice: inv, estimat
             const description = String(row.description ?? "").trim();
             const taxPercent = Number(row.taxPercent ?? row.gstPercent ?? row.gst_percent ?? 0);
             return (
-              <tr key={row.id || index}>
+              <tr key={row.id || index} style={{ pageBreakInside: "avoid" }}>
                 <td style={cellCenter}>{index + 1}</td>
                 <td style={{ ...cellBase, fontWeight: 600 }}>{resolveItemName(row, products)}</td>
                 <td style={{ ...cellBase, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{description}</td>
                 <td style={cellCenter}>{row.hsn || ""}</td>
-                <td style={cellRight}>{taxPercent > 0 ? `${taxPercent}%` : ""}</td>
-                <td style={cellRight}>{qty}</td>
+                <td style={cellCenter}>{taxPercent > 0 ? `${taxPercent}%` : ""}</td>
+                <td style={cellCenter}>{qty}</td>
                 <td style={cellRight}>{num(rate)}</td>
                 <td style={{ ...cellRight, fontWeight: 600 }}>{num(amount)}</td>
               </tr>
