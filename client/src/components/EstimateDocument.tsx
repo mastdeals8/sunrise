@@ -551,21 +551,26 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
 
   const renderFooter = () => (
     <div className="estimate-footer-block">
-      <table className="estimate-document-footer" style={{ width: "100%", borderCollapse: "collapse", marginTop: "-1px" }}>
+      <table className="estimate-document-footer" style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed", marginTop: "-1px" }}>
+        <colgroup>
+          <col style={{ width: "38%" }} />
+          <col style={{ width: "34%" }} />
+          <col style={{ width: "28%" }} />
+        </colgroup>
         <tbody>
-          <tr style={{ verticalAlign: "top" }}>
-            <td style={{ ...cellBase, padding: "8px 10px", width: "38%" }}>
+          <tr className="estimate-footer-columns" style={{ verticalAlign: "top" }}>
+            <td className="estimate-footer-column" style={{ ...cellBase, padding: "8px 10px", verticalAlign: "top" }}>
               <div style={{ color: "#b91c1c", fontWeight: 700, textDecoration: "underline", marginBottom: "4px" }}>Terms &amp; Condition :</div>
               {termsLines.map((line: string, idx: number) => <div key={idx}>{line}</div>)}
             </td>
-            <td style={{ ...cellBase, padding: "8px 10px", width: "34%" }}>
+            <td className="estimate-footer-column" style={{ ...cellBase, padding: "8px 10px", verticalAlign: "top" }}>
               <div style={{ fontWeight: 700, marginBottom: "4px" }}>BANK ACCOUNT DETAILS</div>
               <div>Bank Name : {sellerProfile.bankName || ""}</div>
               <div>Branch Name : {sellerProfile.bankBranch || ""}</div>
               <div>C.A/c No : {sellerProfile.bankAccountNumber || ""}</div>
               <div>IFSC NO : {sellerProfile.bankIfsc || ""}</div>
             </td>
-            <td className="estimate-signature-cell" style={{ ...cellBase, padding: "8px 10px", width: "28%", textAlign: "right", verticalAlign: "bottom" }}>
+            <td className="estimate-footer-column estimate-signature-cell" style={{ ...cellBase, padding: "8px 10px", textAlign: "right", verticalAlign: "top" }}>
               <div style={{ fontWeight: 700 }}>For {companyName.toUpperCase()}</div>
               <div className="estimate-signature-space" style={{ height: "52px", display: "flex", alignItems: "center", justifyContent: "flex-end" }}>
                 {signatureStampSrc && (

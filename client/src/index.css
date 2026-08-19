@@ -348,10 +348,21 @@
     break-inside: avoid;
     page-break-inside: avoid;
     margin-top: 0 !important;
+    width: 100% !important;
+    table-layout: fixed !important;
+    border-collapse: collapse !important;
+  }
+  .estimate-document-footer .estimate-footer-columns {
+    vertical-align: top !important;
+  }
+  .estimate-document-footer .estimate-footer-column {
+    vertical-align: top !important;
+    height: 100% !important;
+    box-sizing: border-box !important;
   }
   .estimate-signature-cell {
     text-align: right !important;
-    vertical-align: bottom !important;
+    vertical-align: top !important;
   }
   .estimate-signature-space {
     height: 13mm !important;
