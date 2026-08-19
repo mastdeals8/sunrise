@@ -4,7 +4,6 @@
 // invoice packets. Saved invoice values remain the commercial source of truth.
 
 import React, { useState } from "react";
-import { formatProductDetails } from "../../../shared/productDetails";
 import { companyAssetUrl } from "../utils/companyAssets";
 
 export interface InvoiceDocumentProps {
@@ -44,7 +43,7 @@ const num = (n: number) => (Number(n) || 0).toLocaleString("en-IN", { minimumFra
 
 const PlaceholderNames = new Set(["all", "alll", "item", "", "-", "n/a", "na"]);
 const resolveItemName = (row: any, products: any[]): string => {
-  const saved = String(row.itemName ?? row.item_name ?? "").trim();
+  const saved = String(row.itemName ?? row.item_name ?? row.productName ?? row.product_name ?? "").trim();
   if (saved && !PlaceholderNames.has(saved.toLowerCase())) return saved;
   const productId = Number(row.productId ?? row.product_id ?? 0);
   if (productId) {
@@ -189,7 +188,7 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({ invoice: inv, estimat
           <tr>
             <td style={headCell}>Sr.</td>
             <td style={headCell}>Item</td>
-            <td style={headCell}>Description / Dimensions</td>
+            <td style={headCell}>Description</td>
             <td style={headCell}>HSN / SAC</td>
             <td style={headCell}>GST %</td>
             <td style={headCell}>Quantity</td>
@@ -202,11 +201,7 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({ invoice: inv, estimat
             const qty = Number(row.quantity || 0);
             const rate = Number(row.rate || 0);
             const amount = Number(row.amount ?? row.totalPrice ?? qty * rate);
-            const totalSqft = Number(row.totalSize ?? row.totalSqft ?? 0);
-            const dimensions = row.width != null && row.height != null
-              ? `W ${Number(row.width).toFixed(2)} × H ${Number(row.height).toFixed(2)}${totalSqft > 0 ? ` · ${totalSqft.toFixed(2)} Sq.Ft` : ""}`
-              : totalSqft > 0 ? `${totalSqft.toFixed(2)} Sq.Ft` : "";
-            const description = [formatProductDetails(null, row.description || "", row.itemName || ""), dimensions].filter(Boolean).join("\n");
+            const description = String(row.description ?? "").trim();
             const taxPercent = Number(row.taxPercent ?? row.gstPercent ?? row.gst_percent ?? 0);
             return (
               <tr key={row.id || index}>
@@ -215,7 +210,7 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({ invoice: inv, estimat
                 <td style={{ ...cellBase, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{description}</td>
                 <td style={cellCenter}>{row.hsn || ""}</td>
                 <td style={cellRight}>{taxPercent > 0 ? `${taxPercent}%` : ""}</td>
-                <td style={cellRight}>{qty}{row.unit ? ` ${row.unit}` : ""}</td>
+                <td style={cellRight}>{qty}</td>
                 <td style={cellRight}>{num(rate)}</td>
                 <td style={{ ...cellRight, fontWeight: 600 }}>{num(amount)}</td>
               </tr>
