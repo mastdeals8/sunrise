@@ -1,8 +1,7 @@
 // InvoiceDocument is the single React renderer for invoice preview,
 // browser print/PDF export, and the invoice page inside Invoice Packet.
-// It mirrors the Sunrise Media Estimate visual language (black borders,
-// Arial, orange brand footer, bank details, signature stamp) so the two
-// documents are recognisable sister documents.
+// It is the canonical Sunrise Media Tax Invoice for preview, print/PDF, and
+// invoice packets. Saved invoice values remain the commercial source of truth.
 
 import React, { useState } from "react";
 import { formatProductDetails } from "../../../shared/productDetails";
@@ -33,11 +32,11 @@ const amountInWords = (num: number): string => {
   return `${result.trim()} Only`;
 };
 
-const InvoiceLogo: React.FC<{ src: string; companyName: string }> = ({ src, companyName }) => {
+const InvoiceLogo: React.FC<{ src: string; companyName: string; maxWidth?: number }> = ({ src, companyName, maxWidth = 230 }) => {
   const [failed, setFailed] = useState(!src);
   return failed
     ? <div style={{ fontWeight: 900, fontSize: "22px", lineHeight: 1.1, textAlign: "right" }}>{companyName}</div>
-    : <img src={src} alt={companyName} onError={() => setFailed(true)} style={{ width: 230, maxWidth: "100%", height: "auto", objectFit: "contain" }} />;
+    : <img src={src} alt={companyName} onError={() => setFailed(true)} style={{ width: maxWidth, maxWidth: "100%", height: "auto", objectFit: "contain" }} />;
 };
 
 const num = (n: number) => (Number(n) || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -66,33 +65,23 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({ invoice: inv, estimat
   const companyAddress = sellerProfile?.address || "";
   const companyEmail = sellerProfile?.email || "";
   const companyMobile = sellerProfile?.mobile || "";
+  const sellerGstin = sellerProfile?.gstin || "27ABZFS5736R1ZR";
   const logoSrc = companyAssetUrl(sellerProfile?.logoPath, token);
   const signatureStampSrc = companyAssetUrl(sellerProfile?.signatureStampPath, token);
 
   const billingName = est?.billingLegalNameSnapshot || inv.partyName || client?.name || "";
   const billingAddress = est?.billingAddressSnapshot || client?.address || "";
-  const billingGstin = est?.billingGstinSnapshot || client?.gstin || "";
+  const billingGstin = est?.billingGstinSnapshot || est?.gstin || client?.gstin || client?.gstNumber || "";
   const billingStateCode = est?.billingStateCodeSnapshot || "";
-
-  const shippingRaw = est?.shippingAddressSnapshot || est?.shippingTo || "";
-  const shippingHasOwn = shippingRaw.trim().length > 0;
-  let shippingName = billingName;
-  let shippingAddress = billingAddress;
-  if (shippingHasOwn) {
-    const shipLines = shippingRaw.split("\n").map((s: string) => s.trim()).filter(Boolean);
-    if (shipLines.length > 0 && /^M\/S\s*:/i.test(shipLines[0])) {
-      shippingName = shipLines[0].replace(/^M\/S\s*:?\s*/i, "").trim();
-      shippingAddress = shipLines.slice(1).join("\n");
-    } else {
-      shippingAddress = shippingRaw;
-    }
-  }
+  const billingPan = est?.pan || client?.pan || "";
+  const poNumber = inv.poNumber || est?.poNumber || "";
+  const poDateValue = inv.poDate || inv.po_date || est?.poDate || est?.po_date || "";
 
   const dateStr = inv.date
     ? new Date(inv.date).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }).replace(/ /g, "-")
     : "";
-  const dueDateStr = inv.dueDate
-    ? new Date(inv.dueDate).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }).replace(/ /g, "-")
+  const poDateStr = poDateValue
+    ? new Date(poDateValue).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }).replace(/ /g, "-")
     : "";
 
   const termsLines = String(sellerProfile?.terms || "1. Taxes will be applicable.\n2. 100% Payment after the delivery of the meterial.\n3. Transportation charges As per Actual.\n4. Any additional work / rework will be extra.")
@@ -107,9 +96,10 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({ invoice: inv, estimat
   const cellCenter: React.CSSProperties = { ...cellBase, textAlign: "center" };
   const headCell: React.CSSProperties = { ...cellBase, fontWeight: 700, textAlign: "center", backgroundColor: "#fff" };
 
-  // 6 columns: Sr, Product Name, Description, Total Sqft, Qty, Rate, Amount
-  const COL_COUNT = 7;
-  const columnWidths = ["4%", "20%", "30%", "11%", "7%", "11%", "17%"];
+  // Controlled Tax Invoice columns: descriptions may wrap while commercial
+  // values stay aligned in their own cells for browser print and packets.
+  const COL_COUNT = 8;
+  const columnWidths = ["4%", "23%", "27%", "10%", "7%", "8%", "10%", "11%"];
 
   const metaLabelCell: React.CSSProperties = {
     padding: "1px 8px 1px 0",
@@ -141,32 +131,35 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({ invoice: inv, estimat
       data-print-document="true"
       style={{ background: "#fff", color: "#000", fontFamily: "Arial, Helvetica, sans-serif" }}
     >
-      {/* Document header — identical layout to the estimate */}
-      <table className="invoice-document-header" style={{ width: "100%", borderCollapse: "collapse" }}>
+      {/* Tax Invoice header. No Ship To block: Sunrise invoices bill the client directly. */}
+      <table className="invoice-document-header" style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
         <tbody>
+          <tr>
+            <td colSpan={2} style={{ border: "1px solid #000", padding: "7px 10px", textAlign: "center", fontSize: "15px", fontWeight: 800, letterSpacing: "0.6px" }}>
+              TAX INVOICE
+            </td>
+          </tr>
           <tr style={{ verticalAlign: "top" }}>
-            <td style={{ padding: "8px 12px", fontSize: "11px", lineHeight: 1.45, width: "60%" }}>
-              <div style={{ fontWeight: 700 }}>Billing To</div>
+            <td style={{ border: "1px solid #000", padding: "8px 10px", fontSize: "10px", lineHeight: 1.4, width: "57%" }}>
+              <div style={{ fontWeight: 800, marginBottom: "3px" }}>Bill To</div>
               <div style={{ fontWeight: 700 }}>M/S : {billingName}</div>
               {billingAddress && <div style={{ whiteSpace: "pre-wrap" }}>{billingAddress}</div>}
               {billingStateCode && <div>State Code: {billingStateCode}</div>}
-              {billingGstin && <div style={{ fontWeight: 700 }}>GSTN - {billingGstin}</div>}
-              <div style={{ marginTop: "10px", fontWeight: 700 }}>Shipping To</div>
-              <div style={{ fontWeight: 700 }}>M/S : {shippingName}</div>
-              {shippingAddress && <div style={{ whiteSpace: "pre-wrap" }}>{shippingAddress}</div>}
+              {billingGstin && <div style={{ fontWeight: 700 }}>GSTIN : {billingGstin}</div>}
+              {billingPan && <div style={{ fontWeight: 700 }}>PAN : {billingPan}</div>}
             </td>
-            <td style={{ padding: "8px 12px", width: "40%", textAlign: "right", fontSize: "11px", verticalAlign: "top" }}>
-              <div style={{ display: "flex", justifyContent: "flex-end" }}>
-                <InvoiceLogo src={logoSrc} companyName={companyName} />
+            <td style={{ border: "1px solid #000", padding: "8px 10px", width: "43%", textAlign: "right", fontSize: "10px", verticalAlign: "top" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "8px" }}>
+                <div style={{ textAlign: "left", fontWeight: 800, whiteSpace: "nowrap" }}>GST/UIN : {sellerGstin}</div>
+                <InvoiceLogo src={logoSrc} companyName={companyName} maxWidth={155} />
               </div>
-              <table style={{ marginTop: "18px", marginLeft: "auto", borderCollapse: "collapse", tableLayout: "fixed", width: "262px" }}>
+              <table style={{ marginTop: "12px", marginLeft: "auto", borderCollapse: "collapse", tableLayout: "fixed", width: "100%" }}>
                 <tbody>
-                  {metaRow("Date :", dateStr)}
-                  {metaRow("Inv - No -", inv.invoiceNumber, true)}
-                  {dueDateStr && metaRow("Due Date -", dueDateStr)}
-                  {inv.poNumber && metaRow("PO No -", inv.poNumber)}
-                  {sellerProfile?.gstin && metaRow("GSTN -", sellerProfile.gstin)}
-                  {sellerProfile?.pan && metaRow("PAN -", sellerProfile.pan)}
+                  {metaRow("Invoice / Bill No. :", inv.invoiceNumber, true)}
+                  {metaRow("Bill Date :", dateStr)}
+                  {poNumber && metaRow("PO No. :", poNumber)}
+                  {poDateStr && metaRow("PO Date :", poDateStr)}
+                  {(est?.subject || est?.title) && metaRow("Job :", est?.subject || est?.title)}
                 </tbody>
               </table>
             </td>
@@ -181,22 +174,14 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({ invoice: inv, estimat
         </colgroup>
         <thead>
           <tr>
-            <td colSpan={COL_COUNT} style={{ ...cellCenter, fontWeight: 700, padding: "4px 8px" }}>
-              Subject : {est?.subject || est?.title || ""}
-            </td>
-          </tr>
-          <tr>
-            <td style={headCell} rowSpan={2}>Sr.</td>
-            <td style={headCell} rowSpan={2}>Product Name</td>
-            <td style={headCell} rowSpan={2}>Description</td>
-            <td style={headCell}>Total Sq.Ft</td>
-            <td style={headCell}>Qty</td>
-            <td style={headCell} rowSpan={2}>Rate</td>
-            <td style={headCell} rowSpan={2}>Amount</td>
-          </tr>
-          <tr>
-            <td style={headCell}>&nbsp;</td>
-            <td style={headCell}>&nbsp;</td>
+            <td style={headCell}>Sr.</td>
+            <td style={headCell}>Item</td>
+            <td style={headCell}>Description / Dimensions</td>
+            <td style={headCell}>HSN / SAC</td>
+            <td style={headCell}>GST %</td>
+            <td style={headCell}>Quantity</td>
+            <td style={headCell}>Rate</td>
+            <td style={headCell}>Amount</td>
           </tr>
         </thead>
         <tbody>
@@ -205,13 +190,19 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({ invoice: inv, estimat
             const rate = Number(row.rate || 0);
             const amount = Number(row.amount ?? row.totalPrice ?? qty * rate);
             const totalSqft = Number(row.totalSize ?? row.totalSqft ?? 0);
+            const dimensions = row.width != null && row.height != null
+              ? `W ${Number(row.width).toFixed(2)} × H ${Number(row.height).toFixed(2)}${totalSqft > 0 ? ` · ${totalSqft.toFixed(2)} Sq.Ft` : ""}`
+              : totalSqft > 0 ? `${totalSqft.toFixed(2)} Sq.Ft` : "";
+            const description = [formatProductDetails(null, row.description || "", row.itemName || ""), dimensions].filter(Boolean).join("\n");
+            const taxPercent = Number(row.taxPercent ?? row.gstPercent ?? row.gst_percent ?? 0);
             return (
               <tr key={row.id || index}>
                 <td style={cellCenter}>{index + 1}</td>
                 <td style={{ ...cellBase, fontWeight: 600 }}>{row.itemName || row.productName || "Item"}</td>
-                <td style={cellBase}>{formatProductDetails(null, row.description || "", row.itemName || "")}</td>
-                <td style={cellRight}>{totalSqft > 0 ? totalSqft.toFixed(2) : ""}</td>
-                <td style={cellCenter}>{qty}</td>
+                <td style={{ ...cellBase, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{description}</td>
+                <td style={cellCenter}>{row.hsn || ""}</td>
+                <td style={cellRight}>{taxPercent > 0 ? `${taxPercent}%` : ""}</td>
+                <td style={cellRight}>{qty}{row.unit ? ` ${row.unit}` : ""}</td>
                 <td style={cellRight}>{num(rate)}</td>
                 <td style={{ ...cellRight, fontWeight: 600 }}>{num(amount)}</td>
               </tr>
@@ -219,33 +210,28 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({ invoice: inv, estimat
           })}
           {/* Totals */}
           <tr style={{ backgroundColor: "#fff066" }}>
-            <td colSpan={5} style={{ ...cellBase, fontWeight: 700, textAlign: "right", paddingRight: "10px" }}>TOTAL AMOUNT BEFORE TAX</td>
-            <td style={cellBase}></td>
+            <td colSpan={7} style={{ ...cellBase, fontWeight: 700, textAlign: "right", paddingRight: "10px" }}>TOTAL AMOUNT BEFORE TAX</td>
             <td style={{ ...cellRight, fontWeight: 700 }}>{num(subtotal)}</td>
           </tr>
           {isIgst ? (
             <tr>
-              <td colSpan={5} style={{ ...cellBase, fontWeight: 700, textAlign: "right", paddingRight: "10px" }}>Add : IGST 18%</td>
-              <td style={cellBase}></td>
+              <td colSpan={7} style={{ ...cellBase, fontWeight: 700, textAlign: "right", paddingRight: "10px" }}>Add : IGST</td>
               <td style={{ ...cellRight, fontWeight: 700 }}>{num(igst)}</td>
             </tr>
           ) : (
             <>
               <tr>
-                <td colSpan={5} style={{ ...cellBase, fontWeight: 700, textAlign: "right", paddingRight: "10px" }}>Add : CGST 9%</td>
-                <td style={cellBase}></td>
+                <td colSpan={7} style={{ ...cellBase, fontWeight: 700, textAlign: "right", paddingRight: "10px" }}>Add : CGST</td>
                 <td style={{ ...cellRight, fontWeight: 700 }}>{num(cgst)}</td>
               </tr>
               <tr>
-                <td colSpan={5} style={{ ...cellBase, fontWeight: 700, textAlign: "right", paddingRight: "10px" }}>Add : SGST 9%</td>
-                <td style={cellBase}></td>
+                <td colSpan={7} style={{ ...cellBase, fontWeight: 700, textAlign: "right", paddingRight: "10px" }}>Add : SGST</td>
                 <td style={{ ...cellRight, fontWeight: 700 }}>{num(sgst)}</td>
               </tr>
             </>
           )}
           <tr>
-            <td colSpan={5} style={{ ...cellBase, fontWeight: 700, textAlign: "right", paddingRight: "10px" }}>TOTAL AMOUNT AFTER TAX</td>
-            <td style={cellBase}></td>
+            <td colSpan={7} style={{ ...cellBase, fontWeight: 700, textAlign: "right", paddingRight: "10px" }}>GRAND TOTAL</td>
             <td style={{ ...cellRight, fontWeight: 700 }}>{num(grandTotal)}</td>
           </tr>
         </tbody>

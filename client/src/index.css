@@ -421,6 +421,8 @@
   }
   .invoice-print .invoice-table {
     font-size: 9px !important;
+    width: 100% !important;
+    table-layout: fixed !important;
     border-collapse: separate !important;
     border-spacing: 0 !important;
     break-after: auto;
@@ -433,6 +435,13 @@
   .invoice-print .invoice-table td {
     -webkit-box-decoration-break: clone;
     box-decoration-break: clone;
+  }
+  .invoice-print .invoice-table td[style*="text-align: right"] {
+    white-space: nowrap !important;
+  }
+  .invoice-print .invoice-table td[style*="white-space: pre-wrap"] {
+    overflow-wrap: anywhere !important;
+    word-break: normal !important;
   }
   .invoice-print .invoice-table td {
     border: 0 !important;

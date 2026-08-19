@@ -196,8 +196,8 @@ const InvoicePacketPage: React.FC = () => {
           const estimateId = Number(data.estimate?.id || 0);
           const docs = (data.executionDocuments || []).filter((d: any) => d.status !== "deleted" && d.status !== "replaced");
           const seen = new Set<string>();
-          // Client-facing packet order is fixed: Estimate, Invoice, PO, then
-          // execution documents and installation photos.
+          // Client-facing packet order is fixed: Invoice, PO, Estimate, then
+          // transport/execution documents and installation photos.
           const list: PacketPage[] = [];
           const byUploadTime = (a: any, b: any) => new Date(a.uploadedAt || a.createdAt || 0).getTime() - new Date(b.uploadedAt || b.createdAt || 0).getTime();
           const addFile = async (page: Omit<PacketPage, "included">) => {
@@ -208,7 +208,6 @@ const InvoicePacketPage: React.FC = () => {
             if (signed) list.push(signed);
           };
 
-          if (data.estimate) list.push({ id: "est", label: `Estimate ${data.estimate.estimateNumber}`, kind: "estimate", included: true });
           list.push({ id: "inv", label: "Client Billing Invoice", kind: "invoice", included: true });
 
           // Prefer the Estimate's PO reference, then fall back to the active PO
@@ -217,8 +216,10 @@ const InvoicePacketPage: React.FC = () => {
           const poStoragePath = data.estimate?.poFilePath || poUpload?.storagePath || poUpload?.filePath;
           if (poStoragePath) await addFile({ id: "po", label: `Purchase Order (${data.estimate?.poNumber || "PO"})`, kind: "po", storagePath: poStoragePath, mimeType: poUpload?.mimeType });
 
-          // Project-level uploads sit after the Estimate and before store
-          // execution. Preserve the same order in which users uploaded them.
+          if (data.estimate) list.push({ id: "est", label: `Estimate ${data.estimate.estimateNumber}`, kind: "estimate", included: true });
+
+          // Transport/project uploads are the final packet section. Preserve
+          // their existing upload/store order without changing their source.
           const projectDocs = docs
             .filter((doc: any) => !isPoType(doc.documentType) && !isExcludedType(doc.documentType) && !isSignedType(doc.documentType) && !isPhotoType(doc.documentType) && !isStoreScopeDoc(doc))
             .sort(byUploadTime);
