@@ -77,9 +77,11 @@ Deno.serve(async (req: Request) => {
 
   const db = adminClient();
   const url = new URL(req.url);
-  const pathParts = url.pathname.replace(/^\/functions\/v1\/dc-save/, "").split("/").filter(Boolean);
-  const pathId = pathParts[0] ? parseInt(pathParts[0], 10) : null;
-  const queryId = url.searchParams.get("id") ? parseInt(url.searchParams.get("id")!, 10) : null;
+  const pathParts = url.pathname.replace(/^\/(functions\/v1\/)?dc-save/, "").split("/").filter(Boolean);
+  const rawPathId = pathParts[0] ? parseInt(pathParts[0], 10) : null;
+  const pathId = rawPathId != null && !isNaN(rawPathId) ? rawPathId : null;
+  const rawQueryId = url.searchParams.get("id") ? parseInt(url.searchParams.get("id")!, 10) : null;
+  const queryId = rawQueryId != null && !isNaN(rawQueryId) ? rawQueryId : null;
   const dcId = pathId ?? queryId;
 
   try {

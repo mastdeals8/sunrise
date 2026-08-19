@@ -96,16 +96,20 @@ Deno.serve(async (req: Request) => {
   const url = new URL(req.url);
 
   // ID resolution: path segment → query param ?id= → body _estimateId
-  const pathParts = url.pathname.replace(/^\/functions\/v1\/estimate-save/, "").split("/").filter(Boolean);
-  const pathId = pathParts[0] ? parseInt(pathParts[0], 10) : null;
-  const queryId = url.searchParams.get("id") ? parseInt(url.searchParams.get("id")!, 10) : null;
+  // The gateway may strip /functions/v1/ prefix, so match both patterns.
+  const pathParts = url.pathname.replace(/^\/(functions\/v1\/)?estimate-save/, "").split("/").filter(Boolean);
+  const rawPathId = pathParts[0] ? parseInt(pathParts[0], 10) : null;
+  const pathId = rawPathId != null && !isNaN(rawPathId) ? rawPathId : null;
+  const rawQueryId = url.searchParams.get("id") ? parseInt(url.searchParams.get("id")!, 10) : null;
+  const queryId = rawQueryId != null && !isNaN(rawQueryId) ? rawQueryId : null;
 
   try {
     if (req.method === "PATCH") {
       // ---- UPDATE PATH ----
       const rawBody = await req.json();
       // Body-based ID: legacy fallback kept for backwards compatibility.
-      const bodyId = rawBody._estimateId ? parseInt(String(rawBody._estimateId), 10) : null;
+      const rawBodyId = rawBody._estimateId ? parseInt(String(rawBody._estimateId), 10) : null;
+      const bodyId = rawBodyId != null && !isNaN(rawBodyId) ? rawBodyId : null;
       delete rawBody._estimateId;
       const estimateId = pathId ?? queryId ?? bodyId;
       if (!estimateId) return errorResponse("Missing estimate id", 400);
