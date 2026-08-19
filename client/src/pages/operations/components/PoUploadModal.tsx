@@ -10,6 +10,10 @@ interface PoUploadModalProps {
   setPoDate: (v: string) => void;
   poAmount: string;
   setPoAmount: (v: string) => void;
+  poAmountType: "without_gst" | "with_gst";
+  setPoAmountType: (v: "without_gst" | "with_gst") => void;
+  poBaseAmount: number;
+  poWithGstAmount: number;
   poFileUrl: string;
   setPoFileUrl: (v: string) => void;
   poRemarks: string;
@@ -31,6 +35,10 @@ const PoUploadModal: React.FC<PoUploadModalProps> = ({
   setPoDate,
   poAmount,
   setPoAmount,
+  poAmountType,
+  setPoAmountType,
+  poBaseAmount,
+  poWithGstAmount,
   poFileUrl,
   setPoFileUrl,
   poRemarks,
@@ -85,6 +93,23 @@ const PoUploadModal: React.FC<PoUploadModalProps> = ({
                 className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded text-slate-800 focus:outline-none focus:border-orange-500 font-bold"
               />
             </div>
+          </div>
+
+          <div>
+            <label className="block font-bold text-slate-500 uppercase mb-1">PO Amount Type</label>
+            <select
+              value={poAmountType}
+              onChange={(e) => {
+                const next = e.target.value as "without_gst" | "with_gst";
+                setPoAmountType(next);
+                setPoAmount(String((next === "with_gst" ? poWithGstAmount : poBaseAmount).toFixed(2)));
+              }}
+              className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded text-slate-800 focus:outline-none focus:border-orange-500 font-bold"
+            >
+              <option value="without_gst">Without GST (pre-GST)</option>
+              <option value="with_gst">With GST (GST inclusive)</option>
+            </select>
+            <p className="mt-1 text-[10px] text-slate-500">Estimate reference: ₹{poBaseAmount.toLocaleString("en-IN", { minimumFractionDigits: 2 })} before GST / ₹{poWithGstAmount.toLocaleString("en-IN", { minimumFractionDigits: 2 })} including GST.</p>
           </div>
 
           <div>

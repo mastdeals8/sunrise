@@ -642,9 +642,22 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
   const [poNumber, setPoNumber] = useState("");
   const [poDate, setPoDate] = useState("");
   const [poAmount, setPoAmount] = useState("");
+  const [poAmountType, setPoAmountType] = useState<"without_gst" | "with_gst">("without_gst");
   const [poRemarks, setPoRemarks] = useState("");
   const [poFileUrl, setPoFileUrl] = useState("");
   const [uploadingPo, setUploadingPo] = useState(false);
+
+  const poBaseAmountFor = (estimate: Estimate | null) => {
+    if (!estimate) return 0;
+    const subtotal = Number(estimate.subtotal);
+    const total = Number(estimate.totalAmount);
+    const tax = Number(estimate.taxAmount);
+    return Number.isFinite(subtotal) && subtotal >= 0 ? subtotal : Math.max(0, total - (Number.isFinite(tax) ? tax : 0));
+  };
+  const poWithGstAmountFor = (estimate: Estimate | null) => Number(estimate?.totalAmount || 0);
+  const poAmountTypeFromRemarks = (remarks: unknown): "without_gst" | "with_gst" =>
+    String(remarks || "").match(/^\[PO_AMOUNT_TYPE:(with_gst|without_gst)\]\s*/i)?.[1]?.toLowerCase() === "with_gst" ? "with_gst" : "without_gst";
+  const poRemarksWithoutType = (remarks: unknown) => String(remarks || "").replace(/^\[PO_AMOUNT_TYPE:(?:with_gst|without_gst)\]\s*/i, "");
 
   const {
     showDcModal,
@@ -2772,16 +2785,14 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
         poDate: poDate || new Date().toISOString(),
         poAmount: Number(poAmount),
         poFilePath: poFileUrl || null,
-        poRemarks: poRemarks || null,
+        // Keep the amount type in the existing PO remarks field; no schema or
+        // parallel PO metadata store is introduced.
+        poRemarks: `[PO_AMOUNT_TYPE:${poAmountType}]${poRemarks ? ` ${poRemarks}` : ""}`,
       };
       let res: Response;
       if (isBoltMode) {
-        try {
-          const data = await updateEstimate(token, targetEstimate.id, poPayload);
-          res = new Response(JSON.stringify(data), { status: 200 });
-        } catch (err: any) {
-          res = new Response(JSON.stringify({ message: err.message }), { status: 500 });
-        }
+        const data = await updateEstimate(token, targetEstimate.id, poPayload);
+        res = new Response(JSON.stringify(data), { status: 200 });
       } else {
         res = await fetch(`/api/operations/estimates/${targetEstimate.id}`, {
           method: "PATCH",
@@ -2790,12 +2801,22 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
         });
       }
 
+      if (!res.ok) {
+        let detail = "Failed to save PO details";
+        try {
+          const body = await res.json();
+          detail = body?.message || body?.error || detail;
+        } catch { /* retain the deterministic fallback */ }
+        throw new Error(detail);
+      }
+
       if (res.ok) {
         showSuccess("Purchase Order successfully uploaded and attached!");
         setShowPoModal(false);
         setPoNumber("");
         setPoDate("");
         setPoAmount("");
+        setPoAmountType("without_gst");
         setPoRemarks("");
         setPoFileUrl("");
         
@@ -2820,9 +2841,11 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     setPoWorkflowEstimate(estimate);
     setPoNumber(estimate.poNumber || "");
     setPoDate(estimate.poDate ? new Date(estimate.poDate).toISOString().split("T")[0] : new Date().toISOString().split("T")[0]);
-    setPoAmount(estimate.poAmount ? String(estimate.poAmount) : String(estimate.totalAmount || ""));
+    const savedType = poAmountTypeFromRemarks(estimate.poRemarks);
+    setPoAmountType(savedType);
+    setPoAmount(estimate.poAmount != null ? String(estimate.poAmount) : String((savedType === "with_gst" ? poWithGstAmountFor(estimate) : poBaseAmountFor(estimate)) || ""));
     setPoFileUrl(estimate.poFilePath || "");
-    setPoRemarks(estimate.poRemarks || "");
+    setPoRemarks(poRemarksWithoutType(estimate.poRemarks));
     setShowPoModal(true);
   };
 
@@ -4313,6 +4336,10 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
           setPoDate={setPoDate}
           poAmount={poAmount}
           setPoAmount={setPoAmount}
+          poAmountType={poAmountType}
+          setPoAmountType={setPoAmountType}
+          poBaseAmount={poBaseAmountFor(poWorkflowEstimate || selectedEstimate)}
+          poWithGstAmount={poWithGstAmountFor(poWorkflowEstimate || selectedEstimate)}
           poFileUrl={poFileUrl}
           setPoFileUrl={setPoFileUrl}
           poRemarks={poRemarks}
@@ -4335,6 +4362,10 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
           setPoDate={setPoDate}
           poAmount={poAmount}
           setPoAmount={setPoAmount}
+          poAmountType={poAmountType}
+          setPoAmountType={setPoAmountType}
+          poBaseAmount={poBaseAmountFor(poWorkflowEstimate || selectedEstimate)}
+          poWithGstAmount={poWithGstAmountFor(poWorkflowEstimate || selectedEstimate)}
           poFileUrl={poFileUrl}
           setPoFileUrl={setPoFileUrl}
           poRemarks={poRemarks}
