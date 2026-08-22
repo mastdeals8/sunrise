@@ -337,6 +337,20 @@ const InvoicePacketPage: React.FC = () => {
   // remains entirely client-side and does not call this route mode.
   useEffect(() => {
     if (!pdfMode || !packet) return;
+    // For invoice mode, wait for the InvoiceDocument to signal that logo and
+    // signature images have been converted to base64 data URLs. For estimate
+    // mode, use the original fixed delay.
+    if (pdfMode === "invoice") {
+      const checkReady = () => {
+        if (document.documentElement.getAttribute("data-invoice-images-ready") === "true") {
+          document.documentElement.setAttribute("data-pdf-ready", "true");
+        } else {
+          window.setTimeout(checkReady, 200);
+        }
+      };
+      const timer = window.setTimeout(checkReady, 300);
+      return () => window.clearTimeout(timer);
+    }
     const timer = window.setTimeout(() => document.documentElement.setAttribute("data-pdf-ready", "true"), 1200);
     return () => window.clearTimeout(timer);
   }, [pdfMode, packet, sellerProfile]);
@@ -490,22 +504,83 @@ const InvoicePacketPage: React.FC = () => {
               }
             }
             if (!hasInk) throw new Error(`Rendered document is blank: ${p.label}`);
-            // Slice using the same 194 x 281 mm printable box as native print.
+
+            // Row-aware slicing for invoice pages. data-pdf-row elements mark
+            // row/store-heading/footer blocks that must never be split across
+            // pages. Continuation pages receive a fresh copy of the table head.
+            const isInvoice = p.kind === "invoice";
             const sliceHeight = PRINTABLE_CSS_H * 3;
-            for (let offset = 0; offset < canvas.height; offset += sliceHeight) {
-              const height = Math.min(sliceHeight, canvas.height - offset);
+            const scale3 = 3;
+            const elRect = el.getBoundingClientRect();
+            const rowBoundaries: number[] = [];
+            const rowEls = isInvoice ? el.querySelectorAll("[data-pdf-row]") : [];
+            rowEls.forEach((rowEl) => {
+              const rect = rowEl.getBoundingClientRect();
+              rowBoundaries.push(Math.round((rect.top - elRect.top) * scale3));
+              rowBoundaries.push(Math.round((rect.bottom - elRect.top) * scale3));
+            });
+            const boundaries = Array.from(new Set(rowBoundaries))
+              .filter(y => y >= 0 && y <= canvas.height)
+              .sort((a, b) => a - b);
+
+            const tableHead = isInvoice ? el.querySelector("[data-pdf-thead]") : null;
+            const tableHeadRect = tableHead?.getBoundingClientRect();
+            const tableHeadTop = tableHeadRect ? Math.round((tableHeadRect.top - elRect.top) * scale3) : 0;
+            const tableHeadBottom = tableHeadRect ? Math.round((tableHeadRect.bottom - elRect.top) * scale3) : 0;
+            const tableHeadHeight = Math.max(0, tableHeadBottom - tableHeadTop);
+
+            const pageStarts: number[] = [0];
+            if (isInvoice && boundaries.length > 1) {
+              let start = 0;
+              let maxHeight = sliceHeight;
+              for (const boundary of boundaries) {
+                if (boundary <= start) continue;
+                if (boundary - start > maxHeight) {
+                  pageStarts.push(boundary);
+                  start = boundary;
+                  maxHeight = sliceHeight - tableHeadHeight;
+                }
+              }
+            } else {
+              for (let offset = sliceHeight; offset < canvas.height; offset += sliceHeight) pageStarts.push(offset);
+            }
+
+            const totalPages = pageStarts.length;
+            for (let pi = 0; pi < pageStarts.length; pi++) {
+              const startY = pageStarts[pi];
+              const endY = pi < pageStarts.length - 1 ? pageStarts[pi + 1] : canvas.height;
+              const contentHeight = endY - startY;
+              if (contentHeight <= 0) continue;
+
+              // Continuation pages prepend the captured table header so each
+              // page starts with the same column labels as page one.
+              const prependHeader = isInvoice && pi > 0 && tableHeadHeight > 0;
+              const outputHeight = contentHeight + (prependHeader ? tableHeadHeight : 0);
               const slice = document.createElement("canvas");
               slice.width = canvas.width;
-              slice.height = height;
+              slice.height = outputHeight;
               const context = slice.getContext("2d");
               if (!context) throw new Error("Could not prepare printable page");
               context.fillStyle = "#ffffff";
               context.fillRect(0, 0, slice.width, slice.height);
-              context.drawImage(canvas, 0, offset, canvas.width, height, 0, 0, canvas.width, height);
+              if (prependHeader) {
+                context.drawImage(canvas, 0, tableHeadTop, canvas.width, tableHeadHeight, 0, 0, canvas.width, tableHeadHeight);
+              }
+              context.drawImage(canvas, 0, startY, canvas.width, contentHeight, 0, prependHeader ? tableHeadHeight : 0, canvas.width, contentHeight);
+
               const img = await pdf.embedPng(slice.toDataURL("image/png"));
-              const drawH = PRINTABLE_W * (height / canvas.width);
+              const drawH = PRINTABLE_W * (outputHeight / canvas.width);
               const page = pdf.addPage([A4_W, A4_H]);
               page.drawImage(img, { x: PRINT_MARGIN, y: A4_H - PRINT_MARGIN - drawH, width: PRINTABLE_W, height: Math.min(drawH, PRINTABLE_H) });
+
+              if (isInvoice) {
+                page.drawText(`Page ${pi + 1} of ${totalPages}`, {
+                  x: A4_W / 2 - 40,
+                  y: PRINT_MARGIN / 2 + 2,
+                  size: 8,
+                  color: rgb(0.4, 0.45, 0.52),
+                });
+              }
             }
           }
         } catch (err) {
@@ -715,7 +790,7 @@ const InvoicePacketPage: React.FC = () => {
   );
 };
 
-const InvoicePacketDocument: React.FC<{ packet: PacketData; sellerProfile: any; assetToken?: string | null }> = ({ packet, sellerProfile, assetToken }) => <InvoiceDocument invoice={packet.invoice} estimate={packet.estimate} client={packet.client} sellerProfile={sellerProfile} assetToken={assetToken} products={packet.products || []} />;
+const InvoicePacketDocument: React.FC<{ packet: PacketData; sellerProfile: any; assetToken?: string | null }> = ({ packet, sellerProfile, assetToken }) => <InvoiceDocument invoice={packet.invoice} estimate={packet.estimate} client={packet.client} sellerProfile={sellerProfile} assetToken={assetToken} products={packet.products || []} stores={packet.stores || []} />;
 
 // Estimate page (inside a packet) — same A4 template, "Estimate" labeling.
 const EstimatePacketPage: React.FC<{ packet: PacketData; sellerProfile: any; assetToken?: string | null }> = ({ packet, sellerProfile, assetToken }) => {

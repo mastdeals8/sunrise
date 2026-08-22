@@ -3,8 +3,9 @@
 // It is the canonical Sunrise Media Tax Invoice for preview, print/PDF, and
 // invoice packets. Saved invoice values remain the commercial source of truth.
 
-import React, { useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { companyAssetUrl } from "../utils/companyAssets";
+import { orderedStoreKeysFromGrouping } from "../pages/operations/utils/estimateOrdering";
 
 export interface InvoiceDocumentProps {
   invoice: any;
@@ -13,6 +14,7 @@ export interface InvoiceDocumentProps {
   sellerProfile?: any;
   assetToken?: string | null;
   products?: any[];
+  stores?: any[];
 }
 
 const amountInWords = (num: number): string => {
@@ -32,11 +34,43 @@ const amountInWords = (num: number): string => {
   return `${result.trim()} Only`;
 };
 
+// Convert an image URL to a base64 data URL for reliable html2canvas capture.
+// Supabase public bucket URLs support CORS, so fetch succeeds and the data URL
+// renders without cross-origin canvas tainting.
+const useDataUrl = (url: string): { dataUrl: string; ready: boolean } => {
+  const [dataUrl, setDataUrl] = useState("");
+  const [ready, setReady] = useState(!url);
+
+  useEffect(() => {
+    if (!url) { setReady(true); return; }
+    let cancelled = false;
+    setReady(false);
+    fetch(url, { mode: "cors" })
+      .then(res => { if (!res.ok) throw new Error("fetch failed"); return res.blob(); })
+      .then(blob => {
+        if (cancelled) return;
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          if (cancelled) return;
+          const result = reader.result as string;
+          if (result) setDataUrl(result);
+          setReady(true);
+        };
+        reader.onerror = () => { if (!cancelled) setReady(true); };
+        reader.readAsDataURL(blob);
+      })
+      .catch(() => { if (!cancelled) setReady(true); });
+    return () => { cancelled = true; };
+  }, [url]);
+
+  return { dataUrl: dataUrl || url, ready };
+};
+
 const InvoiceLogo: React.FC<{ src: string; companyName: string; maxWidth?: number }> = ({ src, companyName, maxWidth = 230 }) => {
   const [failed, setFailed] = useState(!src);
   return failed
     ? <div style={{ fontWeight: 900, fontSize: "22px", lineHeight: 1.1, textAlign: "right" }}>{companyName}</div>
-    : <img src={src} alt={companyName} crossOrigin="anonymous" onError={() => setFailed(true)} style={{ width: maxWidth, maxWidth: "100%", height: "auto", objectFit: "contain" }} />;
+    : <img src={src} alt={companyName} onError={() => setFailed(true)} style={{ width: maxWidth, maxWidth: "100%", height: "auto", objectFit: "contain" }} />;
 };
 
 const num = (n: number) => (Number(n) || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -53,9 +87,21 @@ const resolveItemName = (row: any, products: any[]): string => {
   return saved || "Item";
 };
 
-const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({ invoice: inv, estimate: est, client, sellerProfile = {}, assetToken: token, products = [] }) => {
-  // Saved invoice lines are the sole commercial source for invoice preview,
-  // print and packet rendering. Estimate rows are not a fallback here.
+interface StoreGroup {
+  storeCode: string;
+  storeName: string;
+  items: any[];
+}
+
+const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({
+  invoice: inv,
+  estimate: est,
+  client,
+  sellerProfile = {},
+  assetToken: token,
+  products = [],
+  stores = [],
+}) => {
   const lines = Array.isArray(inv.lineItems || inv.line_items) ? (inv.lineItems || inv.line_items) : [];
   const subtotal = Number(inv.amount ?? lines.reduce((sum: number, row: any) => sum + Number(row.amount ?? row.totalPrice ?? Number(row.quantity || 0) * Number(row.rate || 0)), 0));
   const totalTax = Number(inv.taxAmount ?? Math.max(0, Number(inv.totalAmount || 0) - subtotal));
@@ -78,8 +124,19 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({ invoice: inv, estimat
   const companyEmail = sellerProfile?.email || "";
   const companyMobile = sellerProfile?.mobile || "";
   const sellerGstin = sellerProfile?.gstin || "27ABZFS5736R1ZR";
-  const logoSrc = companyAssetUrl(sellerProfile?.logoPath, token);
-  const signatureStampSrc = companyAssetUrl(sellerProfile?.signatureStampPath, token);
+
+  // Convert logo and signature to base64 data URLs for reliable PDF capture
+  const logoUrl = companyAssetUrl(sellerProfile?.logoPath, token);
+  const { dataUrl: logoDataUrl, ready: logoReady } = useDataUrl(logoUrl);
+  const sigUrl = companyAssetUrl(sellerProfile?.signatureStampPath, token);
+  const { dataUrl: sigDataUrl, ready: sigReady } = useDataUrl(sigUrl);
+
+  // Signal image readiness for Playwright-based PDF rendering
+  useEffect(() => {
+    if (logoReady && sigReady) {
+      document.documentElement.setAttribute("data-invoice-images-ready", "true");
+    }
+  }, [logoReady, sigReady]);
 
   const billingName = est?.billingLegalNameSnapshot || inv.partyName || client?.name || "";
   const billingAddress = est?.billingAddressSnapshot || client?.address || "";
@@ -101,17 +158,98 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({ invoice: inv, estimat
     .map((line: string) => line.trim())
     .filter(Boolean);
 
+  // Store grouping — resolves store for each invoice line item by:
+  // 1. Using the line item's own storeCode if present
+  // 2. Falling back to the estimate's storeGrouping, which maps store IDs to
+  //    item SL numbers — this is how multi-store estimates track which items
+  //    belong to which store. The invoice line items carry the same SL numbers.
+  // Does not invent store information — uses existing saved metadata only.
+  const storeGroups = useMemo<StoreGroup[]>(() => {
+    const storeByCode = new Map<string, any>();
+    (stores || []).forEach((s: any) => {
+      const code = String(s.storeCode || s.code || "").trim();
+      if (code) storeByCode.set(code, s);
+    });
+
+    // Build SL → storeCode mapping from the estimate's storeGrouping
+    const estimateGrouping = (est?.storeGrouping || {}) as Record<string, any>;
+    const orderedSids = orderedStoreKeysFromGrouping(estimateGrouping);
+    const slToStoreCode = new Map<number, string>();
+    const sidToStoreCode = new Map<string, string>();
+    orderedSids.forEach(sid => {
+      const s = (stores || []).find((st: any) => st.id === Number(sid));
+      const code = String(s?.storeCode || s?.code || "").trim();
+      if (code) {
+        sidToStoreCode.set(sid, code);
+        const groupData = estimateGrouping[sid];
+        const itemSls: number[] = Array.isArray(groupData) ? groupData : (groupData?.itemSls || []);
+        itemSls.forEach((sl: any) => {
+          const parsed = Number(sl);
+          if (Number.isFinite(parsed)) slToStoreCode.set(parsed, code);
+        });
+      }
+    });
+
+    // Ordered store codes from the estimate's storeGrouping
+    const orderedStoreCodes = orderedSids.map(sid => sidToStoreCode.get(sid)).filter(Boolean) as string[];
+
+    // Group line items by storeCode
+    const groups: StoreGroup[] = [];
+    const seenCodes: string[] = [];
+
+    const ensureGroup = (code: string) => {
+      if (seenCodes.includes(code)) return;
+      seenCodes.push(code);
+      const store = storeByCode.get(code);
+      groups.push({
+        storeCode: code,
+        storeName: store?.name || code || "Store",
+        items: [],
+      });
+    };
+
+    // First pass: create groups in estimate order
+    orderedStoreCodes.forEach(code => ensureGroup(code));
+
+    // Second pass: add items to groups. Resolve storeCode from line item or
+    // from the estimate's storeGrouping via SL number matching.
+    lines.forEach((line: any) => {
+      let code = String(line.storeCode ?? line.store_code ?? "").trim();
+      if (!code) {
+        const sl = Number(line.sl ?? 0);
+        if (sl > 0 && slToStoreCode.has(sl)) {
+          code = slToStoreCode.get(sl)!;
+        }
+      }
+      ensureGroup(code);
+      const group = groups.find(g => g.storeCode === code);
+      if (group) group.items.push(line);
+    });
+
+    // Remove empty groups (no items)
+    return groups.filter(g => g.items.length > 0);
+  }, [lines, stores, est]);
+
+  const hasStoreHeadings = storeGroups.length > 1 || (storeGroups.length === 1 && storeGroups[0].storeCode !== "" && storeGroups[0].storeCode !== "default");
+
   // Inline styles — same paradigm as EstimateDocument, so they survive
   // print without depending on Tailwind classes.
   const cellBase: React.CSSProperties = { border: "1px solid #000", padding: "3px 5px", fontSize: "10px", lineHeight: 1.3, verticalAlign: "middle", pageBreakInside: "avoid" };
+  const cellLeft: React.CSSProperties = { ...cellBase, textAlign: "left" };
   const cellRight: React.CSSProperties = { ...cellBase, textAlign: "right" };
   const cellCenter: React.CSSProperties = { ...cellBase, textAlign: "center" };
   const headCell: React.CSSProperties = { ...cellBase, fontWeight: 700, textAlign: "center", backgroundColor: "#fff" };
 
-  // Controlled Tax Invoice columns: descriptions may wrap while commercial
-  // values stay aligned in their own cells for browser print and packets.
   const COL_COUNT = 8;
   const columnWidths = ["4%", "23%", "27%", "10%", "7%", "8%", "10%", "11%"];
+
+  const storeHeadingStyle: React.CSSProperties = {
+    ...cellBase,
+    fontWeight: 700,
+    backgroundColor: "#e2e8f0",
+    padding: "4px 8px",
+    fontSize: "10px",
+  };
 
   const metaLabelCell: React.CSSProperties = {
     padding: "1px 8px 1px 0",
@@ -135,6 +273,8 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({ invoice: inv, estimat
       <td style={{ ...metaValueCell, fontWeight: bold ? 700 : undefined }}>{value}</td>
     </tr>
   );
+
+  let srNo = 0;
 
   return (
     <div
@@ -163,7 +303,7 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({ invoice: inv, estimat
             <td style={{ border: "1px solid #000", padding: "8px 10px", width: "43%", textAlign: "right", fontSize: "10px", verticalAlign: "top" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "8px" }}>
                 <div style={{ textAlign: "left", fontWeight: 800, whiteSpace: "nowrap" }}>GST/UIN : {sellerGstin}</div>
-                <InvoiceLogo src={logoSrc} companyName={companyName} maxWidth={155} />
+                <InvoiceLogo src={logoDataUrl} companyName={companyName} maxWidth={155} />
               </div>
               <table style={{ marginTop: "12px", marginLeft: "auto", borderCollapse: "collapse", tableLayout: "fixed", width: "100%" }}>
                 <tbody>
@@ -179,12 +319,12 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({ invoice: inv, estimat
         </tbody>
       </table>
 
-      {/* Invoice table */}
+      {/* Invoice table — store-grouped with data-pdf-row markers for row-aware slicing */}
       <table className="invoice-table" style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed", marginTop: "4px" }}>
         <colgroup>
           {columnWidths.map((w, i) => <col key={i} style={{ width: w }} />)}
         </colgroup>
-        <thead style={{ display: "table-header-group" }}>
+        <thead data-pdf-thead style={{ display: "table-header-group" }}>
           <tr>
             <td style={headCell}>Sr.</td>
             <td style={headCell}>Item</td>
@@ -197,26 +337,40 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({ invoice: inv, estimat
           </tr>
         </thead>
         <tbody>
-          {lines.map((row: any, index: number) => {
-            const qty = Number(row.quantity || 0);
-            const rate = Number(row.rate || 0);
-            const amount = Number(row.amount ?? row.totalPrice ?? qty * rate);
-            const description = String(row.description ?? "").trim();
-            const taxPercent = Number(row.taxPercent ?? row.gstPercent ?? row.gst_percent ?? 0);
-            return (
-              <tr key={row.id || index} style={{ pageBreakInside: "avoid" }}>
-                <td style={cellCenter}>{index + 1}</td>
-                <td style={{ ...cellBase, fontWeight: 600 }}>{resolveItemName(row, products)}</td>
-                <td style={{ ...cellBase, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{description}</td>
-                <td style={cellCenter}>{row.hsn || ""}</td>
-                <td style={cellCenter}>{taxPercent > 0 ? `${taxPercent}%` : ""}</td>
-                <td style={cellCenter}>{qty}</td>
-                <td style={cellRight}>{num(rate)}</td>
-                <td style={{ ...cellRight, fontWeight: 600 }}>{num(amount)}</td>
-              </tr>
-            );
-          })}
-          {/* Totals */}
+          {storeGroups.map((group) => (
+            <React.Fragment key={group.storeCode || "default"}>
+              {hasStoreHeadings && (
+                <tr data-pdf-row data-pdf-store-heading="true">
+                  <td colSpan={COL_COUNT} style={storeHeadingStyle}>
+                    Store: {group.storeName}{group.storeCode && ` \u2014 Store Code: ${group.storeCode}`}
+                  </td>
+                </tr>
+              )}
+              {group.items.map((row: any, index: number) => {
+                srNo++;
+                const qty = Number(row.quantity || 0);
+                const rate = Number(row.rate || 0);
+                const amount = Number(row.amount ?? row.totalPrice ?? qty * rate);
+                const description = String(row.description ?? "").trim();
+                const taxPercent = Number(row.taxPercent ?? row.gstPercent ?? row.gst_percent ?? 0);
+                return (
+                  <tr key={row.id || `${group.storeCode}-${index}`} data-pdf-row style={{ pageBreakInside: "avoid" }}>
+                    <td style={cellCenter}>{srNo}</td>
+                    <td style={{ ...cellLeft, fontWeight: 600 }}>{resolveItemName(row, products)}</td>
+                    <td style={{ ...cellLeft, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{description}</td>
+                    <td style={cellCenter}>{row.hsn || ""}</td>
+                    <td style={cellCenter}>{taxPercent > 0 ? `${taxPercent}%` : ""}</td>
+                    <td style={cellCenter}>{qty}</td>
+                    <td style={cellRight}>{num(rate)}</td>
+                    <td style={{ ...cellRight, fontWeight: 600 }}>{num(amount)}</td>
+                  </tr>
+                );
+              })}
+            </React.Fragment>
+          ))}
+        </tbody>
+        {/* Totals — wrapped in a data-pdf-row tbody so they stay together */}
+        <tbody data-pdf-row>
           <tr style={{ backgroundColor: "#fff066" }}>
             <td colSpan={7} style={{ ...cellBase, fontWeight: 700, textAlign: "right", paddingRight: "10px" }}>TOTAL AMOUNT BEFORE TAX</td>
             <td style={{ ...cellRight, fontWeight: 700 }}>{num(subtotal)}</td>
@@ -246,12 +400,12 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({ invoice: inv, estimat
       </table>
 
       {/* Amount in words */}
-      <div style={{ marginTop: "6px", fontSize: "10px", fontWeight: 700 }}>
+      <div data-pdf-row style={{ marginTop: "6px", fontSize: "10px", fontWeight: 700, pageBreakInside: "avoid" }}>
         Rupees : {amountInWords(grandTotal)}
       </div>
 
-      {/* Footer — identical structure to the estimate */}
-      <div className="invoice-footer-block" style={{ marginTop: "8px" }}>
+      {/* Footer — marked as a single data-pdf-row so it stays together */}
+      <div className="invoice-footer-block" data-pdf-row style={{ marginTop: "8px", pageBreakInside: "avoid" }}>
         <table className="invoice-document-footer" style={{ width: "100%", borderCollapse: "collapse" }}>
           <tbody>
             <tr style={{ verticalAlign: "top" }}>
@@ -269,9 +423,9 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({ invoice: inv, estimat
               <td style={{ ...cellBase, padding: "8px 10px", width: "28%", textAlign: "right", verticalAlign: "bottom" }}>
                 <div style={{ fontWeight: 700 }}>For {companyName.toUpperCase()}</div>
                 <div style={{ height: "52px", display: "flex", alignItems: "center", justifyContent: "flex-end" }}>
-                  {signatureStampSrc && (
+                  {sigDataUrl && (
                     <img
-                      src={signatureStampSrc}
+                      src={sigDataUrl}
                       alt="Signature and stamp"
                       style={{ maxHeight: "48px", maxWidth: "150px", objectFit: "contain" }}
                     />
@@ -285,7 +439,7 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({ invoice: inv, estimat
         <div style={{ backgroundColor: "#f59e0b", color: "#fff", textAlign: "center", padding: "6px 8px", letterSpacing: "0.3px" }}>
           <div style={{ fontSize: "16px", fontWeight: 900, letterSpacing: "1.5px", lineHeight: 1.1 }}>{companyName.toUpperCase()}</div>
           {companyAddress && <div style={{ fontSize: "9px", marginTop: "3px", lineHeight: 1.25 }}>{companyAddress}</div>}
-          {(companyMobile || companyEmail) && <div style={{ fontSize: "9px", marginTop: "1px", lineHeight: 1.25 }}>{[companyMobile, companyEmail].filter(Boolean).join("  ·  ")}</div>}
+          {(companyMobile || companyEmail) && <div style={{ fontSize: "9px", marginTop: "1px", lineHeight: 1.25 }}>{[companyMobile, companyEmail].filter(Boolean).join("  \u00b7  ")}</div>}
         </div>
       </div>
     </div>
