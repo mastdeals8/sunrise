@@ -2,7 +2,7 @@ import React from "react";
 import { Pager, usePagedList } from "@/components/Pager";
 import { createPortal } from "react-dom";
 import { Link } from "wouter";
-import { ChevronDown, ChevronRight, ClipboardPaste, Copy, Edit3, Eye, FileSpreadsheet, Filter, FolderOpen, MoveDown, MoveUp, Plus, Redo2, Search, Trash, Undo2 } from "lucide-react";
+import { ChevronDown, ChevronRight, ClipboardPaste, Copy, CreditCard as Edit3, Eye, FilePlus2, FileSpreadsheet, FileUp, Filter, FolderOpen, MoveDown, MoveUp, Plus, Redo2, Search, Trash, Undo2 } from "lucide-react";
 import { displayFormatLabel, isAblblFormat, normalizeDisplayName, normalizeFormatMode, normalizeGstinPan } from "../../../../../shared/textFormat";
 import { formatProductDetails, sameDisplayText } from "../../../../../shared/productDetails";
 import { formatCurrency } from "../utils/formatters";
@@ -1666,7 +1666,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
 	                                    className="inline-flex h-7 w-7 items-center justify-center rounded border border-purple-200 bg-white text-purple-700 hover:bg-purple-50 transition"
 	                                    aria-label="Upload PO"
 	                                  >
-	                                    <Plus className="w-3.5 h-3.5" />
+	                                    <FileUp className="w-3.5 h-3.5" />
 	                                  </button>
                                 )}
 	                                <button
@@ -1675,7 +1675,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
 	                                  className="inline-flex h-7 w-7 items-center justify-center rounded border border-amber-200 bg-white text-amber-700 hover:bg-amber-50 transition"
 	                                  aria-label={isAblblFormat(e.clientFormat) ? "Create WCC" : "Create DC"}
 	                                >
-	                                  <Plus className="w-3.5 h-3.5" />
+	                                  <FilePlus2 className="w-3.5 h-3.5" />
 	                                </button>
 	                                <button
 	                                  onClick={() => handleDeleteEstimate(e)}

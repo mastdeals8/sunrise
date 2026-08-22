@@ -1,5 +1,5 @@
-import React from "react";
-import { X, Upload } from "lucide-react";
+import React, { useCallback, useRef, useState } from "react";
+import { X, Upload, FileUp, ClipboardPaste } from "lucide-react";
 
 interface PoUploadModalProps {
   handlePoSubmit: (e: React.FormEvent) => void;
@@ -48,9 +48,79 @@ const PoUploadModal: React.FC<PoUploadModalProps> = ({
 }) => {
   const isReplacing = Boolean(poFileUrl || poNumber);
   const fileName = poFileUrl ? poFileUrl.split("/").pop() : "";
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragError, setDragError] = useState("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const triggerFileInput = useCallback(() => {
+    fileInputRef.current?.click();
+  }, []);
+
+  const uploadFile = useCallback(
+    (file: File) => {
+      setDragError("");
+      const dataTransfer = new DataTransfer();
+      dataTransfer.items.add(file);
+      const fileList = dataTransfer.files;
+      const syntheticEvent = {
+        target: { files: fileList, value: file.name },
+        currentTarget: { files: fileList, value: file.name },
+      } as unknown as React.ChangeEvent<HTMLInputElement>;
+      handleFileUpload(syntheticEvent, "client_po", setPoFileUrl);
+    },
+    [handleFileUpload, setPoFileUrl]
+  );
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setIsDragging(false);
+      setDragError("");
+      const files = e.dataTransfer?.files;
+      if (!files || files.length === 0) return;
+      uploadFile(files[0]);
+    },
+    [uploadFile]
+  );
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  }, []);
+
+  const handlePaste = useCallback(
+    (e: React.ClipboardEvent) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].kind === "file") {
+          const file = items[i].getAsFile();
+          if (file) {
+            e.preventDefault();
+            uploadFile(file);
+            return;
+          }
+        }
+      }
+    },
+    [uploadFile]
+  );
+
   return (
     <div data-qa="po-upload-modal" className="fixed inset-0 z-[100] bg-slate-900/60 flex items-center justify-center p-4">
-      <form onSubmit={handlePoSubmit} className="bg-white w-full max-w-lg rounded-lg shadow-2xl border border-slate-200 overflow-hidden">
+      <form
+        onSubmit={handlePoSubmit}
+        onPaste={handlePaste}
+        className="bg-white w-full max-w-lg rounded-lg shadow-2xl border border-slate-200 overflow-hidden"
+      >
         <div className="px-4 py-3 bg-slate-900 text-white flex justify-between items-center">
           <div>
             <p className="text-[10px] font-black uppercase tracking-widest text-orange-400">Purchase Order</p>
@@ -120,13 +190,36 @@ const PoUploadModal: React.FC<PoUploadModalProps> = ({
                 <button type="button" onClick={() => setPoFileUrl("")} className="text-slate-400 hover:text-red-500"><X className="w-4 h-4" /></button>
               </div>
             ) : (
-              <label className="flex flex-col items-center justify-center border-2 border-dashed border-slate-200 rounded p-4 hover:bg-slate-50 cursor-pointer transition">
-                <Upload className="w-6 h-6 text-slate-400 mb-2" />
-                <span className="font-bold text-slate-600 text-xs">Click to browse and upload PO PDF or Image</span>
-                <span className="text-[10px] text-slate-400 mt-1">Files saved locally inside workspace uploads/</span>
-                <input type="file" className="hidden" onChange={(e) => handleFileUpload(e, "client_po", setPoFileUrl)} />
-              </label>
+              <div
+                onDrop={handleDrop}
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onClick={triggerFileInput}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); triggerFileInput(); } }}
+                className={`flex flex-col items-center justify-center border-2 border-dashed rounded p-5 cursor-pointer transition outline-none ${
+                  isDragging
+                    ? "border-orange-400 bg-orange-50 ring-2 ring-orange-200"
+                    : "border-slate-200 hover:bg-slate-50 focus:border-orange-300 focus:ring-2 focus:ring-orange-100"
+                }`}
+              >
+                <FileUp className={`w-7 h-7 mb-2 ${isDragging ? "text-orange-500" : "text-slate-400"}`} />
+                <span className="font-bold text-slate-600 text-xs">
+                  {uploadingPo ? "Uploading..." : "Drag & drop PO file here, or click to browse"}
+                </span>
+                <span className="text-[10px] text-slate-400 mt-1 flex items-center gap-1">
+                  <ClipboardPaste className="w-3 h-3" /> You can also paste (Ctrl+V) a file or screenshot
+                </span>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  className="hidden"
+                  onChange={(e) => handleFileUpload(e, "client_po", setPoFileUrl)}
+                />
+              </div>
             )}
+            {dragError && <p className="text-[10px] text-red-500 mt-1 font-bold">{dragError}</p>}
           </div>
 
           <div>
