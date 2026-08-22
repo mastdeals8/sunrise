@@ -34,9 +34,6 @@ const amountInWords = (num: number): string => {
   return `${result.trim()} Only`;
 };
 
-// Convert an image URL to a base64 data URL for reliable html2canvas capture.
-// Supabase public bucket URLs support CORS, so fetch succeeds and the data URL
-// renders without cross-origin canvas tainting.
 const useDataUrl = (url: string): { dataUrl: string; ready: boolean } => {
   const [dataUrl, setDataUrl] = useState("");
   const [ready, setReady] = useState(!url);
@@ -66,10 +63,10 @@ const useDataUrl = (url: string): { dataUrl: string; ready: boolean } => {
   return { dataUrl: dataUrl || url, ready };
 };
 
-const InvoiceLogo: React.FC<{ src: string; companyName: string; maxWidth?: number }> = ({ src, companyName, maxWidth = 230 }) => {
+const InvoiceLogo: React.FC<{ src: string; companyName: string; maxWidth?: number }> = ({ src, companyName, maxWidth = 200 }) => {
   const [failed, setFailed] = useState(!src);
   return failed
-    ? <div style={{ fontWeight: 900, fontSize: "22px", lineHeight: 1.1, textAlign: "right" }}>{companyName}</div>
+    ? <div style={{ fontWeight: 900, fontSize: "18px", lineHeight: 1.1 }}>{companyName}</div>
     : <img src={src} alt={companyName} onError={() => setFailed(true)} style={{ width: maxWidth, maxWidth: "100%", height: "auto", objectFit: "contain" }} />;
 };
 
@@ -125,13 +122,11 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({
   const companyMobile = sellerProfile?.mobile || "";
   const sellerGstin = sellerProfile?.gstin || "27ABZFS5736R1ZR";
 
-  // Convert logo and signature to base64 data URLs for reliable PDF capture
   const logoUrl = companyAssetUrl(sellerProfile?.logoPath, token);
   const { dataUrl: logoDataUrl, ready: logoReady } = useDataUrl(logoUrl);
   const sigUrl = companyAssetUrl(sellerProfile?.signatureStampPath, token);
   const { dataUrl: sigDataUrl, ready: sigReady } = useDataUrl(sigUrl);
 
-  // Signal image readiness for Playwright-based PDF rendering
   useEffect(() => {
     if (logoReady && sigReady) {
       document.documentElement.setAttribute("data-invoice-images-ready", "true");
@@ -158,12 +153,6 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({
     .map((line: string) => line.trim())
     .filter(Boolean);
 
-  // Store grouping — resolves store for each invoice line item by:
-  // 1. Using the line item's own storeCode if present
-  // 2. Falling back to the estimate's storeGrouping, which maps store IDs to
-  //    item SL numbers — this is how multi-store estimates track which items
-  //    belong to which store. The invoice line items carry the same SL numbers.
-  // Does not invent store information — uses existing saved metadata only.
   const storeGroups = useMemo<StoreGroup[]>(() => {
     const storeByCode = new Map<string, any>();
     (stores || []).forEach((s: any) => {
@@ -171,7 +160,6 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({
       if (code) storeByCode.set(code, s);
     });
 
-    // Build SL → storeCode mapping from the estimate's storeGrouping
     const estimateGrouping = (est?.storeGrouping || {}) as Record<string, any>;
     const orderedSids = orderedStoreKeysFromGrouping(estimateGrouping);
     const slToStoreCode = new Map<number, string>();
@@ -190,10 +178,8 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({
       }
     });
 
-    // Ordered store codes from the estimate's storeGrouping
     const orderedStoreCodes = orderedSids.map(sid => sidToStoreCode.get(sid)).filter(Boolean) as string[];
 
-    // Group line items by storeCode
     const groups: StoreGroup[] = [];
     const seenCodes: string[] = [];
 
@@ -208,11 +194,8 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({
       });
     };
 
-    // First pass: create groups in estimate order
     orderedStoreCodes.forEach(code => ensureGroup(code));
 
-    // Second pass: add items to groups. Resolve storeCode from line item or
-    // from the estimate's storeGrouping via SL number matching.
     lines.forEach((line: any) => {
       let code = String(line.storeCode ?? line.store_code ?? "").trim();
       if (!code) {
@@ -226,46 +209,45 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({
       if (group) group.items.push(line);
     });
 
-    // Remove empty groups (no items)
     return groups.filter(g => g.items.length > 0);
   }, [lines, stores, est]);
 
   const hasStoreHeadings = storeGroups.length > 1 || (storeGroups.length === 1 && storeGroups[0].storeCode !== "" && storeGroups[0].storeCode !== "default");
 
-  // Inline styles — same paradigm as EstimateDocument, so they survive
-  // print without depending on Tailwind classes.
+  // Column widths: Description is widest, numeric cols compact
+  // Sr(3.5%) Item(14%) Description(34%) HSN(8%) GST%(5.5%) Qty(6%) Rate(13%) Amount(16%)
+  const columnWidths = ["3.5%", "14%", "34%", "8%", "5.5%", "6%", "13%", "16%"];
+  const COL_COUNT = 8;
+
   const cellBase: React.CSSProperties = { border: "1px solid #000", padding: "3px 5px", fontSize: "10px", lineHeight: 1.3, verticalAlign: "middle", pageBreakInside: "avoid" };
   const cellLeft: React.CSSProperties = { ...cellBase, textAlign: "left" };
-  const cellRight: React.CSSProperties = { ...cellBase, textAlign: "right" };
+  const cellRight: React.CSSProperties = { ...cellBase, textAlign: "right", fontVariantNumeric: "tabular-nums" };
   const cellCenter: React.CSSProperties = { ...cellBase, textAlign: "center" };
   const headCell: React.CSSProperties = { ...cellBase, fontWeight: 700, textAlign: "center", backgroundColor: "#fff" };
-
-  const COL_COUNT = 8;
-  const columnWidths = ["4%", "23%", "27%", "10%", "7%", "8%", "10%", "11%"];
 
   const storeHeadingStyle: React.CSSProperties = {
     ...cellBase,
     fontWeight: 700,
-    backgroundColor: "#e2e8f0",
-    padding: "4px 8px",
+    backgroundColor: "#e8e8e8",
+    padding: "3px 8px",
     fontSize: "10px",
+    textAlign: "left",
   };
 
   const metaLabelCell: React.CSSProperties = {
-    padding: "1px 8px 1px 0",
+    padding: "1px 6px 1px 0",
     textAlign: "left",
     whiteSpace: "nowrap",
-    width: "92px",
     verticalAlign: "top",
+    fontSize: "10px",
   };
   const metaValueCell: React.CSSProperties = {
     textAlign: "left",
-    width: "170px",
-    maxWidth: "170px",
     overflowWrap: "anywhere",
     wordBreak: "break-word",
     lineHeight: 1.25,
     verticalAlign: "top",
+    fontSize: "10px",
   };
   const metaRow = (label: string, value: React.ReactNode, bold = false) => (
     <tr>
@@ -283,29 +265,39 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({
       data-print-document="true"
       style={{ background: "#fff", color: "#000", fontFamily: "Arial, Helvetica, sans-serif" }}
     >
-      {/* Tax Invoice header. No Ship To block: Sunrise invoices bill the client directly. */}
+      {/* Header: Logo left-aligned, GST/UIN centered, TAX INVOICE centered */}
       <table className="invoice-document-header" style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
         <tbody>
+          {/* Logo row */}
           <tr>
-            <td colSpan={2} style={{ border: "1px solid #000", padding: "7px 10px", textAlign: "center", fontSize: "15px", fontWeight: 800, letterSpacing: "0.6px" }}>
+            <td colSpan={2} style={{ border: "1px solid #000", padding: "6px 10px" }}>
+              <InvoiceLogo src={logoDataUrl} companyName={companyName} maxWidth={200} />
+            </td>
+          </tr>
+          {/* GST/UIN row */}
+          <tr>
+            <td colSpan={2} style={{ border: "1px solid #000", padding: "3px 10px", textAlign: "center", fontSize: "11px", fontWeight: 800 }}>
+              GST / UIN : {sellerGstin}
+            </td>
+          </tr>
+          {/* TAX INVOICE row */}
+          <tr>
+            <td colSpan={2} style={{ border: "1px solid #000", padding: "5px 10px", textAlign: "center", fontSize: "14px", fontWeight: 800, letterSpacing: "0.5px" }}>
               TAX INVOICE
             </td>
           </tr>
+          {/* Bill To (left) | Invoice metadata (right) */}
           <tr style={{ verticalAlign: "top" }}>
-            <td style={{ border: "1px solid #000", padding: "8px 10px", fontSize: "10px", lineHeight: 1.4, width: "57%" }}>
-              <div style={{ fontWeight: 800, marginBottom: "3px" }}>Bill To</div>
+            <td style={{ border: "1px solid #000", padding: "6px 10px", fontSize: "10px", lineHeight: 1.4, width: "55%" }}>
+              <div style={{ fontWeight: 800, marginBottom: "2px" }}>Bill To</div>
               <div style={{ fontWeight: 700 }}>M/S : {billingName}</div>
               {billingAddress && <div style={{ whiteSpace: "pre-wrap" }}>{billingAddress}</div>}
               {billingStateCode && <div>State Code: {billingStateCode}</div>}
               {billingGstin && <div style={{ fontWeight: 700 }}>GSTIN : {billingGstin}</div>}
               {billingPan && <div style={{ fontWeight: 700 }}>PAN : {billingPan}</div>}
             </td>
-            <td style={{ border: "1px solid #000", padding: "8px 10px", width: "43%", textAlign: "right", fontSize: "10px", verticalAlign: "top" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "8px" }}>
-                <div style={{ textAlign: "left", fontWeight: 800, whiteSpace: "nowrap" }}>GST/UIN : {sellerGstin}</div>
-                <InvoiceLogo src={logoDataUrl} companyName={companyName} maxWidth={155} />
-              </div>
-              <table style={{ marginTop: "12px", marginLeft: "auto", borderCollapse: "collapse", tableLayout: "fixed", width: "100%" }}>
+            <td style={{ border: "1px solid #000", padding: "6px 10px", width: "45%", fontSize: "10px", verticalAlign: "top" }}>
+              <table style={{ borderCollapse: "collapse", width: "100%" }}>
                 <tbody>
                   {metaRow("Invoice / Bill No. :", inv.invoiceNumber, true)}
                   {metaRow("Bill Date :", dateStr)}
@@ -319,8 +311,8 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({
         </tbody>
       </table>
 
-      {/* Invoice table — store-grouped with data-pdf-row markers for row-aware slicing */}
-      <table className="invoice-table" style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed", marginTop: "4px" }}>
+      {/* Invoice line items table */}
+      <table className="invoice-table" style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed", marginTop: "-1px" }}>
         <colgroup>
           {columnWidths.map((w, i) => <col key={i} style={{ width: w }} />)}
         </colgroup>
@@ -331,7 +323,7 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({
             <td style={headCell}>Description</td>
             <td style={headCell}>HSN / SAC</td>
             <td style={headCell}>GST %</td>
-            <td style={headCell}>Quantity</td>
+            <td style={headCell}>Qty</td>
             <td style={headCell}>Rate</td>
             <td style={headCell}>Amount</td>
           </tr>
@@ -357,7 +349,7 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({
                   <tr key={row.id || `${group.storeCode}-${index}`} data-pdf-row style={{ pageBreakInside: "avoid" }}>
                     <td style={cellCenter}>{srNo}</td>
                     <td style={{ ...cellLeft, fontWeight: 600 }}>{resolveItemName(row, products)}</td>
-                    <td style={{ ...cellLeft, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{description}</td>
+                    <td style={{ ...cellLeft, whiteSpace: "pre-wrap", overflowWrap: "anywhere", wordBreak: "break-word" }}>{description}</td>
                     <td style={cellCenter}>{row.hsn || ""}</td>
                     <td style={cellCenter}>{taxPercent > 0 ? `${taxPercent}%` : ""}</td>
                     <td style={cellCenter}>{qty}</td>
@@ -369,7 +361,7 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({
             </React.Fragment>
           ))}
         </tbody>
-        {/* Totals — wrapped in a data-pdf-row tbody so they stay together */}
+        {/* Totals */}
         <tbody data-pdf-row>
           <tr style={{ backgroundColor: "#fff066" }}>
             <td colSpan={7} style={{ ...cellBase, fontWeight: 700, textAlign: "right", paddingRight: "10px" }}>TOTAL AMOUNT BEFORE TAX</td>
@@ -383,16 +375,16 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({
           ) : (
             <>
               <tr>
-                <td colSpan={7} style={{ ...cellBase, fontWeight: 700, textAlign: "right", paddingRight: "10px" }}>Add : CGST</td>
+                <td colSpan={7} style={{ ...cellBase, fontWeight: 700, textAlign: "right", paddingRight: "10px" }}>Output CGST</td>
                 <td style={{ ...cellRight, fontWeight: 700 }}>{num(cgst)}</td>
               </tr>
               <tr>
-                <td colSpan={7} style={{ ...cellBase, fontWeight: 700, textAlign: "right", paddingRight: "10px" }}>Add : SGST</td>
+                <td colSpan={7} style={{ ...cellBase, fontWeight: 700, textAlign: "right", paddingRight: "10px" }}>Output SGST</td>
                 <td style={{ ...cellRight, fontWeight: 700 }}>{num(sgst)}</td>
               </tr>
             </>
           )}
-          <tr>
+          <tr style={{ backgroundColor: "#fff066" }}>
             <td colSpan={7} style={{ ...cellBase, fontWeight: 700, textAlign: "right", paddingRight: "10px" }}>GRAND TOTAL</td>
             <td style={{ ...cellRight, fontWeight: 700 }}>{num(grandTotal)}</td>
           </tr>
@@ -400,46 +392,51 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({
       </table>
 
       {/* Amount in words */}
-      <div data-pdf-row style={{ marginTop: "6px", fontSize: "10px", fontWeight: 700, pageBreakInside: "avoid" }}>
+      <div data-pdf-row style={{ marginTop: "4px", fontSize: "10px", fontWeight: 700, pageBreakInside: "avoid", padding: "2px 0" }}>
         Rupees : {amountInWords(grandTotal)}
       </div>
 
-      {/* Footer — marked as a single data-pdf-row so it stays together */}
-      <div className="invoice-footer-block" data-pdf-row style={{ marginTop: "8px", pageBreakInside: "avoid" }}>
-        <table className="invoice-document-footer" style={{ width: "100%", borderCollapse: "collapse" }}>
+      {/* Footer */}
+      <div className="invoice-footer-block" data-pdf-row style={{ marginTop: "4px", pageBreakInside: "avoid" }}>
+        <table className="invoice-document-footer" style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
+          <colgroup>
+            <col style={{ width: "36%" }} />
+            <col style={{ width: "34%" }} />
+            <col style={{ width: "30%" }} />
+          </colgroup>
           <tbody>
             <tr style={{ verticalAlign: "top" }}>
-              <td style={{ ...cellBase, padding: "8px 10px", width: "38%" }}>
-                <div style={{ color: "#b91c1c", fontWeight: 700, textDecoration: "underline", marginBottom: "4px" }}>Terms &amp; Condition :</div>
-                {termsLines.map((line: string, idx: number) => <div key={idx}>{line}</div>)}
+              <td style={{ ...cellBase, padding: "6px 8px" }}>
+                <div style={{ color: "#b91c1c", fontWeight: 700, textDecoration: "underline", marginBottom: "3px", fontSize: "9px" }}>Terms &amp; Condition :</div>
+                {termsLines.map((line: string, idx: number) => <div key={idx} style={{ fontSize: "8.5px", lineHeight: 1.3 }}>{line}</div>)}
               </td>
-              <td style={{ ...cellBase, padding: "8px 10px", width: "34%" }}>
-                <div style={{ fontWeight: 700, marginBottom: "4px" }}>BANK ACCOUNT DETAILS</div>
-                <div>Bank Name : {sellerProfile?.bankName || ""}</div>
-                <div>Branch Name : {sellerProfile?.bankBranch || ""}</div>
-                <div>C.A/c No : {sellerProfile?.bankAccountNumber || ""}</div>
-                <div>IFSC NO : {sellerProfile?.bankIfsc || ""}</div>
+              <td style={{ ...cellBase, padding: "6px 8px" }}>
+                <div style={{ fontWeight: 700, marginBottom: "3px", fontSize: "9px" }}>BANK ACCOUNT DETAILS</div>
+                <div style={{ fontSize: "8.5px", lineHeight: 1.4 }}>Bank Name : {sellerProfile?.bankName || ""}</div>
+                <div style={{ fontSize: "8.5px", lineHeight: 1.4 }}>Branch Name : {sellerProfile?.bankBranch || ""}</div>
+                <div style={{ fontSize: "8.5px", lineHeight: 1.4 }}>C.A/c No : {sellerProfile?.bankAccountNumber || ""}</div>
+                <div style={{ fontSize: "8.5px", lineHeight: 1.4 }}>IFSC NO : {sellerProfile?.bankIfsc || ""}</div>
               </td>
-              <td style={{ ...cellBase, padding: "8px 10px", width: "28%", textAlign: "right", verticalAlign: "bottom" }}>
-                <div style={{ fontWeight: 700 }}>For {companyName.toUpperCase()}</div>
-                <div style={{ height: "52px", display: "flex", alignItems: "center", justifyContent: "flex-end" }}>
+              <td style={{ ...cellBase, padding: "6px 8px", textAlign: "right", verticalAlign: "bottom" }}>
+                <div style={{ fontWeight: 700, fontSize: "9px" }}>For {companyName.toUpperCase()}</div>
+                <div style={{ height: "44px", display: "flex", alignItems: "center", justifyContent: "flex-end" }}>
                   {sigDataUrl && (
                     <img
                       src={sigDataUrl}
                       alt="Signature and stamp"
-                      style={{ maxHeight: "48px", maxWidth: "150px", objectFit: "contain" }}
+                      style={{ maxHeight: "40px", maxWidth: "140px", objectFit: "contain" }}
                     />
                   )}
                 </div>
-                <div style={{ fontWeight: 700 }}>Authorised Signatory</div>
+                <div style={{ fontWeight: 700, fontSize: "9px" }}>Authorised Signatory</div>
               </td>
             </tr>
           </tbody>
         </table>
-        <div style={{ backgroundColor: "#f59e0b", color: "#fff", textAlign: "center", padding: "6px 8px", letterSpacing: "0.3px" }}>
-          <div style={{ fontSize: "16px", fontWeight: 900, letterSpacing: "1.5px", lineHeight: 1.1 }}>{companyName.toUpperCase()}</div>
-          {companyAddress && <div style={{ fontSize: "9px", marginTop: "3px", lineHeight: 1.25 }}>{companyAddress}</div>}
-          {(companyMobile || companyEmail) && <div style={{ fontSize: "9px", marginTop: "1px", lineHeight: 1.25 }}>{[companyMobile, companyEmail].filter(Boolean).join("  \u00b7  ")}</div>}
+        <div style={{ backgroundColor: "#f59e0b", color: "#fff", textAlign: "center", padding: "5px 8px", letterSpacing: "0.3px" }}>
+          <div style={{ fontSize: "14px", fontWeight: 900, letterSpacing: "1.5px", lineHeight: 1.1 }}>{companyName.toUpperCase()}</div>
+          {companyAddress && <div style={{ fontSize: "8px", marginTop: "2px", lineHeight: 1.25 }}>{companyAddress}</div>}
+          {(companyMobile || companyEmail) && <div style={{ fontSize: "8px", marginTop: "1px", lineHeight: 1.25 }}>{[companyMobile, companyEmail].filter(Boolean).join("  \u00b7  ")}</div>}
         </div>
       </div>
     </div>

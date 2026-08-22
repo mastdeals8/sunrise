@@ -541,6 +541,16 @@ const InvoicePacketPage: React.FC = () => {
                   maxHeight = sliceHeight - tableHeadHeight;
                 }
               }
+              // Avoid a mostly-blank final page: if the remaining content
+              // after the last break is less than 20% of a page, merge it
+              // into the previous page by removing the last break.
+              if (pageStarts.length > 1) {
+                const lastStart = pageStarts[pageStarts.length - 1];
+                const remainingHeight = canvas.height - lastStart;
+                if (remainingHeight < sliceHeight * 0.20) {
+                  pageStarts.pop();
+                }
+              }
             } else {
               for (let offset = sliceHeight; offset < canvas.height; offset += sliceHeight) pageStarts.push(offset);
             }
