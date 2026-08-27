@@ -171,7 +171,7 @@ Deno.serve(async (req: Request) => {
 
         // Insert new items
         if (replaceItems.length > 0) {
-          const itemRows = replaceItems.map((it: any) => ({ ...it, estimate_id: estimateId }));
+          const itemRows = replaceItems.map((it: any) => ({ ...normalizeKeys(it as Record<string, unknown>), estimate_id: estimateId }));
           const { error: itemErr } = await db.from("estimate_items").insert(itemRows);
           if (itemErr) return errorResponse(`Items replace failed: ${itemErr.message}`, 400);
         }

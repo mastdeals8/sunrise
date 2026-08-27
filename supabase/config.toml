@@ -1,0 +1,23 @@
+[project]
+id = "kbnjiidfpqnklaljtuoj"
+
+[functions.dc-save]
+verify_jwt = false
+
+[functions.estimate-save]
+verify_jwt = false
+
+[functions.exec-doc-update]
+verify_jwt = false
+
+[functions.invoice-create]
+verify_jwt = false
+
+[functions.master-data-save]
+verify_jwt = false
+
+[functions.payment-post]
+verify_jwt = false
+
+[functions.settings-save]
+verify_jwt = false
