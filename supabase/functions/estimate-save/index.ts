@@ -156,7 +156,7 @@ Deno.serve(async (req: Request) => {
       }
 
       if (replaceItems !== undefined) {
-        // Transaction: update estimate + delete old items + insert new items
+        // Update estimate header first; if this fails, items are untouched.
         const { data: updatedRow, error: updateErr } = await db
           .from("estimates")
           .update(updates)
@@ -166,14 +166,18 @@ Deno.serve(async (req: Request) => {
         if (updateErr) return errorResponse(updateErr.message, 400);
         if (!updatedRow) return errorResponse("Estimate not found", 404);
 
-        // Delete existing items
-        await db.from("estimate_items").delete().eq("estimate_id", estimateId);
-
-        // Insert new items
+        // Atomic item replacement: insert new rows first, then delete old ones
+        // inside a single DB transaction. If the insert fails, old items survive.
         if (replaceItems.length > 0) {
-          const itemRows = replaceItems.map((it: any) => ({ ...normalizeKeys(it as Record<string, unknown>), estimate_id: estimateId }));
-          const { error: itemErr } = await db.from("estimate_items").insert(itemRows);
-          if (itemErr) return errorResponse(`Items replace failed: ${itemErr.message}`, 400);
+          const normalizedItems = replaceItems.map((it: any) => normalizeKeys(it as Record<string, unknown>));
+          const { error: rpcErr } = await db.rpc("replace_estimate_items", {
+            p_estimate_id: estimateId,
+            p_items: normalizedItems,
+          });
+          if (rpcErr) return errorResponse(`Items replace failed: ${rpcErr.message}`, 400);
+        } else {
+          // No new items: just delete old ones
+          await db.from("estimate_items").delete().eq("estimate_id", estimateId);
         }
 
         return jsonResponse(updatedRow);
