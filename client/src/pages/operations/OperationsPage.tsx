@@ -3789,7 +3789,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
   };
 
   return (
-    <div className={`operations-print-root ${selectedEstimate ? "has-estimate-preview" : ""} space-y-4 ${focusTab ? "max-w-[1400px]" : "max-w-7xl"} mx-auto px-2 sm:px-4`}>
+    <div className={`operations-print-root ${selectedEstimate ? "has-estimate-preview" : ""} space-y-4 ${focusTab ? "w-full max-w-full" : "max-w-7xl mx-auto px-2 sm:px-4"}`}>
       {/* Title Header — hub mode shows the Estimate-to-Delivery hub chrome;
           focus mode (Bolt-style dedicated pages) renders just a compact title. */}
       {focusTab ? (

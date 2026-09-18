@@ -1,7 +1,7 @@
 import React from "react";
 import { isBoltMode } from "../../../lib/supabase";
-import { fetchExecutionStores, createInvoice, uploadToStorage, registerExecutionDocument, openExecutionDocument } from "../../../lib/api";
-import { TriangleAlert as AlertTriangle, Briefcase, Camera, CircleCheck as CheckCircle2, ChevronRight, Copy, Download, CreditCard as Edit3, Eye, File, FileCheck2, FilePlus, FileSpreadsheet, FileText, FileUp, Image as ImageIcon, Paperclip, Pen, Plus, Printer, ScanLine, Store as StoreIcon, Upload, X } from "lucide-react";
+import { fetchExecutionStores, createInvoice, uploadToStorage, registerExecutionDocument, openExecutionDocument, submitEstimate } from "../../../lib/api";
+import { TriangleAlert as AlertTriangle, Archive, Briefcase, Camera, CircleCheck as CheckCircle2, ChevronRight, Copy, Download, CreditCard as Edit3, Eye, File, FileCheck2, FilePlus, FileSpreadsheet, FileText, FileUp, Image as ImageIcon, Paperclip, Pen, Plus, Printer, ScanLine, SlidersHorizontal, Store as StoreIcon, Upload, X } from "lucide-react";
 import { isAblblFormat } from "../../../../../shared/textFormat";
 import { isServiceEstimateItem, serviceProductLabel } from "../../../../../shared/serviceProductDisplay";
 import { formatCurrency } from "../utils/formatters";
@@ -277,7 +277,16 @@ const applyPrintOptionClasses = (options: EstimatePrintOptions) => {
   clearPrintOptionClasses();
   const style = document.createElement("style");
   style.id = "estimate-print-options-style";
-  style.textContent = "@media print { @page { size: A4 portrait; margin: 8mm; } }";
+  const scaleRatio = (Number(options.scale) || 100) / 100;
+  style.textContent = `
+    @media print {
+      @page { size: A4 portrait; margin: 8mm; }
+      .estimate-print {
+        --estimate-print-zoom: ${scaleRatio} !important;
+        zoom: ${scaleRatio} !important;
+      }
+    }
+  `;
   document.head.appendChild(style);
   document.body.classList.add(
     `estimate-print-layout-${options.layout}`,
@@ -387,6 +396,33 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
               setExecutionStoresLoading(false);
             }
           }, [selectedEstimate?.id, token]);
+
+          const handleMarkEstimateSubmitted = async () => {
+            if (!selectedEstimate) return;
+            const hasInv = invoices.some((inv: any) =>
+              inv.estimateId === selectedEstimate.id &&
+              inv.status !== "cancelled" &&
+              inv.status !== "deleted"
+            );
+            if (!hasInv) {
+              alert(`Cannot submit estimate ${selectedEstimate.estimateNumber}. An invoice must be created first before submitting to client/company.`);
+              return;
+            }
+            if (!confirm(`Mark estimate ${selectedEstimate.estimateNumber} as Submitted?\n\nThis will confirm invoice submission to client/company and archive the estimate so it will not show in your active register.`)) {
+              return;
+            }
+            try {
+              const res = await submitEstimate(token, selectedEstimate.id);
+              if (res.estimate) {
+                setSelectedEstimate(res.estimate);
+              } else {
+                setSelectedEstimate((prev: any) => prev ? { ...prev, status: "archived" } : prev);
+              }
+              onInvoiceGenerated && (await onInvoiceGenerated());
+            } catch (err: any) {
+              alert(err.message || "Failed to submit estimate");
+            }
+          };
 
 		        React.useEffect(() => {
 			          setCopyStatus("");
@@ -581,6 +617,139 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
           }
         };
 
+        const handleUpdatePrintScale = (scaleValue: string) => {
+          const nextOptions: EstimatePrintOptions = { ...printOptions, scale: scaleValue };
+          setPrintOptions(nextOptions);
+          try {
+            const key = printOptionsStorageKey(printSettingsUserKey);
+            window.localStorage.setItem(key, JSON.stringify(nextOptions));
+            window.localStorage.setItem(PRINT_OPTIONS_STORAGE_KEY, JSON.stringify(nextOptions));
+          } catch {}
+          applyPrintOptionClasses(nextOptions);
+        };
+
+        const handleUpdatePrintMode = (modeValue: EstimatePrintMode) => {
+          const nextOptions: EstimatePrintOptions = { ...printOptions, mode: modeValue };
+          setPrintOptions(nextOptions);
+          try {
+            const key = printOptionsStorageKey(printSettingsUserKey);
+            window.localStorage.setItem(key, JSON.stringify(nextOptions));
+            window.localStorage.setItem(PRINT_OPTIONS_STORAGE_KEY, JSON.stringify(nextOptions));
+          } catch {}
+          applyPrintOptionClasses(nextOptions);
+        };
+
+        const handleFitToPages = (targetPages: number) => {
+          const totalItems = (selectedEstimateItems || []).length || 20;
+          // Approximate items per page for A4 portrait layout: ~22 items per page at 100%
+          const idealScale = Math.min(100, Math.max(50, Math.round((targetPages * 22 / totalItems) * 100)));
+          handleUpdatePrintScale(String(idealScale));
+        };
+
+        const renderPageSetupToolbar = () => (
+          <div className="estimate-preview-chrome bg-slate-50 border border-slate-200 rounded-lg p-2.5 mb-3 flex flex-wrap items-center justify-between gap-2.5 text-xs select-none">
+            <div className="flex items-center gap-2.5 flex-wrap">
+              <div className="flex items-center gap-1 font-bold text-slate-700">
+                <SlidersHorizontal className="w-3.5 h-3.5 text-orange-600" />
+                <span className="text-[11px] uppercase tracking-wider">Page Setup:</span>
+              </div>
+
+              {/* Scale Presets */}
+              <div className="flex items-center gap-0.5 bg-white p-0.5 rounded border border-slate-200 shadow-sm">
+                <span className="text-[10px] text-slate-400 font-bold px-1 uppercase">Scale:</span>
+                {[
+                  { label: "100%", value: "100" },
+                  { label: "90%", value: "90" },
+                  { label: "85%", value: "85" },
+                  { label: "75%", value: "75" },
+                  { label: "70%", value: "70" },
+                ].map(preset => (
+                  <button
+                    key={preset.value}
+                    type="button"
+                    onClick={() => handleUpdatePrintScale(preset.value)}
+                    className={`px-1.5 py-0.5 rounded text-[11px] font-bold transition ${
+                      printOptions.scale === preset.value
+                        ? "bg-orange-600 text-white shadow-sm"
+                        : "text-slate-600 hover:bg-slate-100"
+                    }`}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+
+              {/* Quick Fit to Pages */}
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  title="Automatically scale to fit on 2 A4 pages"
+                  onClick={() => handleFitToPages(2)}
+                  className="px-2 py-1 rounded bg-white border border-slate-200 hover:border-orange-400 text-slate-700 text-[10.5px] font-bold shadow-sm hover:bg-orange-50 transition"
+                >
+                  Fit to 2 Pages
+                </button>
+                <button
+                  type="button"
+                  title="Automatically scale to fit on 3 A4 pages"
+                  onClick={() => handleFitToPages(3)}
+                  className="px-2 py-1 rounded bg-white border border-slate-200 hover:border-orange-400 text-slate-700 text-[10.5px] font-bold shadow-sm hover:bg-orange-50 transition"
+                >
+                  Fit to 3 Pages
+                </button>
+                <button
+                  type="button"
+                  title="Automatically scale to fit on 1 A4 page"
+                  onClick={() => handleFitToPages(1)}
+                  className="px-2 py-1 rounded bg-white border border-slate-200 hover:border-orange-400 text-slate-700 text-[10.5px] font-bold shadow-sm hover:bg-orange-50 transition"
+                >
+                  Fit to 1 Page
+                </button>
+              </div>
+
+              {/* Density Mode */}
+              <div className="flex items-center gap-0.5 bg-white p-0.5 rounded border border-slate-200 shadow-sm">
+                <span className="text-[10px] text-slate-400 font-bold px-1 uppercase">Density:</span>
+                <button
+                  type="button"
+                  onClick={() => handleUpdatePrintMode("normal")}
+                  className={`px-1.5 py-0.5 rounded text-[11px] font-bold transition ${
+                    printOptions.mode === "normal"
+                      ? "bg-slate-800 text-white"
+                      : "text-slate-600 hover:bg-slate-100"
+                  }`}
+                >
+                  Normal
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleUpdatePrintMode("compact")}
+                  className={`px-1.5 py-0.5 rounded text-[11px] font-bold transition ${
+                    printOptions.mode === "compact"
+                      ? "bg-slate-800 text-white"
+                      : "text-slate-600 hover:bg-slate-100"
+                  }`}
+                >
+                  Compact
+                </button>
+              </div>
+            </div>
+
+            {/* Print Action */}
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handlePrintClick}
+                disabled={!detailItemsReady}
+                className="inline-flex items-center gap-1 px-3 py-1 bg-orange-600 hover:bg-orange-700 text-white text-[11px] font-bold rounded shadow-sm transition disabled:opacity-50"
+              >
+                <Printer className="w-3.5 h-3.5" />
+                <span>Print ({printOptions.scale}%)</span>
+              </button>
+            </div>
+          </div>
+        );
+
 	        const handlePrintClick = (event: React.MouseEvent<HTMLButtonElement>) => {
 	          event.preventDefault();
 	          event.stopPropagation();
@@ -663,6 +832,7 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
         const photoStoreCount = executionStores.length ? executionStores.filter(row => (row.stats?.photoCount || 0) > 0).length : fallbackPhotoStoreCodes.size;
         const dashboardProgress = dashboardStats.stores > 0 ? Math.round((signedStoreCount / dashboardStats.stores) * 100) : 0;
         const dashboardInvoices = selectedEstimate ? invoices.filter((inv: any) => inv.estimateId === selectedEstimate.id) : [];
+        const hasInvoice = dashboardInvoices.some((inv: any) => inv.status !== "cancelled" && inv.status !== "deleted");
         const hasDashboardPo = Boolean(selectedEstimate?.poNumber || selectedEstimate?.poFilePath);
         const allStoresHaveGeneratedDocs = dashboardStats.stores > 0 && generatedStoreCount >= dashboardStats.stores;
         const allStoresHaveSignedDocs = dashboardStats.stores > 0 && signedStoreCount >= dashboardStats.stores;
@@ -861,6 +1031,26 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
                     Generate {isAblblFormat(selectedEstimate.clientFormat) ? "WCC Certificate" : "Delivery Challan"}
                   </button>
                 )}
+
+                {/* Submitted / Archive Action Button */}
+                {selectedEstimate.status !== "archived" && selectedEstimate.status !== "submitted" ? (
+                  hasInvoice ? (
+                    <button
+                      type="button"
+                      onClick={handleMarkEstimateSubmitted}
+                      className="py-1 px-3 bg-purple-700 hover:bg-purple-600 text-white text-xs font-bold rounded-lg transition shadow-sm flex items-center gap-1.5"
+                      title="Mark invoice submitted to client & archive estimate"
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      Submitted
+                    </button>
+                  ) : null
+                ) : (
+                  <span className="py-1 px-3 bg-purple-50 border border-purple-200 text-purple-700 text-xs font-semibold rounded-lg flex items-center gap-1">
+                    <Archive className="w-3.5 h-3.5" />
+                    Archived
+                  </span>
+                )}
                 </div>
                 <p className="text-[10px] text-slate-400 italic mt-0.5">
                   {selectedEstimate.status === "draft" && "Quote is in draft — click Mark as Sent once you've shared it with the client."}
@@ -946,6 +1136,24 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
 	                    </button>
 	                  </>
 	                )}
+                {selectedEstimate.status !== "archived" && selectedEstimate.status !== "submitted" ? (
+                  hasInvoice ? (
+                    <button
+                      type="button"
+                      onClick={handleMarkEstimateSubmitted}
+                      className="inline-flex items-center gap-1.5 py-1 px-3 bg-purple-700 hover:bg-purple-600 text-white text-xs font-bold rounded-lg transition shadow-sm"
+                      title="Mark invoice submitted to client & archive estimate"
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      Submitted
+                    </button>
+                  ) : null
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 py-1 px-3 bg-purple-50 border border-purple-200 text-purple-700 text-xs font-semibold rounded-lg">
+                    <Archive className="w-3.5 h-3.5" />
+                    Archived
+                  </span>
+                )}
                 {copyStatus && <span className="text-[10px] font-bold text-emerald-600 px-1 self-center">{copyStatus}</span>}
               </div>
             </div>
@@ -981,6 +1189,7 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
 	                      <div className="p-6 text-xs font-bold text-slate-500">Loading estimate items...</div>
 	                    ) : (
 	                      <div data-print-document="true">
+	                        {renderPageSetupToolbar()}
 	                        <EstimateDocument
 	                          estimate={selectedEstimate}
 	                          items={selectedEstimateItems || []}
@@ -1101,7 +1310,7 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
                   } else if (row.kind === "challan") {
                     openDcPreview && openDcPreview(row.challan);
                   } else if (row.kind === "invoice") {
-                    openInvoiceEditor && openInvoiceEditor(row.invoice);
+                    openInvoiceEditor && openInvoiceEditor({ invoiceId: row.invoice?.id || row.invoice?.invoiceId });
                   }
                 };
                 // Pending actions list with embedded handlers.
@@ -1138,7 +1347,7 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
                     label: "Generate invoice",
                     detail: invoiceReady ? "All checks complete" : "Pending readiness checks",
                     actionLabel: "Generate",
-                    onAction: () => openInvoiceEditor && openInvoiceEditor(null),
+                    onAction: () => openInvoiceEditor && openInvoiceEditor({ estimateId: selectedEstimate.id }),
                     Icon: FileText,
                   } : null,
                   (executionStores.length > 0 && executionStores.some(s => !(s.stats?.wccCount || s.stats?.dcCount))) ? {
@@ -1180,7 +1389,7 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
                       <button type="button" onClick={() => triggerExecDocUpload("photo")} className={qaBtn}>
                         <Camera className="w-3.5 h-3.5 text-orange-600" /> Upload Photos
                       </button>
-                      <button type="button" onClick={() => openInvoiceEditor && openInvoiceEditor(generatedInvoice)} className={qaBtn}>
+                      <button type="button" onClick={() => openInvoiceEditor && openInvoiceEditor(generatedInvoice ? { invoiceId: generatedInvoice.id } : { estimateId: selectedEstimate.id })} className={qaBtn}>
                         <FileText className="w-3.5 h-3.5 text-purple-600" /> {generatedInvoice ? "View Invoice" : "Generate Invoice"}
                       </button>
                     </div>
@@ -1310,8 +1519,14 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
                       </div>
                       <div className={`mt-2 text-base font-black capitalize ${generatedInvoice ? "text-blue-700" : "text-slate-500"}`}>{generatedInvoice ? String(generatedInvoice.status || "draft").replace(/_/g, " ") : "Not Generated"}</div>
                       <span className="block text-[10px] text-slate-400 font-semibold">Current Status</span>
-                      <div className="mt-4">
-                        <button type="button" onClick={() => openInvoiceEditor && openInvoiceEditor(generatedInvoice)} className="w-full inline-flex items-center justify-center py-1.5 bg-purple-50 border border-purple-200 text-purple-700 text-[11px] font-bold rounded hover:bg-purple-100">{generatedInvoice ? "View Invoice" : "Generate Invoice"}</button>
+                      <div className="mt-4 flex flex-col gap-1.5">
+                        <button type="button" onClick={() => openInvoiceEditor && openInvoiceEditor(generatedInvoice ? { invoiceId: generatedInvoice.id } : { estimateId: selectedEstimate.id })} className="w-full inline-flex items-center justify-center py-1.5 bg-purple-50 border border-purple-200 text-purple-700 text-[11px] font-bold rounded hover:bg-purple-100">{generatedInvoice ? "View Invoice" : "Generate Invoice"}</button>
+                        {generatedInvoice && selectedEstimate.status !== "archived" && selectedEstimate.status !== "submitted" && (
+                          <button type="button" onClick={handleMarkEstimateSubmitted} className="w-full inline-flex items-center justify-center gap-1 py-1.5 bg-purple-700 hover:bg-purple-600 text-white text-[11px] font-bold rounded transition shadow-sm">
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            Submitted (Archive)
+                          </button>
+                        )}
                       </div>
                     </section>
                   </div>
@@ -1388,7 +1603,9 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
                         {selectedEstimateItemsLoading ? (
                           <div className="p-6 text-xs font-bold text-slate-500">Loading estimate items...</div>
                         ) : (
-                          <EstimateDocument
+                          <div data-print-document="true">
+                            {renderPageSetupToolbar()}
+                            <EstimateDocument
                             estimate={selectedEstimate}
                             items={selectedEstimateItems || []}
                             stores={stores}
@@ -1398,6 +1615,7 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
                             sellerProfile={sellerProfile}
                             assetToken={token}
                           />
+                          </div>
                         )}
                       </div>
                     );
@@ -1856,6 +2074,12 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
                           <div className="flex flex-wrap gap-2 px-3 py-2">
                             <button type="button" onClick={() => openInvoiceEditor && openInvoiceEditor({ invoiceId: generatedInvoice.id })} className="px-2 py-1 bg-blue-50 border border-blue-200 text-blue-700 font-black rounded hover:bg-blue-100">Open</button>
                             <a href={`/invoice-packet?id=${generatedInvoice.id}`} target="_blank" rel="noreferrer" className="px-2 py-1 bg-orange-50 border border-orange-200 text-orange-700 font-black rounded hover:bg-orange-100">Print Invoice</a>
+                            {selectedEstimate.status !== "archived" && selectedEstimate.status !== "submitted" && (
+                              <button type="button" onClick={handleMarkEstimateSubmitted} className="px-2.5 py-1 bg-purple-700 hover:bg-purple-600 text-white font-bold rounded flex items-center gap-1 shadow-sm text-xs">
+                                <CheckCircle2 className="w-3 h-3" />
+                                Submitted (Archive)
+                              </button>
+                            )}
                           </div>
                         </div>
                       ) : (

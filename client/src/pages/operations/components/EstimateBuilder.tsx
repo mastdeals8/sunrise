@@ -2,7 +2,7 @@ import React from "react";
 import { Pager, usePagedList } from "@/components/Pager";
 import { createPortal } from "react-dom";
 import { Link } from "wouter";
-import { ChevronDown, ChevronRight, ClipboardPaste, Copy, CreditCard as Edit3, Eye, FilePlus2, FileSpreadsheet, FileUp, Filter, FolderOpen, MoveDown, MoveUp, Plus, Redo2, Search, Trash, Undo2 } from "lucide-react";
+import { Archive, Check, CheckCircle2, ChevronDown, ChevronRight, ClipboardPaste, Copy, CreditCard as Edit3, Eye, FilePlus2, FileSpreadsheet, FileText, FileUp, Filter, FolderOpen, MoveDown, MoveUp, Plus, Receipt, Redo2, Search, Trash, Undo2 } from "lucide-react";
 import { displayFormatLabel, isAblblFormat, normalizeDisplayName, normalizeFormatMode, normalizeGstinPan } from "../../../../../shared/textFormat";
 import { formatProductDetails, sameDisplayText } from "../../../../../shared/productDetails";
 import { formatCurrency } from "../utils/formatters";
@@ -10,7 +10,7 @@ import ProductForm, { type ProductFormValue, emptyProductFormValue } from "./Pro
 import { categoryKey, normalizeCategoryLabel } from "./CategoryAutocomplete";
 import ClientForm, { type ClientFormValue, emptyClientFormValue } from "./ClientForm";
 import { isBoltMode } from "../../../lib/supabase";
-import { fetchEstimateItems, masterDataSave, openExecutionDocument } from "../../../lib/api";
+import { fetchEstimateItems, masterDataSave, openExecutionDocument, submitEstimate, unarchiveEstimate } from "../../../lib/api";
 import { exportEstimateToExcel } from "../utils/exportHelpers";
 
 // ─── Create Product Drawer ───────────────────────────────────────────────────
@@ -991,7 +991,13 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
   // need them); only DOM rows are paged, so all filters/search behave exactly
   // as before while large registers stop rendering thousands of rows.
   const estimateListFiltered = React.useMemo(() => estimates.filter((e: any) => {
-    if (estimateStatusFilter !== "all" && e.status !== estimateStatusFilter) return false;
+    if (estimateStatusFilter === "all") {
+      if (e.status === "archived" || e.status === "submitted") return false;
+    } else if (estimateStatusFilter === "archived") {
+      if (e.status !== "archived" && e.status !== "submitted") return false;
+    } else if (e.status !== estimateStatusFilter) {
+      return false;
+    }
     const q = estimateSearch.trim().toLowerCase();
     if (!q) return true;
     const client = clients.find((c: any) => c.id === e.clientId);
@@ -1003,6 +1009,44 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
     );
   }), [estimates, clients, estimateSearch, estimateStatusFilter]);
   const estListPager = usePagedList(estimateListFiltered, 25);
+
+  const handleMarkSubmitted = async (est: any) => {
+    // 2. SUBMITTED BUSINESS RULE:
+    // Submitted action should ONLY be available when an invoice has been created for that estimate.
+    const estInvoices = invoices.filter((i: any) =>
+      i.estimateId === est.id
+      && i.status !== "deleted"
+      && i.status !== "cancelled"
+    );
+    if (estInvoices.length === 0) {
+      alert(`Cannot submit estimate ${est.estimateNumber}. An invoice must be created first before submitting to client/company.`);
+      return;
+    }
+
+    if (!confirm(`Mark estimate ${est.estimateNumber} as Submitted?\n\nThis confirms the invoice has been sent/submitted to the client/company for payment processing.\nThe estimate will be moved out of the active register and archived.`)) {
+      return;
+    }
+    try {
+      await submitEstimate(token, est.id);
+      showSuccess?.(`Estimate ${est.estimateNumber} marked as Submitted & Archived`);
+      await fetchData?.();
+    } catch (err: any) {
+      alert(err.message || "Failed to mark estimate as submitted");
+    }
+  };
+
+  const handleUnarchiveEstimate = async (est: any) => {
+    if (!confirm(`Restore estimate ${est.estimateNumber} to active register?`)) {
+      return;
+    }
+    try {
+      await unarchiveEstimate(token, est);
+      showSuccess?.(`Estimate ${est.estimateNumber} restored to active register`);
+      await fetchData?.();
+    } catch (err: any) {
+      alert(err.message || "Failed to restore estimate");
+    }
+  };
 
   React.useEffect(() => {
     setSelectedRowIndexes(prev => prev.filter(index => index >= 0 && index < estItems.length));
@@ -1438,14 +1482,14 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                     <input value={estimateSearch} onChange={e => setEstimateSearch(e.target.value)} placeholder="Search estimate / client / PO" className="bg-transparent outline-none text-xs w-56" />
                   </div>
                   <select value={estimateStatusFilter} onChange={e => setEstimateStatusFilter(e.target.value)} className="px-2 py-1 border border-slate-200 rounded bg-white text-xs">
-                    <option value="all">All statuses</option>
+                    <option value="all">Active Estimates (All)</option>
                     <option value="draft">Draft</option>
                     <option value="sent">Sent</option>
                     <option value="approved">Approved</option>
                     <option value="awaiting_po">Awaiting PO</option>
                     <option value="po_received">PO received</option>
                     <option value="rejected">Rejected</option>
-                    <option value="archived">Archived</option>
+                    <option value="archived">Archived / Submitted</option>
                   </select>
                   <button
                     onClick={async () => {
@@ -1542,7 +1586,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                                 {e.estimateNumber}
                               </button>
                             </td>
-	                            <td className="px-3 py-2 font-semibold text-slate-900 max-w-[220px] truncate" title={e.title}>{e.title}</td>
+	                            <td className="px-3 py-2 font-semibold text-slate-900 max-w-[340px] min-w-[160px] truncate" title={e.title}>{e.title}</td>
 	                            <td className="px-3 py-2 text-slate-700">
                               <Link href={`/clients/${e.clientId}`} className="hover:text-orange-600 hover:underline">{normalizeDisplayName(client?.name) || `ID: ${e.clientId}`}</Link>
                             </td>
@@ -1586,11 +1630,17 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                                 {/* Invoice badge → opens Invoice tab in project */}
                                 <button
                                   type="button"
-                                  onClick={() => hasInv ? openInvoiceEditor?.(estInvoices[0]) : handleViewEstimateDetails(e, "invoice")}
+                                  onClick={() => {
+                                    if (hasInv && estInvoices[0]) {
+                                      openInvoiceEditor?.({ invoiceId: estInvoices[0].id });
+                                    } else {
+                                      openInvoiceEditor?.({ estimateId: e.id });
+                                    }
+                                  }}
                                   className={`px-1.5 py-0.5 rounded text-[9px] font-bold border transition ${hasInv ? "bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100" : "bg-slate-50 text-slate-400 border-slate-200 hover:bg-slate-100"}`}
-                                  title={hasInv ? estInvoices.map((i: any) => i.invoiceNumber).join(", ") : "Open invoice tab"}
+                                  title={hasInv ? `Open invoice ${estInvoices.map((i: any) => i.invoiceNumber).join(", ")}` : "Generate invoice for this estimate"}
                                 >
-                                  INV{hasInv && <span className="ml-1">{estInvoices.length}</span>}
+                                  INV{hasInv && estInvoices.length > 1 && <span className="ml-1">{estInvoices.length}</span>}
                                 </button>
                               </div>
                             </td>
@@ -1600,38 +1650,60 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                                   ? "bg-green-50 text-green-700 border-green-100"
                                   : e.status === "awaiting_po"
                                     ? "bg-amber-50 text-amber-700 border-amber-100"
-                                    : "bg-slate-50 text-slate-600 border-slate-100"
+                                    : e.status === "archived" || e.status === "submitted"
+                                      ? "bg-purple-50 text-purple-700 border-purple-100"
+                                      : "bg-slate-50 text-slate-600 border-slate-100"
                               }`}>
                                 {e.status.replace("_", " ")}
                               </span>
                             </td>
 	                            <td className="px-3 py-2 text-right text-slate-900 font-bold font-mono">{formatCurrency(e.totalAmount)}</td>
 	                            <td className="px-3 py-2 text-center">
-	                              <div className="inline-flex items-center gap-1 justify-center">
+	                              <div className="inline-flex items-center gap-1 justify-center flex-nowrap">
+	                                {/* 1. View Estimate */}
 	                                <button
 	                                  onClick={() => handleViewEstimateDetails(e, "estimate")}
-	                                  title="View estimate (preview, print, export)"
-	                                  className="inline-flex h-7 w-7 items-center justify-center rounded border border-slate-200 bg-white text-slate-700 hover:bg-slate-900 hover:text-white transition"
+	                                  title="View estimate details & preview"
+	                                  className="inline-flex h-7 w-7 items-center justify-center rounded border border-slate-200 bg-white text-slate-700 hover:bg-slate-900 hover:text-white transition shadow-xs"
 	                                  aria-label="View estimate"
 	                                >
 	                                  <Eye className="w-3.5 h-3.5" />
 	                                </button>
+
+	                                {/* 2. Edit (only if not submitted/archived) */}
+	                                {e.status !== "archived" && e.status !== "submitted" && (
+	                                  <button
+	                                    onClick={() => handleEditEstimate(e)}
+	                                    title="Edit estimate"
+	                                    className="inline-flex h-7 w-7 items-center justify-center rounded border border-slate-200 bg-white text-slate-700 hover:bg-slate-100 transition shadow-xs"
+	                                    aria-label="Edit estimate"
+	                                  >
+	                                    <Edit3 className="w-3.5 h-3.5" />
+	                                  </button>
+	                                )}
+
+	                                {/* 3. Project / Execution Workspace */}
 	                                <Link
 	                                  href={`/projects?estimateId=${e.id}`}
-	                                  title="Open full project dashboard"
-	                                  className="inline-flex h-7 items-center gap-1 rounded border border-orange-200 bg-orange-50 px-2 text-[10px] font-bold text-orange-700 hover:bg-orange-100 transition"
+	                                  title="Open project workspace & timeline"
+	                                  className="inline-flex h-7 items-center gap-1 rounded border border-orange-200 bg-orange-50 px-2 text-[10px] font-bold text-orange-700 hover:bg-orange-100 transition shadow-xs"
 	                                >
 	                                  <FolderOpen className="w-3.5 h-3.5" />
 	                                  Project
 	                                </Link>
+
+	                                {/* 4. Documents */}
 	                                <button
-	                                  onClick={() => handleEditEstimate(e)}
-	                                  title="Edit estimate"
-	                                  className="inline-flex h-7 w-7 items-center justify-center rounded border border-slate-200 bg-white text-slate-700 hover:bg-slate-100 transition"
-	                                  aria-label="Edit estimate"
+	                                  type="button"
+	                                  onClick={() => openDocumentListForEstimate?.(e, isAblbl ? "wcc" : "dc")}
+	                                  title={`View documents (${estChallans.length} challans, PO)`}
+	                                  className="inline-flex h-7 items-center gap-1 rounded border border-slate-200 bg-white px-2 text-[10px] font-semibold text-slate-700 hover:bg-slate-100 transition shadow-xs"
 	                                >
-	                                  <Edit3 className="w-3.5 h-3.5" />
+	                                  <FileText className="w-3.5 h-3.5 text-slate-500" />
+	                                  Docs
 	                                </button>
+
+	                                {/* Excel Export */}
 	                                <button
 	                                  type="button"
 	                                  title="Download as Excel"
@@ -1645,48 +1717,84 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
 	                                      window.open(`/api/operations/estimates/${e.id}/export-excel`, "_blank");
 	                                    }
 	                                  }}
-	                                  className="inline-flex h-7 w-7 items-center justify-center rounded border border-slate-200 bg-white text-emerald-700 hover:bg-emerald-50 transition"
+	                                  className="inline-flex h-7 w-7 items-center justify-center rounded border border-slate-200 bg-white text-emerald-700 hover:bg-emerald-50 transition shadow-xs"
 	                                  aria-label="Export Excel"
 	                                >
 	                                  <FileSpreadsheet className="w-3.5 h-3.5" />
 	                                </button>
-                                {e.poNumber ? (
+
+	                                {/* 5. Invoice action */}
+	                                {hasInv ? (
 	                                  <button
-	                                    onClick={() => openPoViewerForEstimate?.(e)}
-	                                    title={`View PO ${e.poNumber}`}
-	                                    className="inline-flex h-7 w-7 items-center justify-center rounded border border-purple-200 bg-white text-purple-700 hover:bg-purple-50 transition"
-	                                    aria-label="View PO"
+	                                    type="button"
+	                                    onClick={() => openInvoiceEditor?.({ invoiceId: estInvoices[0].id })}
+	                                    title={`View invoice ${estInvoices.map((i: any) => i.invoiceNumber).join(", ")}`}
+	                                    className="inline-flex h-7 items-center gap-1 rounded border border-blue-200 bg-blue-50 px-2 text-[10px] font-bold text-blue-700 hover:bg-blue-100 transition shadow-xs"
 	                                  >
-	                                    <Eye className="w-3.5 h-3.5" />
+	                                    <Receipt className="w-3.5 h-3.5" />
+	                                    Invoice
 	                                  </button>
-                                ) : (
+	                                ) : (
 	                                  <button
-	                                    onClick={() => openPoForEstimate?.(e)}
-	                                    title="Upload PO for this estimate"
-	                                    className="inline-flex h-7 w-7 items-center justify-center rounded border border-purple-200 bg-white text-purple-700 hover:bg-purple-50 transition"
-	                                    aria-label="Upload PO"
+	                                    type="button"
+	                                    onClick={() => openInvoiceEditor?.({ estimateId: e.id })}
+	                                    title="Generate invoice for this estimate"
+	                                    className="inline-flex h-7 items-center gap-1 rounded border border-blue-200 bg-blue-50/60 px-2 text-[10px] font-semibold text-blue-600 hover:bg-blue-100 transition shadow-xs"
 	                                  >
-	                                    <FileUp className="w-3.5 h-3.5" />
+	                                    <Receipt className="w-3.5 h-3.5" />
+	                                    + Inv
 	                                  </button>
-                                )}
-	                                <button
-	                                  onClick={() => openNewDcForEstimate?.(e)}
-	                                  title={isAblblFormat(e.clientFormat) ? "Create WCC" : "Create DC"}
-	                                  className="inline-flex h-7 w-7 items-center justify-center rounded border border-amber-200 bg-white text-amber-700 hover:bg-amber-50 transition"
-	                                  aria-label={isAblblFormat(e.clientFormat) ? "Create WCC" : "Create DC"}
-	                                >
-	                                  <FilePlus2 className="w-3.5 h-3.5" />
-	                                </button>
-	                                <button
-	                                  onClick={() => handleDeleteEstimate(e)}
-	                                  title="Delete estimate"
-	                                  className="inline-flex h-7 w-7 items-center justify-center rounded border border-red-200 bg-white text-red-600 hover:bg-red-50 transition"
-	                                  aria-label="Delete estimate"
-	                                >
-	                                  <Trash className="w-3.5 h-3.5" />
-	                                </button>
-                              </div>
-                            </td>
+	                                )}
+
+	                                {/* 6. Submitted Workflow (P0 Business Rules) */}
+	                                {e.status !== "archived" && e.status !== "submitted" ? (
+	                                  hasInv && (
+	                                    <button
+	                                      type="button"
+	                                      onClick={() => handleMarkSubmitted(e)}
+	                                      title="Invoice submitted to client for payment processing (archives estimate)"
+	                                      className="inline-flex h-7 items-center gap-1 rounded border border-purple-300 bg-purple-50 px-2 text-[10px] font-bold text-purple-700 hover:bg-purple-600 hover:text-white transition shadow-xs"
+	                                    >
+	                                      <CheckCircle2 className="w-3 h-3 text-purple-600 group-hover:text-white" />
+	                                      Submitted
+	                                    </button>
+	                                  )
+	                                ) : (
+	                                  <>
+	                                    <span
+	                                      title="Estimate archived / invoice submitted to client"
+	                                      className="inline-flex h-7 items-center gap-1 rounded border border-purple-200 bg-purple-50/70 px-2 text-[10px] font-semibold text-purple-700"
+	                                    >
+	                                      <Check className="w-3 h-3 text-purple-600" />
+	                                      Submitted
+	                                    </span>
+	                                    {estimateStatusFilter === "archived" && (
+	                                      <button
+	                                        type="button"
+	                                        onClick={() => handleUnarchiveEstimate(e)}
+	                                        title="Restore estimate to active register"
+	                                        className="inline-flex h-7 items-center gap-1 rounded border border-slate-200 bg-white px-2 text-[10px] font-bold text-slate-600 hover:bg-slate-100 transition shadow-xs"
+	                                      >
+	                                        <Archive className="w-3 h-3 text-slate-500" />
+	                                        Restore
+	                                      </button>
+	                                    )}
+	                                  </>
+	                                )}
+
+	                                {/* 7. Delete (only permitted for active estimates) */}
+	                                {e.status !== "archived" && e.status !== "submitted" && (
+	                                  <button
+	                                    onClick={() => handleDeleteEstimate(e)}
+	                                    title="Delete estimate"
+	                                    className="inline-flex h-7 w-7 items-center justify-center rounded border border-red-200 bg-white text-red-500 hover:bg-red-50 hover:text-red-700 transition shadow-xs"
+	                                    aria-label="Delete estimate"
+	                                  >
+	                                    <Trash className="w-3.5 h-3.5" />
+	                                  </button>
+	                                )}
+	                              </div>
+	                            </td>
                           </tr>
                         );
                       })}

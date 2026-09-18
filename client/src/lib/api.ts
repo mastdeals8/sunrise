@@ -947,6 +947,98 @@ export async function updateEstimate(
   return toCamel(await res.json());
 }
 
+export async function submitEstimate(
+  token: string | null,
+  estimateId: number
+): Promise<{ success: boolean; estimate?: any; updatedInvoicesCount?: number }> {
+  if (!isBoltMode) {
+    const res = await apiFetch(`/api/operations/estimates/${estimateId}/submit`, token, {
+      method: "POST",
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.message ?? "Failed to submit estimate");
+    }
+    return res.json();
+  }
+
+  // Bolt mode: update estimate status to "archived"
+  const { data: estData, error: estErr } = await supabase
+    .from("estimates")
+    .update({ status: "archived" })
+    .eq("id", estimateId)
+    .select()
+    .maybeSingle();
+
+  if (estErr) {
+    try {
+      const res = await edgeFetch("estimate-save", token, {
+        method: "PATCH",
+        pathSuffix: `?id=${encodeURIComponent(String(estimateId))}`,
+        body: JSON.stringify({ status: "archived" }),
+      });
+      if (!res.ok) throw new Error((await res.json()).message ?? "Failed to archive estimate");
+    } catch {
+      throw new Error(estErr.message || "Failed to mark estimate as submitted");
+    }
+  }
+
+  // Mark all linked active invoices as submitted
+  const { data: invData, error: invErr } = await supabase
+    .from("invoices")
+    .update({ status: "submitted" })
+    .eq("estimate_id", estimateId)
+    .neq("status", "cancelled")
+    .select();
+
+  if (invErr) {
+    console.warn("[api] Could not update linked invoices status:", invErr.message);
+  }
+
+  return {
+    success: true,
+    estimate: estData ? toCamel(estData) : undefined,
+    updatedInvoicesCount: invData?.length ?? 0,
+  };
+}
+
+export async function unarchiveEstimate(
+  token: string | null,
+  estimate: { id: number; poNumber?: string | null }
+): Promise<any> {
+  const targetStatus = estimate.poNumber ? "po_received" : "approved";
+  if (!isBoltMode) {
+    const res = await apiFetch(`/api/operations/estimates/${estimate.id}/unarchive`, token, {
+      method: "POST",
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.message ?? "Failed to restore estimate");
+    }
+    return res.json();
+  }
+
+  const { data, error } = await supabase
+    .from("estimates")
+    .update({ status: targetStatus })
+    .eq("id", estimate.id)
+    .select()
+    .maybeSingle();
+
+  if (error) {
+    try {
+      return await edgeFetch("estimate-save", token, {
+        method: "PATCH",
+        pathSuffix: `?id=${encodeURIComponent(String(estimate.id))}`,
+        body: JSON.stringify({ status: targetStatus }),
+      });
+    } catch {
+      throw new Error(error.message || "Failed to restore estimate");
+    }
+  }
+  return toCamel(data);
+}
+
 // ─── Invoices ─────────────────────────────────────────────────────────────────
 
 export async function createInvoice(
