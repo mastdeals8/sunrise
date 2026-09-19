@@ -4,7 +4,7 @@ import { storage, sanitizeUser } from "./storage";
 import { hashPassword, comparePassword, generateToken, authenticateToken, authenticateBrowserRequest, requireRole, setSessionCookie, clearSessionCookie, AuthRequest } from "./auth";
 import { insertUserSchema, insertAttendanceSchema, insertTaskSchema, insertPettyCashExpenseSchema, insertInvoiceSchema, insertPaymentSchema, insertChartOfAccountSchema, insertClientSchema, insertClientBillingProfileSchema, insertBrandSchema, insertStoreSchema, insertProductSchema, insertEstimateSchema, insertEstimateItemSchema, insertStaffAdvanceSchema, insertPayrollSchema, insertDeliveryChallanSchema, clients, brands, stores, products, invoices, payments, botSettings, botUploadInbox, webhookLogs, customerRateCards, customerRateItems, estimates, estimateItems, deliveryChallans, executionDocuments, executionStores, fieldAccessLinks, staffAdvances, attendance, projectStoreStatus, users, telegramDeliveries } from "../shared/schema";
 import { db } from "./db";
-import { inArray, eq, sql } from "drizzle-orm";
+import { inArray, eq, sql, and, ne } from "drizzle-orm";
 import { z } from "zod";
 import multer from "multer";
 import rateLimit from "express-rate-limit";
@@ -455,7 +455,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const dcType = documentTypeForDc(dc);
       const storeCode = storeCodeForDc(dc) || null;
       if (dc.photoPath) {
-        await ensureExecutionDocument({ estimateId: dc.estimateId, deliveryChallanId: dc.id, storeCode, documentType: "photo", filePath: dc.photoPath, uploadedVia: "migration", uploadedAt: dc.createdAt || new Date(), metadata: { source: "delivery_challans.photoPath" } });
+        await ensureExecutionDocument({ estimateId: dc.estimateId, deliveryChallanId: dc.id, storeCode, documentType: "wcc_photo", filePath: dc.photoPath, uploadedVia: "migration", uploadedAt: dc.createdAt || new Date(), metadata: { source: "delivery_challans.photoPath" } });
       }
       if (dc.signedChallanPath) {
         await ensureExecutionDocument({ estimateId: dc.estimateId, deliveryChallanId: dc.id, storeCode, documentType: dcType === "wcc" ? "signed_wcc" : "signed_dc", filePath: dc.signedChallanPath, uploadedVia: "migration", uploadedAt: dc.createdAt || new Date(), metadata: { source: "delivery_challans.signedChallanPath" } });
@@ -469,7 +469,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const photos = Array.isArray(dc.metadata?.photos) ? dc.metadata.photos : [];
       for (let i = 0; i < photos.length; i++) {
         const photo = photos[i];
-        await ensureExecutionDocument({ estimateId: dc.estimateId, deliveryChallanId: dc.id, storeCode, documentType: "photo", filePath: photo?.path, uploadedVia: "migration", uploadedAt: dc.createdAt || new Date(), metadata: { source: "delivery_challans.metadata.photos", index: i, photo } });
+        await ensureExecutionDocument({ estimateId: dc.estimateId, deliveryChallanId: dc.id, storeCode, documentType: "wcc_photo", filePath: photo?.path, uploadedVia: "migration", uploadedAt: dc.createdAt || new Date(), metadata: { source: "delivery_challans.metadata.photos", index: i, photo } });
       }
     }
   };
@@ -502,7 +502,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const dcType = documentTypeForDc(dc);
     const storeCode = storeCodeForDc(dc) || null;
     if (dc.photoPath) {
-      await ensureExecutionDocument({ estimateId: dc.estimateId, deliveryChallanId: dc.id, storeCode, documentType: "photo", filePath: dc.photoPath, uploadedBy: uploadedBy || null, uploadedVia: "erp", uploadedAt: new Date(), metadata: { source: "delivery_challans.photoPath" } });
+      await ensureExecutionDocument({ estimateId: dc.estimateId, deliveryChallanId: dc.id, storeCode, documentType: "wcc_photo", filePath: dc.photoPath, uploadedBy: uploadedBy || null, uploadedVia: "erp", uploadedAt: new Date(), metadata: { source: "delivery_challans.photoPath" } });
     }
     if (dc.signedChallanPath) {
       await ensureExecutionDocument({ estimateId: dc.estimateId, deliveryChallanId: dc.id, storeCode, documentType: dcType === "wcc" ? "signed_wcc" : "signed_dc", filePath: dc.signedChallanPath, uploadedBy: uploadedBy || null, uploadedVia: "erp", uploadedAt: new Date(), metadata: { source: "delivery_challans.signedChallanPath" } });
@@ -516,7 +516,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const photos = Array.isArray(dc.metadata?.photos) ? dc.metadata.photos : [];
     for (let i = 0; i < photos.length; i++) {
       const photo = photos[i];
-      await ensureExecutionDocument({ estimateId: dc.estimateId, deliveryChallanId: dc.id, storeCode, documentType: "photo", filePath: photo?.path, uploadedBy: uploadedBy || null, uploadedVia: "erp", uploadedAt: new Date(), metadata: { source: "delivery_challans.metadata.photos", index: i, photo } });
+      await ensureExecutionDocument({ estimateId: dc.estimateId, deliveryChallanId: dc.id, storeCode, documentType: "wcc_photo", filePath: photo?.path, uploadedBy: uploadedBy || null, uploadedVia: "erp", uploadedAt: new Date(), metadata: { source: "delivery_challans.metadata.photos", index: i, photo } });
     }
   };
   const reconcileSignedExecutionDocumentOwners = async () => {
@@ -1223,8 +1223,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     defaultEstimatePrefix: "SM/E",
     defaultInvoicePrefix: "SM/INV",
     defaultDcPrefix: "SM/DC",
-    logoPath: "",
-    signatureStampPath: "",
+    logoPath: "/brand/file-1780929283382-585314307.png",
+    signatureStampPath: "/brand/file-1780897714393-225895475.png",
     terms: "1. Taxes will be applicable.\n2. 100% Payment after the delivery of the meterial.\n3. Transportation charges As per Actual.\n4. Any additional work / rework will be extra.",
   };
   type SellerProfile = typeof SUNRISE_DEFAULT_SELLER;
@@ -1899,6 +1899,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const readiness = await deriveInvoiceReadinessForEstimate(Number(parsed.data.estimateId));
         if (!readiness.ready) {
           return res.status(409).json({ message: "Invoice readiness is incomplete", readiness });
+        }
+
+        // Duplicate guard: If an active (non-cancelled) invoice already exists for this estimate, reject duplicate creation
+        const existingInvs = await db.select().from(invoices).where(
+          and(
+            eq(invoices.estimateId, Number(parsed.data.estimateId)),
+            ne(invoices.status, "cancelled")
+          )
+        ).limit(1);
+        if (existingInvs.length > 0) {
+          return res.status(409).json({
+            message: `Invoice ${existingInvs[0].invoiceNumber} already exists for this estimate. Multiple full invoices are not allowed.`,
+            existingInvoice: existingInvs[0],
+          });
         }
       }
 
@@ -2805,6 +2819,64 @@ export async function registerRoutes(app: Express): Promise<Server> {
           });
         }
         res.json(updated);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.post("/api/operations/estimates/:id/submit", authenticateToken, requireRole(["admin", "manager", "accounts"]), async (req: AuthRequest, res: Response) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      const [est] = await db.select().from(estimates).where(eq(estimates.id, id)).limit(1);
+      if (!est) return res.status(404).json({ message: "Estimate not found" });
+
+      // Archive the estimate
+      const [updatedEst] = await db.update(estimates).set({ status: "archived" }).where(eq(estimates.id, id)).returning();
+
+      // Mark all linked active invoices as submitted
+      const updatedInvoices = await db.update(invoices).set({ status: "submitted" }).where(
+        and(
+          eq(invoices.estimateId, id),
+          ne(invoices.status, "cancelled")
+        )
+      ).returning();
+
+      audit(req, {
+        action: "status_change",
+        entityType: "estimate",
+        entityId: id,
+        entityLabel: est.estimateNumber,
+        estimateId: id,
+        oldValue: est.status,
+        newValue: "archived",
+      });
+
+      res.json({ success: true, estimate: updatedEst, updatedInvoicesCount: updatedInvoices.length });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.post("/api/operations/estimates/:id/unarchive", authenticateToken, requireRole(["admin", "manager", "accounts"]), async (req: AuthRequest, res: Response) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      const [est] = await db.select().from(estimates).where(eq(estimates.id, id)).limit(1);
+      if (!est) return res.status(404).json({ message: "Estimate not found" });
+
+      const targetStatus = est.poNumber ? "po_received" : "approved";
+      const [updatedEst] = await db.update(estimates).set({ status: targetStatus }).where(eq(estimates.id, id)).returning();
+
+      audit(req, {
+        action: "status_change",
+        entityType: "estimate",
+        entityId: id,
+        entityLabel: est.estimateNumber,
+        estimateId: id,
+        oldValue: est.status,
+        newValue: targetStatus,
+      });
+
+      res.json({ success: true, estimate: updatedEst });
     } catch (err: any) {
       res.status(500).json({ message: err.message });
     }
@@ -3947,7 +4019,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const storeDcs = activeDcs.filter(dc => storeCodeForDc(dc).toLowerCase() === key);
         const wccRecords = storeDcs.filter(dc => documentTypeForDc(dc) === "wcc");
         const dcRecords = storeDcs.filter(dc => documentTypeForDc(dc) !== "wcc");
-        const photoDocs = storeDocs.filter(doc => doc.documentType === "photo");
+        const photoDocs = storeDocs.filter(doc => doc.documentType === "photo" && doc.documentType !== "wcc_photo" && doc.metadata?.source !== "delivery_challans.metadata.photos" && doc.metadata?.source !== "delivery_challans.photoPath");
         const signedWccDocs = storeDocs.filter(doc => doc.documentType === "signed_wcc");
         const signedDcDocs = storeDocs.filter(doc => doc.documentType === "signed_dc");
         const stats = {
@@ -5065,12 +5137,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const allClients = await storage.getAllClients();
       const allProducts = await storage.getAllProducts();
 
+      let execDocs: any[] = [];
+      let execStores: any[] = [];
       if (invoice.estimateId) {
         estimate = await storage.getEstimate(invoice.estimateId);
         if (estimate) {
           estimateItems = orderedEstimateItems(await storage.getEstimateItems(estimate.id));
           const allDc = await storage.getAllDeliveryChallans();
           challans = allDc.filter((d) => d.estimateId === estimate.id && d.status !== "deleted" && !(d.metadata as any)?.deleted);
+          execDocs = await db.select().from(executionDocuments).where(eq(executionDocuments.estimateId, estimate.id));
+          execStores = await db.select().from(executionStores).where(eq(executionStores.estimateId, estimate.id));
         }
       }
       if (invoice.clientId) {
@@ -5081,7 +5157,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const allPayments = await storage.getAllPayments();
       const payments = allPayments.filter((p: any) => p.invoiceId === invoice.id);
 
-      res.json({ invoice, estimate, estimateItems, challans, client, payments, stores, clients: allClients, products: allProducts });
+      res.json({
+        invoice,
+        estimate,
+        estimateItems,
+        challans,
+        client,
+        payments,
+        stores,
+        clients: allClients,
+        products: allProducts,
+        executionDocuments: execDocs,
+        executionStores: execStores,
+      });
     } catch (err: any) {
       res.status(500).json({ message: err.message });
     }

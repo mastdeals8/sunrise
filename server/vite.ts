@@ -20,8 +20,12 @@ export function log(message: string, source = "express") {
 }
 
 export async function setupVite(app: Express, _server: Server) {
+  const resolvedConfig = typeof viteConfig === "function"
+    ? await (viteConfig as any)({ mode: "development", command: "serve" })
+    : viteConfig;
+
   const vite = await createViteServer({
-    ...viteConfig,
+    ...resolvedConfig,
     configFile: false,
     customLogger: {
       ...viteLogger,

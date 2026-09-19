@@ -1,7 +1,7 @@
 // EstimateDocument is the single React renderer for estimate preview,
 // browser print/PDF export, and the estimate page inside Invoice Packet.
 
-import React from "react";
+import React, { useMemo, useState, useEffect } from "react";
 import { formatProductDetails } from "../../../shared/productDetails";
 import { isServiceEstimateItem, resolveServiceProduct, serviceProductLabel } from "../../../shared/serviceProductDisplay";
 import { companyAssetUrl } from "../utils/companyAssets";
@@ -40,11 +40,21 @@ const wrapAddress = (value: string) => {
 };
 
 const DocumentLogo: React.FC<{ src: string; companyName: string }> = ({ src, companyName }) => {
-  const [failed, setFailed] = React.useState(!src);
+  const [failed, setFailed] = React.useState(false);
+  React.useEffect(() => {
+    setFailed(false);
+  }, [src]);
+
+  const effectiveSrc = src || "/brand/file-1780929283382-585314307.png";
   return failed ? (
     <div style={{ fontWeight: 900, fontSize: "22px", lineHeight: 1.1, textAlign: "right" }}>{companyName}</div>
   ) : (
-    <img src={src} alt={companyName} onError={() => setFailed(true)} style={{ width: 230, maxWidth: "100%", height: "auto", objectFit: "contain" }} />
+    <img
+      src={effectiveSrc}
+      alt={companyName}
+      onError={() => setFailed(true)}
+      style={{ width: 220, maxWidth: "100%", height: "auto", maxHeight: "48px", objectFit: "contain", display: "inline-block" }}
+    />
   );
 };
 
@@ -284,8 +294,8 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
   const companyAddress = sellerProfile.address || "";
   const companyEmail = sellerProfile.email || "";
   const companyMobile = sellerProfile.mobile || "";
-  const logoSrc = companyAssetUrl(sellerProfile.logoPath, token);
-  const signatureStampSrc = companyAssetUrl(sellerProfile.signatureStampPath, token);
+  const logoSrc = companyAssetUrl(sellerProfile.logoPath || "/brand/file-1780929283382-585314307.png", token);
+  const signatureStampSrc = companyAssetUrl(sellerProfile.signatureStampPath || "/brand/file-1780897714393-225895475.png", token);
   const termsLines = String(sellerProfile.terms || "1. Taxes will be applicable.\n2. 100% Payment after the delivery of the meterial.\n3. Transportation charges As per Actual.\n4. Any additional work / rework will be extra.")
     .split(/\n+/)
     .map((line: string) => line.trim())
@@ -315,11 +325,19 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
 
   // Cell + table styles for dense print-grade layout. Inline styles so
   // they survive print without depending on Tailwind classes.
-  const cellBase: React.CSSProperties = { border: "1px solid #000", padding: "2px 4px", fontSize: "10px", lineHeight: 1.25, verticalAlign: "middle", overflowWrap: "anywhere", wordBreak: "break-word" };
+  const cellBase: React.CSSProperties = {
+    border: "1px solid #000",
+    padding: "4.5px 5.5px",
+    fontSize: "9px",
+    lineHeight: 1.35,
+    verticalAlign: "middle",
+    fontWeight: 400,
+  };
   const cellRight: React.CSSProperties = { ...cellBase, textAlign: "right", whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" };
-  const cellCenter: React.CSSProperties = { ...cellBase, textAlign: "center" };
-  const headCell: React.CSSProperties = { ...cellBase, fontWeight: 700, textAlign: "center", backgroundColor: "#fff" };
-  const yellowRow: React.CSSProperties = { backgroundColor: "#fff066" };
+  const cellCenter: React.CSSProperties = { ...cellBase, textAlign: "center", whiteSpace: "nowrap" };
+  const headCell: React.CSSProperties = { ...cellBase, fontWeight: 700, textAlign: "center", backgroundColor: "#fff", whiteSpace: "nowrap" };
+  const totalRowStyle: React.CSSProperties = { backgroundColor: "#f8fafc" };
+  const yellowRow: React.CSSProperties = { backgroundColor: "#f8fafc" };
   // 14 columns: SL, Element, HSN, Std/Non, Product Details, W, H, Qty,
   // T.Sqft, Rate, Amount, GST%, GST Amount, Total.
   const COL_COUNT = 14;
@@ -336,19 +354,19 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
     const secondTaxAmt = isIgst ? 0 : base * SERVICE_TAX_PCT / 100;
     const gstAmt = firstTaxAmt + secondTaxAmt;
     return (
-      <tr className="estimate-service-row-keep" key={`${sectionKey}-${kind}`}>
+      <tr className="estimate-service-row-keep" data-pdf-row key={`${sectionKey}-${kind}`}>
         <td style={cellCenter}></td>
         <td style={cellBase}>{kind}</td>
-        <td style={cellBase}>9987</td>
-        <td style={cellBase}>Standard</td>
+        <td style={cellCenter}>9987</td>
+        <td style={cellCenter}>Standard</td>
         <td style={cellBase}>{descr}</td>
-        <td style={cellBase}></td>
-        <td style={cellBase}></td>
-        <td style={cellBase}></td>
-        <td style={cellBase}></td>
+        <td style={cellCenter}></td>
+        <td style={cellCenter}></td>
+        <td style={cellCenter}></td>
+        <td style={cellCenter}></td>
         <td style={cellRight}>{percentLabel}</td>
         <td style={cellRight}>{num(base)}</td>
-        <td style={cellRight}>{isIgst ? "18%" : "18%"}</td>
+        <td style={cellCenter}>{isIgst ? "18%" : "18%"}</td>
         <td style={cellRight}>{num(gstAmt)}</td>
         <td style={cellRight}>{num(base + gstAmt)}</td>
       </tr>
@@ -365,21 +383,21 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
       : (Number(item.sgstAmount) || 0) + (Number(item.cgstAmount) || 0);
     const label = service.label;
     return (
-      <tr className="estimate-service-row-keep" key={`${sectionKey}-${item.id || item.sl || item.itemName}`}>
+      <tr className="estimate-service-row-keep" data-pdf-row key={`${sectionKey}-${item.id || item.sl || item.itemName}`}>
         <td style={cellCenter}></td>
         <td style={cellBase}>{label}</td>
-        <td style={cellBase}>{service.hsn || "9987"}</td>
-        <td style={cellBase}>{item.isStandard === false ? "Non-standard" : "Standard"}</td>
-        <td style={cellBase}>{label}</td>
-        <td style={cellBase}></td>
-        <td style={cellBase}></td>
-        <td style={cellRight}>{Number(item.quantity || 1).toFixed(2)}</td>
-        <td style={cellBase}></td>
+        <td style={cellCenter}>9987</td>
+        <td style={cellCenter}>Standard</td>
+        <td style={cellBase}>{item.description || label}</td>
+        <td style={cellCenter}></td>
+        <td style={cellCenter}></td>
+        <td style={cellCenter}></td>
+        <td style={cellCenter}></td>
         <td style={cellRight}>{rateLabel}</td>
         <td style={cellRight}>{num(base)}</td>
-        <td style={cellRight}>{gstPercent}%</td>
+        <td style={cellCenter}>{gstPercent}%</td>
         <td style={cellRight}>{num(gstAmount)}</td>
-        <td style={cellRight}>{num(Number(item.totalAmount) || 0)}</td>
+        <td style={cellRight}>{num(base + gstAmount)}</td>
       </tr>
     );
   };
@@ -387,7 +405,22 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
   // Portrait A4 printable width is 194mm at the 8mm page margins below.
   // Numeric columns are intentionally wide enough for Indian-formatted
   // five/six-digit values; the product-details column absorbs wrapping.
-  const columnWidths = ["3%", "9%", "4.5%", "6.5%", "21%", "4%", "4%", "5%", "5.5%", "7%", "9%", "5.5%", "8%", "8%"];
+  const columnWidths = [
+    "3.5%",  // SL
+    "12%",   // Element
+    "5.5%",  // HSN
+    "6.5%",  // Std/Non
+    "20.5%", // Product Details
+    "4.5%",  // Size (W)
+    "4.5%",  // Size (H)
+    "4%",    // Qty
+    "5%",    // T.Sqft
+    "6.5%",  // Rate
+    "8.5%",  // Amount
+    "4.5%",  // GST %
+    "7%",    // GST Amt
+    "7.5%",  // Total
+  ];
 
   const renderDocumentHeader = () => (
     <table className="estimate-document-header" style={{ width: "100%", borderCollapse: "collapse" }}>
@@ -422,77 +455,65 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
   );
 
   const renderEstimateTableHead = () => (
-    <thead>
+    <thead data-pdf-thead style={{ display: "table-header-group" }}>
       <tr>
-        <td colSpan={COL_COUNT} style={{ ...cellCenter, fontWeight: 700, padding: "4px 8px" }}>
+        <td colSpan={COL_COUNT} style={{ ...cellCenter, fontWeight: 700, padding: "5px 8px" }}>
           Subject : {est.subject || est.title}
         </td>
       </tr>
-      <tr>
-        <td style={headCell} rowSpan={2}>SL</td>
-        <td style={headCell} rowSpan={2}>ELEMENT</td>
-        <td style={headCell} rowSpan={2}>HSN</td>
-        <td style={headCell} rowSpan={2}>Standard / Non</td>
-        <td style={headCell} rowSpan={2}>PRODUCT DETAILS</td>
-        <td style={headCell} colSpan={2}>Sizes</td>
-        <td style={headCell} colSpan={2}>T Sqft / Qty</td>
-        <td style={headCell} rowSpan={2}>Rate</td>
-        <td style={headCell} rowSpan={2}>Amount</td>
-        <td style={headCell} rowSpan={2}>GST %</td>
-        <td style={headCell} rowSpan={2}>GST Amount</td>
-        <td style={headCell} rowSpan={2}>Total</td>
-      </tr>
-      <tr>
-        <td style={headCell}>W</td>
-        <td style={headCell}>H</td>
+      <tr data-pdf-col-header="true">
+        <td style={headCell}>SL</td>
+        <td style={headCell}>Element</td>
+        <td style={headCell}>HSN</td>
+        <td style={headCell}>Std / Non</td>
+        <td style={headCell}>Product Details</td>
+        <td style={headCell}>Size (W)</td>
+        <td style={headCell}>Size (H)</td>
         <td style={headCell}>Qty</td>
         <td style={headCell}>T.Sqft</td>
+        <td style={headCell}>Rate</td>
+        <td style={headCell}>Amount</td>
+        <td style={headCell}>GST %</td>
+        <td style={headCell}>GST Amt</td>
+        <td style={headCell}>Total</td>
       </tr>
     </thead>
   );
 
   const renderStoreSection = (sec: Section, sIdx: number) => (
     <tbody
-      className="estimate-store-section-keep"
-      data-store-name={sec.storeName}
-      key={`sec-${sIdx}`}
+      className="estimate-store-section"
+      key={`sec-${sIdx}-${sec.storeCode || sec.storeName}`}
+      data-store-code={sec.storeCode}
+      style={{ breakInside: "avoid", pageBreakInside: "avoid" }}
     >
-      <tr>
-        <td colSpan={COL_COUNT} style={{ ...cellBase, fontWeight: 700, padding: "4px 8px" }}>
-          Store: {sec.storeName}{sec.storeCode ? `,  Store Code : ${sec.storeCode}` : ""}
+      <tr data-pdf-row data-pdf-store-heading="true">
+        <td colSpan={COL_COUNT} style={{ ...cellCenter, fontWeight: 700, padding: "4px 8px", backgroundColor: "#f1f5f9" }}>
+          Store: {sec.storeName}{sec.storeCode ? `, Store Code : ${sec.storeCode}` : ""}
         </td>
       </tr>
       {sec.itemRows.map((row, rIdx) => (
-        <tr key={`sec-${sIdx}-row-${rIdx}`}>
+        <tr key={`sec-${sIdx}-row-${rIdx}`} data-pdf-row>
           <td style={cellCenter}>{row.label}</td>
           <td style={cellBase}>{row.type}</td>
-          <td style={cellBase}>{row.hsn || ""}</td>
-          <td style={cellBase}>{row.stdLabel}</td>
+          <td style={cellCenter}>{row.hsn || ""}</td>
+          <td style={{ ...cellCenter, fontSize: "9px" }}>{row.stdLabel}</td>
           <td style={cellBase}>{row.description}</td>
           <td style={cellRight}>{row.width}</td>
           <td style={cellRight}>{row.height}</td>
-          <td style={cellRight}>{row.qty}</td>
+          <td style={cellCenter}>{row.qty}</td>
           <td style={cellRight}>{row.tsqft}</td>
           <td style={cellRight}>{row.psqft}</td>
           <td style={cellRight}>{num(row.amount)}</td>
-          <td style={cellRight}>{isIgst ? row.igstPercent : row.sgstPercent + row.cgstPercent}%</td>
+          <td style={cellCenter}>{isIgst ? row.igstPercent : row.sgstPercent + row.cgstPercent}%</td>
           <td style={cellRight}>{num(isIgst ? row.igstAmt : row.sgstAmt + row.cgstAmt)}</td>
           <td style={cellRight}>{num(row.total)}</td>
         </tr>
       ))}
-      <tr className="estimate-store-total-keep" style={yellowRow}>
-        <td style={cellBase}></td>
-        <td style={{ ...cellBase, fontWeight: 700 }}>Total Material Cost</td>
-        <td style={cellBase}></td>
-        <td style={cellBase}></td>
-        <td style={cellBase}></td>
-        <td style={cellBase}></td>
-        <td style={cellBase}></td>
-        <td style={cellBase}></td>
-        <td style={cellBase}></td>
-        <td style={cellBase}></td>
+      <tr className="estimate-store-total-keep" data-pdf-row style={yellowRow}>
+        <td colSpan={10} style={{ ...cellBase, fontWeight: 700, padding: "4px 6px" }}>Total Material Cost</td>
         <td style={{ ...cellRight, fontWeight: 700 }}>{num(sec.materialBase)}</td>
-        <td style={{ ...cellRight, fontWeight: 700 }}>{isIgst ? "18%" : "18%"}</td>
+        <td style={{ ...cellCenter, fontWeight: 700 }}>{isIgst ? "18%" : "18%"}</td>
         <td style={{ ...cellRight, fontWeight: 700 }}>{num(isIgst ? sec.materialIgst : sec.materialSgst + sec.materialCgst)}</td>
         <td style={{ ...cellRight, fontWeight: 700 }}>{num(sec.materialTotal)}</td>
       </tr>
@@ -505,53 +526,84 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
       )}
       {sIdx < sections.length - 1 && (
         <tr className="estimate-store-spacer">
-          <td colSpan={COL_COUNT} style={{ ...cellBase, height: "6px", padding: 0 }}></td>
+          <td colSpan={COL_COUNT} style={{ ...cellBase, height: "6px", padding: 0, border: "none" }}></td>
         </tr>
       )}
     </tbody>
   );
 
+  const amountInWords = (numVal: number): string => {
+    const a = ["", "One ", "Two ", "Three ", "Four ", "Five ", "Six ", "Seven ", "Eight ", "Nine ", "Ten ", "Eleven ", "Twelve ", "Thirteen ", "Fourteen ", "Fifteen ", "Sixteen ", "Seventeen ", "Eighteen ", "Nineteen "];
+    const b = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"];
+    const rounded = Math.round(numVal);
+    if (rounded === 0) return "Zero Only";
+    const n = ("000000000" + rounded).slice(-9).match(/^(\d{2})(\d{2})(\d{2})(\d{1})(\d{2})$/);
+    if (!n) return "";
+    let str = "";
+    const words = (v: string) => a[Number(v)] || `${b[Number(v[0])]} ${a[Number(v[1])]}`;
+    if (Number(n[1])) str += `${words(n[1])}Crore `;
+    if (Number(n[2])) str += `${words(n[2])}Lakh `;
+    if (Number(n[3])) str += `${words(n[3])}Thousand `;
+    if (Number(n[4])) str += `${words(n[4])}Hundred `;
+    if (Number(n[5])) str += `${str ? "and " : ""}${words(n[5])}`;
+    return `${str.trim()} Only`;
+  };
+
   const renderTotalsBody = () => (
     <tbody className="estimate-totals-keep">
-      <tr>
-        <td colSpan={9} style={cellBase}></td>
-        <td style={{ ...cellRight, fontWeight: 700 }}>TOTAL</td>
+      <tr data-pdf-row style={totalRowStyle}>
+        <td colSpan={10} style={{ ...cellRight, fontWeight: 700, paddingRight: "8px" }}>TOTAL</td>
         <td style={{ ...cellRight, fontWeight: 700 }}>{num(grandBeforeTax)}</td>
-        <td style={{ ...cellRight, fontWeight: 700 }}>18%</td>
+        <td style={{ ...cellCenter, fontWeight: 700 }}>18%</td>
         <td style={{ ...cellRight, fontWeight: 700 }}>{num(isIgst ? grandIgst : grandSgst + grandCgst)}</td>
         <td style={{ ...cellRight, fontWeight: 700 }}>{num(grandTotal)}</td>
       </tr>
-      <tr>
-        <td colSpan={12} style={{ ...cellRight, fontWeight: 700, paddingRight: "10px" }}>TOTAL AMOUNT BEFORE TAX</td>
+      <tr data-pdf-row style={totalRowStyle}>
+        <td colSpan={12} style={{ ...cellRight, fontWeight: 700, paddingRight: "10px" }}>
+          TOTAL AMOUNT BEFORE TAX
+        </td>
         <td colSpan={2} style={{ ...cellRight, fontWeight: 700 }}>{num(grandBeforeTax)}</td>
       </tr>
       {isIgst ? (
-        <tr>
-          <td colSpan={12} style={{ ...cellRight, fontWeight: 700, paddingRight: "10px" }}>Add : IGST 18%</td>
+        <tr data-pdf-row>
+          <td colSpan={12} style={{ ...cellRight, fontWeight: 700, paddingRight: "10px" }}>
+            Add : IGST 18%
+          </td>
           <td colSpan={2} style={{ ...cellRight, fontWeight: 700 }}>{num(grandIgst)}</td>
         </tr>
       ) : (
         <>
-          <tr>
-            <td colSpan={12} style={{ ...cellRight, fontWeight: 700, paddingRight: "10px" }}>Add : CGST 9%</td>
+          <tr data-pdf-row>
+            <td colSpan={12} style={{ ...cellRight, fontWeight: 700, paddingRight: "10px" }}>
+              Add : CGST 9%
+            </td>
             <td colSpan={2} style={{ ...cellRight, fontWeight: 700 }}>{num(grandCgst)}</td>
           </tr>
-          <tr>
-            <td colSpan={12} style={{ ...cellRight, fontWeight: 700, paddingRight: "10px" }}>Add : SGST 9%</td>
+          <tr data-pdf-row>
+            <td colSpan={12} style={{ ...cellRight, fontWeight: 700, paddingRight: "10px" }}>
+              Add : SGST 9%
+            </td>
             <td colSpan={2} style={{ ...cellRight, fontWeight: 700 }}>{num(grandSgst)}</td>
           </tr>
         </>
       )}
-      <tr>
-        <td colSpan={12} style={{ ...cellRight, fontWeight: 700, paddingRight: "10px" }}>TOTAL AMOUNT AFTER TAX</td>
+      <tr data-pdf-row style={totalRowStyle}>
+        <td colSpan={12} style={{ ...cellRight, fontWeight: 700, paddingRight: "10px" }}>
+          TOTAL AMOUNT AFTER TAX
+        </td>
         <td colSpan={2} style={{ ...cellRight, fontWeight: 700 }}>{num(grandTotal)}</td>
+      </tr>
+      <tr data-pdf-row>
+        <td colSpan={COL_COUNT} style={{ ...cellBase, fontWeight: 700, fontStyle: "italic", padding: "5px 8px" }}>
+          Amount in Words: {amountInWords(grandTotal)}
+        </td>
       </tr>
     </tbody>
   );
 
   const renderFooter = () => (
-    <div className="estimate-footer-block">
-      <table className="estimate-document-footer" style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed", marginTop: "-1px" }}>
+    <div className="estimate-footer-block" data-pdf-row style={{ width: "100%", marginTop: "-1px", boxSizing: "border-box" }}>
+      <table className="estimate-document-footer" style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
         <colgroup>
           <col style={{ width: "38%" }} />
           <col style={{ width: "34%" }} />
@@ -559,38 +611,38 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
         </colgroup>
         <tbody>
           <tr className="estimate-footer-columns" style={{ verticalAlign: "top" }}>
-            <td className="estimate-footer-column" style={{ ...cellBase, padding: "8px 10px", verticalAlign: "top" }}>
-              <div style={{ color: "#b91c1c", fontWeight: 700, textDecoration: "underline", marginBottom: "4px" }}>Terms &amp; Condition :</div>
-              {termsLines.map((line: string, idx: number) => <div key={idx}>{line}</div>)}
+            <td className="estimate-footer-column" style={{ ...cellBase, padding: "6px 8px", verticalAlign: "top" }}>
+              <div style={{ color: "#b91c1c", fontWeight: 700, textDecoration: "underline", marginBottom: "3px", fontSize: "9px" }}>Terms &amp; Condition :</div>
+              {termsLines.map((line: string, idx: number) => <div key={idx} style={{ fontSize: "8.5px", lineHeight: 1.3 }}>{line}</div>)}
             </td>
-            <td className="estimate-footer-column" style={{ ...cellBase, padding: "8px 10px", verticalAlign: "top" }}>
-              <div style={{ fontWeight: 700, marginBottom: "4px" }}>BANK ACCOUNT DETAILS</div>
-              <div>Bank Name : {sellerProfile.bankName || ""}</div>
-              <div>Branch Name : {sellerProfile.bankBranch || ""}</div>
-              <div>C.A/c No : {sellerProfile.bankAccountNumber || ""}</div>
-              <div>IFSC NO : {sellerProfile.bankIfsc || ""}</div>
+            <td className="estimate-footer-column" style={{ ...cellBase, padding: "6px 8px", verticalAlign: "top" }}>
+              <div style={{ fontWeight: 700, marginBottom: "3px", fontSize: "9px" }}>BANK ACCOUNT DETAILS</div>
+              <div style={{ fontSize: "8.5px", lineHeight: 1.4 }}>Bank Name : {sellerProfile?.bankName || "HDFC BANK"}</div>
+              <div style={{ fontSize: "8.5px", lineHeight: 1.4 }}>Branch Name : {sellerProfile?.bankBranch || "Baner Pune"}</div>
+              <div style={{ fontSize: "8.5px", lineHeight: 1.4 }}>C.A/c No : {sellerProfile?.bankAccountNumber || "50200019250720"}</div>
+              <div style={{ fontSize: "8.5px", lineHeight: 1.4 }}>IFSC NO : {sellerProfile?.bankIfsc || "HDFC0001794"}</div>
             </td>
-            <td className="estimate-footer-column estimate-signature-cell" style={{ ...cellBase, padding: "8px 10px", textAlign: "right", verticalAlign: "top" }}>
-              <div style={{ fontWeight: 700 }}>For {companyName.toUpperCase()}</div>
-              <div className="estimate-signature-space" style={{ height: "52px", display: "flex", alignItems: "center", justifyContent: "flex-end" }}>
+            <td className="estimate-footer-column estimate-signature-cell" style={{ ...cellBase, padding: "6px 8px", textAlign: "right", verticalAlign: "top" }}>
+              <div style={{ fontWeight: 700, fontSize: "9px" }}>For {companyName.toUpperCase()}</div>
+              <div className="estimate-signature-space" style={{ height: "46px", display: "flex", alignItems: "center", justifyContent: "flex-end" }}>
                 {signatureStampSrc && (
                   <img
                     src={signatureStampSrc}
                     alt="Signature and stamp"
                     className="estimate-signature-stamp"
-                    style={{ maxHeight: "48px", maxWidth: "150px", objectFit: "contain" }}
+                    style={{ maxHeight: "42px", maxWidth: "140px", objectFit: "contain" }}
                   />
                 )}
               </div>
-              <div style={{ fontWeight: 700 }}>Authorised Signatory</div>
+              <div style={{ fontWeight: 700, fontSize: "9px" }}>Authorised Signatory</div>
             </td>
           </tr>
         </tbody>
       </table>
-      <div className="estimate-brand-footer" style={{ backgroundColor: "#f59e0b", color: "#fff", textAlign: "center", padding: "6px 8px", letterSpacing: "0.3px" }}>
-        <div className="estimate-brand-footer-title" style={{ fontSize: "16px", fontWeight: 900, letterSpacing: "1.5px", lineHeight: 1.1 }}>{companyName.toUpperCase()}</div>
-        {companyAddress && <div style={{ fontSize: "9px", marginTop: "3px", lineHeight: 1.25 }}>{companyAddress}</div>}
-        {(companyMobile || companyEmail) && <div style={{ fontSize: "9px", marginTop: "1px", lineHeight: 1.25 }}>{[companyMobile, companyEmail].filter(Boolean).join("  ·  ")}</div>}
+      <div className="estimate-brand-footer" style={{ width: "100%", boxSizing: "border-box", backgroundColor: "#f59e0b", color: "#fff", textAlign: "center", padding: "5px 8px", letterSpacing: "0.3px", border: "1px solid #f59e0b", borderTop: "none" }}>
+        <div className="estimate-brand-footer-title" style={{ fontSize: "14px", fontWeight: 900, letterSpacing: "1.5px", lineHeight: 1.1 }}>{companyName.toUpperCase()}</div>
+        {companyAddress && <div style={{ fontSize: "8px", marginTop: "2px", lineHeight: 1.25 }}>{companyAddress}</div>}
+        {(companyMobile || companyEmail) && <div style={{ fontSize: "8px", marginTop: "1px", lineHeight: 1.25 }}>{[companyMobile, companyEmail].filter(Boolean).join("  ·  ")}</div>}
       </div>
     </div>
   );
@@ -600,11 +652,25 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
       className="estimate-print"
       data-source="estimate-print"
       data-print-document="true"
-      style={{ background: "#fff", color: "#000", fontFamily: "Arial, Helvetica, sans-serif" }}
+      style={{
+        background: "#fff",
+        color: "#000",
+        fontFamily: "Arial, Helvetica, sans-serif",
+        width: "100%",
+        boxSizing: "border-box",
+      }}
     >
       <h1 className="estimate-print-title">ESTIMATE</h1>
       {renderDocumentHeader()}
-      <table className="estimate-table" style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
+      <table
+        className="estimate-table"
+        style={{
+          width: "100%",
+          borderCollapse: "collapse",
+          tableLayout: "fixed",
+          boxSizing: "border-box",
+        }}
+      >
         <colgroup>
           {columnWidths.map((width, index) => (
             <col key={index} style={{ width }} />

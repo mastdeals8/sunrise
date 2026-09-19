@@ -118,6 +118,47 @@ const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ open, invoiceId, estimate
             }
           }
         } else if (estimateId) {
+          // Check if an existing invoice already exists for this estimate
+          if (!isBoltMode) {
+            const checkRes = await fetch(`/api/finance/invoices/estimate/${estimateId}`, {
+              headers: { Authorization: `Bearer ${token}` },
+            });
+            if (checkRes.ok) {
+              const existingInv = await checkRes.json();
+              if (existingInv && existingInv.id && existingInv.status !== "cancelled" && existingInv.status !== "deleted") {
+                // Existing invoice found! Fetch full details and load into editor
+                const r = await fetch(`/api/finance/invoices/${existingInv.id}`, {
+                  headers: { Authorization: `Bearer ${token}` },
+                });
+                if (r.ok) {
+                  const data = await r.json();
+                  setOrigInvoice(data.invoice);
+                  setInvoiceNumber(data.invoice.invoiceNumber);
+                  setDate(data.invoice.date?.slice(0, 10) || new Date().toISOString().slice(0, 10));
+                  setDueDate(data.invoice.dueDate?.slice(0, 10) || new Date().toISOString().slice(0, 10));
+                  setPartyName(data.invoice.partyName || "");
+                  setClientId(data.invoice.clientId ?? null);
+                  setPoNumber(data.invoice.poNumber || "");
+                  setPoReference(data.invoice.poReference || "");
+                  setRemarks(data.invoice.remarks || "");
+                  setStatus(data.invoice.status || "draft");
+                  setLinkedEstimate(data.estimate || null);
+                  setLinkedDc(data.deliveryChallan || null);
+                  const lines = Array.isArray(data.invoice.lineItems) ? data.invoice.lineItems : [];
+                  if (lines.length > 0) {
+                    setItems(lines.map(invoiceLineToEditorLine));
+                  } else if (data.estimateItems && data.estimateItems.length > 0) {
+                    setItems(estimateItemsToInvoiceLines(data.estimateItems));
+                  } else {
+                    setItems([blankRow()]);
+                  }
+                  setLoading(false);
+                  return;
+                }
+              }
+            }
+          }
+
           // Build new invoice from estimate items
           if (isBoltMode) {
             const [allEstimates, its, allDcs, docs] = await Promise.all([

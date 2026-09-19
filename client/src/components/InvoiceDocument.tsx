@@ -1,7 +1,6 @@
-// InvoiceDocument is the single React renderer for invoice preview,
-// browser print/PDF export, and the invoice page inside Invoice Packet.
-// It is the canonical Sunrise Media Tax Invoice for preview, print/PDF, and
-// invoice packets. Saved invoice values remain the commercial source of truth.
+// InvoiceDocument is the canonical Sunrise Media Tax Invoice renderer for
+// preview, browser print/PDF export, and the invoice page inside Invoice Packet.
+// It implements clean A4 multi-page pagination with running headers and footers.
 
 import React, { useEffect, useMemo, useState } from "react";
 import { companyAssetUrl } from "../utils/companyAssets";
@@ -63,11 +62,23 @@ const useDataUrl = (url: string): { dataUrl: string; ready: boolean } => {
   return { dataUrl: dataUrl || url, ready };
 };
 
-const InvoiceLogo: React.FC<{ src: string; companyName: string; maxWidth?: number }> = ({ src, companyName, maxWidth = 200 }) => {
-  const [failed, setFailed] = useState(!src);
-  return failed
-    ? <div style={{ fontWeight: 900, fontSize: "18px", lineHeight: 1.1 }}>{companyName}</div>
-    : <img src={src} alt={companyName} onError={() => setFailed(true)} style={{ width: maxWidth, maxWidth: "100%", height: "auto", objectFit: "contain" }} />;
+const InvoiceLogo: React.FC<{ src: string; companyName: string; maxWidth?: number }> = ({ src, companyName, maxWidth = 185 }) => {
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    setFailed(false);
+  }, [src]);
+
+  const effectiveSrc = src || "/brand/logo.png";
+  return failed ? (
+    <div style={{ fontWeight: 900, fontSize: "18px", lineHeight: 1.1 }}>{companyName}</div>
+  ) : (
+    <img
+      src={effectiveSrc}
+      alt={companyName}
+      onError={() => setFailed(true)}
+      style={{ width: maxWidth, maxWidth: "100%", height: "auto", maxHeight: "42px", objectFit: "contain", display: "block" }}
+    />
+  );
 };
 
 const num = (n: number) => (Number(n) || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -89,6 +100,7 @@ interface StoreGroup {
   storeName: string;
   items: any[];
 }
+
 
 const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({
   invoice: inv,
@@ -122,9 +134,9 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({
   const companyMobile = sellerProfile?.mobile || "";
   const sellerGstin = sellerProfile?.gstin || "27ABZFS5736R1ZR";
 
-  const logoUrl = companyAssetUrl(sellerProfile?.logoPath, token);
+  const logoUrl = companyAssetUrl(sellerProfile?.logoPath || "/brand/file-1780929283382-585314307.png", token);
   const { dataUrl: logoDataUrl, ready: logoReady } = useDataUrl(logoUrl);
-  const sigUrl = companyAssetUrl(sellerProfile?.signatureStampPath, token);
+  const sigUrl = companyAssetUrl(sellerProfile?.signatureStampPath || "/brand/file-1780897714393-225895475.png", token);
   const { dataUrl: sigDataUrl, ready: sigReady } = useDataUrl(sigUrl);
 
   useEffect(() => {
@@ -187,9 +199,14 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({
       if (seenCodes.includes(code)) return;
       seenCodes.push(code);
       const store = storeByCode.get(code);
+      const storeName = store?.name || code || "Store";
+      const city = String(store?.city || "").trim();
+      const fullStoreName = city && !storeName.toLowerCase().includes(city.toLowerCase())
+        ? `${storeName}, ${city}`
+        : storeName;
       groups.push({
         storeCode: code,
-        storeName: store?.name || code || "Store",
+        storeName: fullStoreName,
         items: [],
       });
     };
@@ -214,24 +231,41 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({
 
   const hasStoreHeadings = storeGroups.length > 1 || (storeGroups.length === 1 && storeGroups[0].storeCode !== "" && storeGroups[0].storeCode !== "default");
 
-  // Column widths: Description is widest, numeric cols compact
-  // Sr(3.5%) Item(14%) Description(34%) HSN(8%) GST%(5.5%) Qty(6%) Rate(13%) Amount(16%)
-  const columnWidths = ["3.5%", "14%", "34%", "8%", "5.5%", "6%", "13%", "16%"];
+  let itemCounter = 0;
+
+  const subjectText = String(est?.subject || inv.subject || est?.title || inv.title || "").trim();
+
+  // Column widths: Item has enough space for full text on one line; Description wraps
+  // Sr(4%) Item(24%) Description(25%) HSN(8%) Total Sqft(8%) Qty(5%) Rate(12%) Amount(14%)
+  const columnWidths = ["4%", "24%", "25%", "8%", "8%", "5%", "12%", "14%"];
   const COL_COUNT = 8;
 
-  const cellBase: React.CSSProperties = { border: "1px solid #000", padding: "3px 5px", fontSize: "10px", lineHeight: 1.3, verticalAlign: "middle", pageBreakInside: "avoid" };
+  const cellBase: React.CSSProperties = {
+    border: "1px solid #000",
+    padding: "5.5px 7px",
+    fontSize: "9.5px",
+    lineHeight: 1.35,
+    verticalAlign: "middle",
+    fontWeight: 400,
+  };
   const cellLeft: React.CSSProperties = { ...cellBase, textAlign: "left" };
   const cellRight: React.CSSProperties = { ...cellBase, textAlign: "right", fontVariantNumeric: "tabular-nums" };
   const cellCenter: React.CSSProperties = { ...cellBase, textAlign: "center" };
-  const headCell: React.CSSProperties = { ...cellBase, fontWeight: 700, textAlign: "center", backgroundColor: "#fff" };
+  const headCell: React.CSSProperties = {
+    ...cellBase,
+    fontWeight: 700,
+    textAlign: "center",
+    verticalAlign: "middle",
+    backgroundColor: "#fff",
+  };
 
   const storeHeadingStyle: React.CSSProperties = {
     ...cellBase,
-    fontWeight: 700,
-    backgroundColor: "#e8e8e8",
-    padding: "3px 8px",
-    fontSize: "10px",
-    textAlign: "left",
+    fontWeight: 600,
+    backgroundColor: "#f1f5f9",
+    padding: "5px 8px",
+    fontSize: "9.5px",
+    textAlign: "center",
   };
 
   const metaLabelCell: React.CSSProperties = {
@@ -256,54 +290,64 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({
     </tr>
   );
 
-  let srNo = 0;
-
   return (
     <div
       className="invoice-print"
       data-source="invoice-print"
       data-print-document="true"
-      style={{ background: "#fff", color: "#000", fontFamily: "Arial, Helvetica, sans-serif" }}
+      style={{
+        background: "#fff",
+        color: "#000",
+        fontFamily: "Arial, Helvetica, sans-serif",
+        width: "100%",
+        boxSizing: "border-box",
+      }}
     >
-      {/* Header: Logo left-aligned, GST/UIN centered, TAX INVOICE centered */}
+      {/* Top Header: Logo, GST/UIN, TAX INVOICE title, Bill To, Ship To, Metadata */}
       <table className="invoice-document-header" style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
         <tbody>
-          {/* Logo row */}
+          {/* Logo row - spans all 3 columns */}
           <tr>
-            <td colSpan={2} style={{ border: "1px solid #000", padding: "6px 10px" }}>
+            <td colSpan={3} style={{ border: "1px solid #000", padding: "6px 10px" }}>
               <InvoiceLogo src={logoDataUrl} companyName={companyName} maxWidth={200} />
             </td>
           </tr>
-          {/* GST/UIN row */}
+          {/* GST/UIN row - spans all 3 columns */}
           <tr>
-            <td colSpan={2} style={{ border: "1px solid #000", padding: "3px 10px", textAlign: "center", fontSize: "11px", fontWeight: 800 }}>
+            <td colSpan={3} style={{ border: "1px solid #000", padding: "4px 10px", textAlign: "center", fontSize: "11px", fontWeight: 800 }}>
               GST / UIN : {sellerGstin}
             </td>
           </tr>
-          {/* TAX INVOICE row */}
+          {/* TAX INVOICE row - spans all 3 columns */}
           <tr>
-            <td colSpan={2} style={{ border: "1px solid #000", padding: "5px 10px", textAlign: "center", fontSize: "14px", fontWeight: 800, letterSpacing: "0.5px" }}>
+            <td colSpan={3} style={{ border: "1px solid #000", padding: "5px 10px", textAlign: "center", fontSize: "14px", fontWeight: 800, letterSpacing: "0.5px" }}>
               TAX INVOICE
             </td>
           </tr>
-          {/* Bill To (left) | Invoice metadata (right) */}
+          {/* Bill To (left 37%) | Ship To (middle 37%) | Invoice metadata (right 26%) */}
           <tr style={{ verticalAlign: "top" }}>
-            <td style={{ border: "1px solid #000", padding: "6px 10px", fontSize: "10px", lineHeight: 1.4, width: "55%" }}>
-              <div style={{ fontWeight: 800, marginBottom: "2px" }}>Bill To</div>
-              <div style={{ fontWeight: 700 }}>M/S : {billingName}</div>
+            <td style={{ border: "1px solid #000", padding: "6px 8px", fontSize: "9.5px", lineHeight: 1.35, width: "37%" }}>
+              <div style={{ fontWeight: 800, marginBottom: "2px" }}>Bill To,</div>
+              <div style={{ fontWeight: 700 }}>{billingName}</div>
               {billingAddress && <div style={{ whiteSpace: "pre-wrap" }}>{billingAddress}</div>}
-              {billingStateCode && <div>State Code: {billingStateCode}</div>}
+              {billingStateCode && <div>State : {billingStateCode === "27" ? "Maharashtra" : billingStateCode}</div>}
               {billingGstin && <div style={{ fontWeight: 700 }}>GSTIN : {billingGstin}</div>}
-              {billingPan && <div style={{ fontWeight: 700 }}>PAN : {billingPan}</div>}
+              {billingPan && <div>PAN : {billingPan}</div>}
             </td>
-            <td style={{ border: "1px solid #000", padding: "6px 10px", width: "45%", fontSize: "10px", verticalAlign: "top" }}>
+            <td style={{ border: "1px solid #000", padding: "6px 8px", fontSize: "9.5px", lineHeight: 1.35, width: "37%" }}>
+              <div style={{ fontWeight: 800, marginBottom: "2px" }}>Ship To,</div>
+              <div style={{ fontWeight: 700 }}>{billingName}</div>
+              {billingAddress && <div style={{ whiteSpace: "pre-wrap" }}>{billingAddress}</div>}
+              {billingStateCode && <div>State : {billingStateCode === "27" ? "Maharashtra" : billingStateCode}</div>}
+              {billingGstin && <div style={{ fontWeight: 700 }}>GSTIN : {billingGstin}</div>}
+            </td>
+            <td style={{ border: "1px solid #000", padding: "6px 8px", width: "26%", fontSize: "9.5px", verticalAlign: "top" }}>
               <table style={{ borderCollapse: "collapse", width: "100%" }}>
                 <tbody>
-                  {metaRow("Invoice / Bill No. :", inv.invoiceNumber, true)}
+                  {metaRow("Bill No. :", inv.invoiceNumber, true)}
                   {metaRow("Bill Date :", dateStr)}
-                  {poNumber && metaRow("PO No. :", poNumber)}
-                  {poDateStr && metaRow("PO Date :", poDateStr)}
-                  {(est?.subject || est?.title) && metaRow("Job :", est?.subject || est?.title)}
+                  {poNumber && metaRow("P.O. No. :", poNumber)}
+                  {poDateStr && metaRow("P.O.Date :", poDateStr)}
                 </tbody>
               </table>
             </td>
@@ -311,26 +355,33 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({
         </tbody>
       </table>
 
-      {/* Invoice line items table */}
-      <table className="invoice-table" style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed", marginTop: "-1px" }}>
+      {/* Main Table: Running column headers */}
+      <table className="invoice-table" style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed", marginTop: "-1px", boxSizing: "border-box" }}>
         <colgroup>
           {columnWidths.map((w, i) => <col key={i} style={{ width: w }} />)}
         </colgroup>
         <thead data-pdf-thead style={{ display: "table-header-group" }}>
-          <tr>
+          {subjectText && (
+            <tr data-pdf-row>
+              <td colSpan={COL_COUNT} style={{ ...cellCenter, fontWeight: 600, padding: "5px 8px", backgroundColor: "#fff", border: "1px solid #000", fontSize: "10px" }}>
+                Subject : {subjectText}
+              </td>
+            </tr>
+          )}
+          <tr data-pdf-col-header="true">
             <td style={headCell}>Sr.</td>
             <td style={headCell}>Item</td>
             <td style={headCell}>Description</td>
             <td style={headCell}>HSN / SAC</td>
-            <td style={headCell}>GST %</td>
+            <td style={headCell}>Total Sqft</td>
             <td style={headCell}>Qty</td>
             <td style={headCell}>Rate</td>
             <td style={headCell}>Amount</td>
           </tr>
         </thead>
         <tbody>
-          {storeGroups.map((group) => (
-            <React.Fragment key={group.storeCode || "default"}>
+          {storeGroups.map((group, gIdx) => (
+            <React.Fragment key={group.storeCode || `g-${gIdx}`}>
               {hasStoreHeadings && (
                 <tr data-pdf-row data-pdf-store-heading="true">
                   <td colSpan={COL_COUNT} style={storeHeadingStyle}>
@@ -338,105 +389,128 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({
                   </td>
                 </tr>
               )}
-              {group.items.map((row: any, index: number) => {
-                srNo++;
+              {group.items.map((row: any, rIdx: number) => {
+                itemCounter++;
                 const qty = Number(row.quantity || 0);
                 const rate = Number(row.rate || 0);
                 const amount = Number(row.amount ?? row.totalPrice ?? qty * rate);
                 const description = String(row.description ?? "").trim();
-                const taxPercent = Number(row.taxPercent ?? row.gstPercent ?? row.gst_percent ?? 0);
+                const estItem = Array.isArray(est?.items || est?.estimateItems)
+                  ? (est.items || est.estimateItems).find((it: any) => it.sl === row.sl || (row.id && it.id === row.id))
+                  : null;
+                const rawTotalSqft = row.totalSqft ?? row.total_sqft ?? row.totalSize ?? row.total_size ?? row.tsqft ?? row.sqft ?? estItem?.totalSqft ?? estItem?.total_sqft ?? estItem?.totalSize ?? estItem?.total_size;
+                let totalSqftVal = Number(rawTotalSqft || 0);
+                if (!totalSqftVal && row.width && row.height) {
+                  totalSqftVal = (Number(row.width) || 0) * (Number(row.height) || 0) * (Number(row.quantity) || 1);
+                }
+                const totalSqftStr = totalSqftVal > 0 ? (Number.isInteger(totalSqftVal) ? totalSqftVal.toString() : totalSqftVal.toFixed(2)) : "-";
+
                 return (
-                  <tr key={row.id || `${group.storeCode}-${index}`} data-pdf-row style={{ pageBreakInside: "avoid" }}>
-                    <td style={cellCenter}>{srNo}</td>
-                    <td style={{ ...cellLeft, fontWeight: 600 }}>{resolveItemName(row, products)}</td>
-                    <td style={{ ...cellLeft, whiteSpace: "pre-wrap", overflowWrap: "anywhere", wordBreak: "break-word" }}>{description}</td>
+                  <tr key={row.id || `row-${gIdx}-${rIdx}`} data-pdf-row>
+                    <td style={cellCenter}>{itemCounter}</td>
+                    <td style={{ ...cellLeft, fontWeight: 400, whiteSpace: "nowrap" }}>{resolveItemName(row, products)}</td>
+                    <td style={{ ...cellLeft, whiteSpace: "pre-wrap", overflowWrap: "anywhere", wordBreak: "normal" }}>{description}</td>
                     <td style={cellCenter}>{row.hsn || ""}</td>
-                    <td style={cellCenter}>{taxPercent > 0 ? `${taxPercent}%` : ""}</td>
+                    <td style={cellCenter}>{totalSqftStr}</td>
                     <td style={cellCenter}>{qty}</td>
                     <td style={cellRight}>{num(rate)}</td>
-                    <td style={{ ...cellRight, fontWeight: 600 }}>{num(amount)}</td>
+                    <td style={cellRight}>{num(amount)}</td>
                   </tr>
                 );
               })}
             </React.Fragment>
           ))}
         </tbody>
-        {/* Totals */}
-        <tbody data-pdf-row>
-          <tr style={{ backgroundColor: "#fff066" }}>
-            <td colSpan={7} style={{ ...cellBase, fontWeight: 700, textAlign: "right", paddingRight: "10px" }}>TOTAL AMOUNT BEFORE TAX</td>
+
+        {/* Totals Section */}
+        <tbody className="invoice-totals-keep">
+          <tr data-pdf-row>
+            <td colSpan={7} style={{ ...cellRight, fontWeight: 700, paddingRight: "10px" }}>
+              TOTAL AMOUNT BEFORE TAX
+            </td>
             <td style={{ ...cellRight, fontWeight: 700 }}>{num(subtotal)}</td>
           </tr>
           {isIgst ? (
-            <tr>
-              <td colSpan={7} style={{ ...cellBase, fontWeight: 700, textAlign: "right", paddingRight: "10px" }}>Add : IGST</td>
+            <tr data-pdf-row>
+              <td colSpan={7} style={{ ...cellRight, fontWeight: 700, paddingRight: "10px" }}>
+                Add : IGST
+              </td>
               <td style={{ ...cellRight, fontWeight: 700 }}>{num(igst)}</td>
             </tr>
           ) : (
             <>
-              <tr>
-                <td colSpan={7} style={{ ...cellBase, fontWeight: 700, textAlign: "right", paddingRight: "10px" }}>Output CGST</td>
+              <tr data-pdf-row>
+                <td colSpan={7} style={{ ...cellRight, fontWeight: 700, paddingRight: "10px" }}>
+                  Output CGST
+                </td>
                 <td style={{ ...cellRight, fontWeight: 700 }}>{num(cgst)}</td>
               </tr>
-              <tr>
-                <td colSpan={7} style={{ ...cellBase, fontWeight: 700, textAlign: "right", paddingRight: "10px" }}>Output SGST</td>
+              <tr data-pdf-row>
+                <td colSpan={7} style={{ ...cellRight, fontWeight: 700, paddingRight: "10px" }}>
+                  Output SGST
+                </td>
                 <td style={{ ...cellRight, fontWeight: 700 }}>{num(sgst)}</td>
               </tr>
             </>
           )}
-          <tr style={{ backgroundColor: "#fff066" }}>
-            <td colSpan={7} style={{ ...cellBase, fontWeight: 700, textAlign: "right", paddingRight: "10px" }}>GRAND TOTAL</td>
+          <tr data-pdf-row style={{ backgroundColor: "#f8fafc" }}>
+            <td colSpan={7} style={{ ...cellRight, fontWeight: 700, paddingRight: "10px" }}>
+              GRAND TOTAL
+            </td>
             <td style={{ ...cellRight, fontWeight: 700 }}>{num(grandTotal)}</td>
+          </tr>
+          <tr data-pdf-row>
+            <td colSpan={COL_COUNT} style={{ ...cellBase, fontWeight: 700, fontStyle: "italic", padding: "5px 8px" }}>
+              Amount in Words: {amountInWords(grandTotal)}
+            </td>
           </tr>
         </tbody>
       </table>
 
-      {/* Amount in words */}
-      <div data-pdf-row style={{ marginTop: "4px", fontSize: "10px", fontWeight: 700, pageBreakInside: "avoid", padding: "2px 0" }}>
-        Rupees : {amountInWords(grandTotal)}
-      </div>
-
-      {/* Footer */}
-      <div className="invoice-footer-block" data-pdf-row style={{ marginTop: "4px", pageBreakInside: "avoid" }}>
+      {/* Footer Block: Terms (38%), Bank Details (34%), Signatory (28%) & Orange Banner */}
+      <div className="invoice-footer-block" data-pdf-row style={{ width: "100%", marginTop: "-1px", boxSizing: "border-box" }}>
         <table className="invoice-document-footer" style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
           <colgroup>
-            <col style={{ width: "36%" }} />
+            <col style={{ width: "38%" }} />
             <col style={{ width: "34%" }} />
-            <col style={{ width: "30%" }} />
+            <col style={{ width: "28%" }} />
           </colgroup>
           <tbody>
             <tr style={{ verticalAlign: "top" }}>
               <td style={{ ...cellBase, padding: "6px 8px" }}>
-                <div style={{ color: "#b91c1c", fontWeight: 700, textDecoration: "underline", marginBottom: "3px", fontSize: "9px" }}>Terms &amp; Condition :</div>
-                {termsLines.map((line: string, idx: number) => <div key={idx} style={{ fontSize: "8.5px", lineHeight: 1.3 }}>{line}</div>)}
+                <div style={{ fontWeight: 800, marginBottom: "3px", fontSize: "9.5px" }}>Terms &amp; Conditions :</div>
+                {termsLines.map((line: string, idx: number) => <div key={idx} style={{ fontSize: "8.5px", lineHeight: 1.35 }}>{line}</div>)}
+                <div style={{ fontSize: "7.5px", fontWeight: 700, marginTop: "4px", color: "#334155" }}>
+                  [NOTE : PLEASE MENTION BILL NO. WHILE REMITTING PAYMENT]
+                </div>
               </td>
               <td style={{ ...cellBase, padding: "6px 8px" }}>
-                <div style={{ fontWeight: 700, marginBottom: "3px", fontSize: "9px" }}>BANK ACCOUNT DETAILS</div>
-                <div style={{ fontSize: "8.5px", lineHeight: 1.4 }}>Bank Name : {sellerProfile?.bankName || ""}</div>
-                <div style={{ fontSize: "8.5px", lineHeight: 1.4 }}>Branch Name : {sellerProfile?.bankBranch || ""}</div>
-                <div style={{ fontSize: "8.5px", lineHeight: 1.4 }}>C.A/c No : {sellerProfile?.bankAccountNumber || ""}</div>
-                <div style={{ fontSize: "8.5px", lineHeight: 1.4 }}>IFSC NO : {sellerProfile?.bankIfsc || ""}</div>
+                <div style={{ fontWeight: 800, marginBottom: "3px", fontSize: "9.5px" }}>Bank Details</div>
+                <div style={{ fontSize: "8.5px", lineHeight: 1.4 }}>Bank Name : {sellerProfile?.bankName || "HDFC Bank"}</div>
+                <div style={{ fontSize: "8.5px", lineHeight: 1.4 }}>Branch Name : {sellerProfile?.bankBranch || "Baner, Pune"}</div>
+                <div style={{ fontSize: "8.5px", lineHeight: 1.4 }}>C.A/c No. : {sellerProfile?.bankAccountNumber || "50200019250720"}</div>
+                <div style={{ fontSize: "8.5px", lineHeight: 1.4 }}>IFSC No. : {sellerProfile?.bankIfsc || "HDFC0001794"}</div>
               </td>
-              <td style={{ ...cellBase, padding: "6px 8px", textAlign: "right", verticalAlign: "bottom" }}>
-                <div style={{ fontWeight: 700, fontSize: "9px" }}>For {companyName.toUpperCase()}</div>
-                <div style={{ height: "44px", display: "flex", alignItems: "center", justifyContent: "flex-end" }}>
+              <td style={{ ...cellBase, padding: "6px 8px", textAlign: "center", verticalAlign: "bottom" }}>
+                <div style={{ height: "44px", display: "flex", alignItems: "center", justifyContent: "center" }}>
                   {sigDataUrl && (
                     <img
                       src={sigDataUrl}
                       alt="Signature and stamp"
-                      style={{ maxHeight: "40px", maxWidth: "140px", objectFit: "contain" }}
+                      style={{ maxHeight: "42px", maxWidth: "130px", objectFit: "contain" }}
                     />
                   )}
                 </div>
+                <div style={{ fontSize: "8.5px", fontWeight: 700, marginTop: "2px" }}>For {companyName}</div>
                 <div style={{ fontWeight: 700, fontSize: "9px" }}>Authorised Signatory</div>
               </td>
             </tr>
           </tbody>
         </table>
-        <div style={{ backgroundColor: "#f59e0b", color: "#fff", textAlign: "center", padding: "5px 8px", letterSpacing: "0.3px" }}>
+        <div className="invoice-brand-footer" style={{ backgroundColor: "#f59e0b", color: "#fff", textAlign: "center", padding: "6px 8px", letterSpacing: "0.3px", border: "1px solid #000", borderTop: "none", boxSizing: "border-box", width: "100%" }}>
           <div style={{ fontSize: "14px", fontWeight: 900, letterSpacing: "1.5px", lineHeight: 1.1 }}>{companyName.toUpperCase()}</div>
-          {companyAddress && <div style={{ fontSize: "8px", marginTop: "2px", lineHeight: 1.25 }}>{companyAddress}</div>}
-          {(companyMobile || companyEmail) && <div style={{ fontSize: "8px", marginTop: "1px", lineHeight: 1.25 }}>{[companyMobile, companyEmail].filter(Boolean).join("  \u00b7  ")}</div>}
+          {companyAddress && <div style={{ fontSize: "8.5px", marginTop: "2px", lineHeight: 1.25 }}>{companyAddress}</div>}
+          {(companyMobile || companyEmail) && <div style={{ fontSize: "8.5px", marginTop: "1px", lineHeight: 1.25 }}>{[companyMobile, companyEmail].filter(Boolean).join("  \u00b7  ")}</div>}
         </div>
       </div>
     </div>

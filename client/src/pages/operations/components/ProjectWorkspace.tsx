@@ -252,9 +252,13 @@ const challanStoreCode = (challan: any) => String(challan?.metadata?.storeCode ?
 const isWccChallan = isWccDeliveryChallan;
 
 // Installation photos are exclusively files uploaded through Upload Photos.
-// `wcc_photo` is a historic, internal WCC-builder artifact and must never
+// `wcc_photo` is an internal WCC-builder artifact and must never
 // leak into project photos, execution counts, or general documents.
-const isInstallationPhoto = (doc: any) => doc?.documentType === "photo";
+const isInstallationPhoto = (doc: any) =>
+  doc?.documentType === "photo" &&
+  doc?.documentType !== "wcc_photo" &&
+  doc?.metadata?.source !== "delivery_challans.metadata.photos" &&
+  doc?.metadata?.source !== "delivery_challans.photoPath";
 
 const estimateStoreScope = (estimate: Estimate, items: any[], masterStores: Store[], challans: DeliveryChallan[]) => {
   const grouping = (estimate.storeGrouping || {}) as Record<string, any>;

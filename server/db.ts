@@ -23,8 +23,9 @@ function getPoolInstance(): PoolInstance {
       console.error("🚨 DATABASE_URL is missing in sunrise-media-erp/.env!");
       process.exit(1);
     }
+    const cleanConnectionString = process.env.DATABASE_URL.replace(/([?&])sslmode=[^&]+(&|$)/, "$1").replace(/[?&]$/, "");
     _pool = new Pool({
-      connectionString: process.env.DATABASE_URL,
+      connectionString: cleanConnectionString,
       ssl: { rejectUnauthorized: false },
       max: 5,
       idleTimeoutMillis: 30000,

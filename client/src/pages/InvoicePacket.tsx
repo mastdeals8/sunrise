@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { formatCurrency } from "@/utils/format";
 import { useAuth } from "../contexts/AuthContext";
 import { isAblblFormat } from "../../../shared/textFormat";
-import { Package, Search, Printer, Loader as Loader2, FileDown, TriangleAlert as AlertTriangle } from "lucide-react";
+import { Package, Search, Printer, Loader as Loader2, FileDown, TriangleAlert as AlertTriangle, SlidersHorizontal } from "lucide-react";
 import { PDFDocument, rgb } from "pdf-lib";
 import html2canvas from "html2canvas";
 import EstimateDocument from "../components/EstimateDocument";
@@ -94,9 +94,13 @@ const storeCodeFor = (value: any) => String(value?.storeCode || value?.metadata?
 const isPhotoType = (type: string) => ["photo", "installation_photo", "execution_photo", "completion_photo", "additional_photo"].includes(type);
 const isSignedType = (type: string) => ["signed_wcc", "signed_dc"].includes(type);
 const isPoType = (type: string) => ["po", "client_po"].includes(type);
-// wcc_photo is the unsigned WCC photo captured in the field — not wanted in the client packet.
-// The client packet only includes the signed WCC that was stamped and uploaded.
+// wcc_photo is the photo uploaded in WCC builder / draft WCC — not wanted in the client packet.
+// The client packet only includes the signed WCC that was stamped and uploaded, plus true installation photos.
 const isExcludedType = (type: string) => ["wcc", "wcc_photo"].includes(type);
+const isExcludedDoc = (doc: any) =>
+  isExcludedType(doc?.documentType) ||
+  doc?.metadata?.source === "delivery_challans.metadata.photos" ||
+  doc?.metadata?.source === "delivery_challans.photoPath";
 const isStoreScopeDoc = (doc: any) => Boolean(storeCodeFor(doc) || doc?.deliveryChallanId);
 
 async function signPacketDocument(doc: any, estimateId: number): Promise<PacketPage | null> {
@@ -124,6 +128,103 @@ const InvoicePacketPage: React.FC = () => {
   const [fromUrl, setFromUrl] = useState(false);
   const [pdfMode, setPdfMode] = useState<string | null>(null);
   const [generatedPacketPdf, setGeneratedPacketPdf] = useState<Blob | null>(null);
+
+  const [targetFitPages, setTargetFitPages] = useState<number | null>(() => {
+    try {
+      const saved = JSON.parse(window.localStorage.getItem("sunrise_packet_print_options") || "{}");
+      return saved?.fitPages !== undefined ? saved.fitPages : null;
+    } catch {
+      return null;
+    }
+  });
+
+  const [printScale, setPrintScale] = useState<number>(() => {
+    try {
+      const saved = JSON.parse(window.localStorage.getItem("sunrise_packet_print_options") || "{}");
+      return saved?.scale || 100;
+    } catch {
+      return 100;
+    }
+  });
+
+  const [printMode, setPrintMode] = useState<"normal" | "compact">(() => {
+    try {
+      const saved = JSON.parse(window.localStorage.getItem("sunrise_packet_print_options") || "{}");
+      return saved?.mode || "normal";
+    } catch {
+      return "normal";
+    }
+  });
+
+  const applyPacketPrintStyles = (scalePct: number, mode: "normal" | "compact") => {
+    const scaleRatio = scalePct / 100;
+    document.documentElement.style.setProperty("--packet-print-zoom", String(scaleRatio));
+    let styleEl = document.getElementById("packet-dynamic-print-style") as HTMLStyleElement | null;
+    if (!styleEl) {
+      styleEl = document.createElement("style");
+      styleEl.id = "packet-dynamic-print-style";
+      document.head.appendChild(styleEl);
+    }
+    styleEl.textContent = `
+      @media print {
+        @page {
+          size: A4 portrait;
+          margin: 6mm !important;
+        }
+        .invoice-print, .estimate-print {
+          zoom: ${scaleRatio} !important;
+          width: 100% !important;
+        }
+        .invoice-table td, .estimate-table td {
+          padding: ${mode === "compact" ? "4.5px 5.5px" : "5.5px 7px"} !important;
+          vertical-align: middle !important;
+          line-height: 1.35 !important;
+        }
+      }
+    `;
+  };
+
+  useEffect(() => {
+    applyPacketPrintStyles(printScale, printMode);
+  }, [printScale, printMode]);
+
+  const handleUpdatePrintScale = (scalePct: number, clearFit = true) => {
+    setPrintScale(scalePct);
+    if (clearFit) {
+      setTargetFitPages(null);
+    }
+    try {
+      const saved = JSON.parse(window.localStorage.getItem("sunrise_packet_print_options") || "{}");
+      window.localStorage.setItem("sunrise_packet_print_options", JSON.stringify({ ...saved, scale: scalePct, ...(clearFit ? { fitPages: null } : {}) }));
+    } catch { /* ignore */ }
+  };
+
+  const handleUpdatePrintMode = (mode: "normal" | "compact") => {
+    setPrintMode(mode);
+    try {
+      const saved = JSON.parse(window.localStorage.getItem("sunrise_packet_print_options") || "{}");
+      window.localStorage.setItem("sunrise_packet_print_options", JSON.stringify({ ...saved, mode }));
+    } catch { /* ignore */ }
+  };
+
+  const handleFitToPages = (targetPages: number) => {
+    setTargetFitPages(targetPages);
+    try {
+      const saved = JSON.parse(window.localStorage.getItem("sunrise_packet_print_options") || "{}");
+      window.localStorage.setItem("sunrise_packet_print_options", JSON.stringify({ ...saved, fitPages: targetPages }));
+    } catch { /* ignore */ }
+    const totalItems = (packet?.estimateItems?.length || 0) + (packet?.invoice?.lineItems?.length || 0);
+    if (targetPages === 1) {
+      handleUpdatePrintScale(totalItems > 15 ? 70 : 85, false);
+      handleUpdatePrintMode("compact");
+    } else if (targetPages === 2) {
+      handleUpdatePrintScale(totalItems > 45 ? 75 : 85, false);
+      handleUpdatePrintMode("compact");
+    } else {
+      handleUpdatePrintScale(totalItems > 60 ? 75 : 85, false);
+      handleUpdatePrintMode("compact");
+    }
+  };
 
   useEffect(() => {
     const u = new URLSearchParams(window.location.search);
@@ -195,40 +296,43 @@ const InvoicePacketPage: React.FC = () => {
           setPacket(data);
           const estimateId = Number(data.estimate?.id || 0);
           const docs = (data.executionDocuments || []).filter((d: any) => d.status !== "deleted" && d.status !== "replaced");
+          type PacketEntry = { type: "static"; page: PacketPage } | { type: "file"; page: Omit<PacketPage, "included"> };
+          const entries: PacketEntry[] = [];
           const seen = new Set<string>();
-          // Client-facing packet order is fixed: Invoice, PO, Estimate, then
-          // transport/execution documents and installation photos.
-          const list: PacketPage[] = [];
           const byUploadTime = (a: any, b: any) => new Date(a.uploadedAt || a.createdAt || 0).getTime() - new Date(b.uploadedAt || b.createdAt || 0).getTime();
-          const addFile = async (page: Omit<PacketPage, "included">) => {
+
+          const queueFile = (page: Omit<PacketPage, "included">) => {
             const raw = String(page.storagePath || page.filePath || "");
             if (!raw || seen.has(raw)) return;
             seen.add(raw);
-            const signed = await signPacketDocument({ ...page, included: true }, estimateId);
-            if (signed) list.push(signed);
+            entries.push({ type: "file", page });
           };
 
-          list.push({ id: "inv", label: "Client Billing Invoice", kind: "invoice", included: true });
+          entries.push({ type: "static", page: { id: "inv", label: "Client Billing Invoice", kind: "invoice", included: true } });
 
           // Prefer the Estimate's PO reference, then fall back to the active PO
           // upload row used by the existing documents workflow.
           const poUpload = docs.filter((doc: any) => isPoType(doc.documentType)).sort(byUploadTime)[0];
           const poStoragePath = data.estimate?.poFilePath || poUpload?.storagePath || poUpload?.filePath;
-          if (poStoragePath) await addFile({ id: "po", label: `Purchase Order (${data.estimate?.poNumber || "PO"})`, kind: "po", storagePath: poStoragePath, mimeType: poUpload?.mimeType });
+          if (poStoragePath) {
+            queueFile({ id: "po", label: `Purchase Order (${data.estimate?.poNumber || "PO"})`, kind: "po", storagePath: poStoragePath, mimeType: poUpload?.mimeType });
+          }
 
-          if (data.estimate) list.push({ id: "est", label: `Estimate ${data.estimate.estimateNumber}`, kind: "estimate", included: true });
+          if (data.estimate) {
+            entries.push({ type: "static", page: { id: "est", label: `Estimate ${data.estimate.estimateNumber}`, kind: "estimate", included: true } });
+          }
 
           // Transport/project uploads are the final packet section. Preserve
           // their existing upload/store order without changing their source.
           const projectDocs = docs
-            .filter((doc: any) => !isPoType(doc.documentType) && !isExcludedType(doc.documentType) && !isSignedType(doc.documentType) && !isPhotoType(doc.documentType) && !isStoreScopeDoc(doc))
+            .filter((doc: any) => !isPoType(doc.documentType) && !isExcludedDoc(doc) && !isSignedType(doc.documentType) && !isPhotoType(doc.documentType) && !isStoreScopeDoc(doc))
             .sort(byUploadTime);
           const legacyProjectDocs = (data.challans || []).flatMap((dc: any) => [
             dc.transportReceiptPath && { id: `legacy-transport-${dc.id}`, documentType: "transport_receipt", storagePath: dc.transportReceiptPath, createdAt: dc.createdAt },
             dc.extraDocPath && { id: `legacy-extra-${dc.id}`, documentType: "extra", storagePath: dc.extraDocPath, createdAt: dc.createdAt },
           ]).filter(Boolean).sort(byUploadTime) as any[];
           for (const doc of [...projectDocs, ...legacyProjectDocs].sort(byUploadTime)) {
-            await addFile({
+            queueFile({
               id: `project-${doc.id}`,
               label: docTypeLabel(doc.documentType),
               kind: "project",
@@ -297,10 +401,9 @@ const InvoicePacketPage: React.FC = () => {
             const owned = docs.filter((d: any) => (
               challanIds.has(Number(d.deliveryChallanId))
               || (storeCode ? storeCodeFor(d) === storeCode : (!d.deliveryChallanId && !storeCodeFor(d)))
-            ) && !isPoType(d.documentType) && !isExcludedType(d.documentType));
+            ) && !isPoType(d.documentType) && !isExcludedDoc(d));
             const legacy = context.challans.flatMap((dc: any) => [
               dc.signedChallanPath && { id: `legacy-signed-${dc.id}`, documentType: isAblblFormat(dc.clientFormat) ? "signed_wcc" : "signed_dc", storagePath: dc.signedChallanPath },
-              dc.photoPath && { id: `legacy-photo-${dc.id}`, documentType: "photo", storagePath: dc.photoPath },
             ]).filter(Boolean) as any[];
             // Per store: signed WCC, photos, then any other store attachment.
             const ordered = [...owned, ...legacy].sort((a: any, b: any) => {
@@ -311,20 +414,29 @@ const InvoicePacketPage: React.FC = () => {
                 : isPhotoType(d.documentType) ? 4 : 5;
               return rank(a) - rank(b) || new Date(a.uploadedAt || a.createdAt).getTime() - new Date(b.uploadedAt || b.createdAt).getTime();
             });
-            for (const doc of ordered) await addFile({
-              id: `exec-${doc.id}`,
-              label: isPhotoType(doc.documentType)
-                ? `${store?.name || "Store"} — ${storeCode || "—"}`
-                : `${storeLabel} — ${docTypeLabel(doc.documentType)}`,
-              kind: isPhotoType(doc.documentType) ? "photo" : isSignedType(doc.documentType) ? "wcc" : "store-file",
-              storagePath: doc.storagePath || doc.filePath,
-              mimeType: doc.mimeType,
-              storeCode,
-              storeName: store?.name || storeLabel,
-              caption: doc.caption || doc.description || doc.notes || null,
-            });
+            for (const doc of ordered) {
+              queueFile({
+                id: `exec-${doc.id}`,
+                label: isPhotoType(doc.documentType)
+                  ? `${store?.name || "Store"} — ${storeCode || "—"}`
+                  : `${storeLabel} — ${docTypeLabel(doc.documentType)}`,
+                kind: isPhotoType(doc.documentType) ? "photo" : isSignedType(doc.documentType) ? "wcc" : "store-file",
+                storagePath: doc.storagePath || doc.filePath,
+                mimeType: doc.mimeType,
+                storeCode,
+                storeName: store?.name || storeLabel,
+                caption: doc.caption || doc.description || doc.notes || null,
+              });
+            }
           }
-          setPages(list);
+
+          const resolvedPages = await Promise.all(
+            entries.map(async (entry) => {
+              if (entry.type === "static") return entry.page;
+              return signPacketDocument({ ...entry.page, included: true }, estimateId);
+            })
+          );
+          setPages(resolvedPages.filter(Boolean) as PacketPage[]);
         }
       } catch (err) {
         console.error(err);
@@ -396,254 +508,324 @@ const InvoicePacketPage: React.FC = () => {
     return gaps;
   };
 
-  const buildInvoicePacketPdf = async (): Promise<Blob> => {
+async function compressImageForPdf(buf: Uint8Array, mimeType: string, maxDimension = 1600, quality = 0.82): Promise<{ bytes: Uint8Array; isJpg: boolean }> {
+  try {
+    const blob = new Blob([buf], { type: mimeType });
+    const imgUrl = URL.createObjectURL(blob);
+    const img = new Image();
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve();
+      img.onerror = reject;
+      img.src = imgUrl;
+    });
+
+    let { width, height } = img;
+    if (width > maxDimension || height > maxDimension) {
+      if (width > height) {
+        height = Math.round((height * maxDimension) / width);
+        width = maxDimension;
+      } else {
+        width = Math.round((width * maxDimension) / height);
+        height = maxDimension;
+      }
+    }
+
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      URL.revokeObjectURL(imgUrl);
+      return { bytes: buf, isJpg: !mimeType.includes("png") };
+    }
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, width, height);
+    ctx.drawImage(img, 0, 0, width, height);
+    URL.revokeObjectURL(imgUrl);
+
+    const dataUrl = canvas.toDataURL("image/jpeg", quality);
+    const binary = atob(dataUrl.split(",")[1]);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return { bytes, isJpg: true };
+  } catch (err) {
+    console.warn("Image compression fallback:", err);
+    return { bytes: buf, isJpg: !mimeType.includes("png") };
+  }
+}
+
+const dataUrlToBytes = (dataUrl: string): Uint8Array => {
+  const binary = atob(dataUrl.split(",")[1]);
+  const len = binary.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+};
+
+  const buildInvoicePacketPdf = async (scope: "all" | "invoice" = "all"): Promise<Blob> => {
     if (!packet) throw new Error("No invoice packet is loaded");
     const pdf = await PDFDocument.create();
     const A4_W = 595.28;
     const A4_H = 841.89;
     const MARGIN = 42;
-    const PRINT_MARGIN = 22.68; // 8 mm, identical to the native @page rule
+    const PRINT_MARGIN = 20; // Exact A4 margins
     const PRINTABLE_W = A4_W - PRINT_MARGIN * 2;
     const PRINTABLE_H = A4_H - PRINT_MARGIN * 2;
     const PRINTABLE_CSS_W = STANDARD_PRINTABLE_CSS_WIDTH;
-    const PRINTABLE_CSS_H = 1062; // 281 mm at 96 CSS dpi
 
-      const addUnavailablePage = (label: string) => {
-        const page = pdf.addPage([A4_W, A4_H]);
-        page.drawRectangle({ x: MARGIN, y: 300, width: A4_W - MARGIN * 2, height: 180, color: rgb(0.97, 0.98, 0.99), borderColor: rgb(0.8, 0.84, 0.88), borderWidth: 1 });
-        page.drawText("DOCUMENT UNAVAILABLE", { x: MARGIN + 24, y: 405, size: 17, color: rgb(0.15, 0.2, 0.28) });
-        page.drawText(fitText(label, 70), { x: MARGIN + 24, y: 375, size: 10, color: rgb(0.4, 0.45, 0.52) });
-        page.drawText("The packet was generated without this missing attachment.", { x: MARGIN + 24, y: 345, size: 9, color: rgb(0.4, 0.45, 0.52) });
-      };
+    const targetPages = scope === "invoice"
+      ? pages.filter(p => p.kind === "invoice")
+      : pages.filter(p => p.included);
 
-      for (const p of included) {
-        try {
-          if (p.storagePath) {
-            if (!p.filePath) { addUnavailablePage(p.label); continue; }
-            const res = await fetch(p.filePath);
-            if (!res.ok) { addUnavailablePage(p.label); continue; }
-            const buf = new Uint8Array(await res.arrayBuffer());
-            let pathname = p.storagePath || p.filePath;
-            try { pathname = decodeURIComponent(new URL(p.filePath).pathname); } catch { /* storage key */ }
-            const contentType = String(p.mimeType || res.headers.get("content-type") || "").split(";")[0].toLowerCase();
-            const isPdf = contentType === "application/pdf" || /\.pdf$/i.test(pathname);
-            const isPng = contentType === "image/png" || /\.png$/i.test(pathname);
-            const isJpg = contentType === "image/jpeg" || /\.(jpe?g)$/i.test(pathname);
+    const addUnavailablePage = (label: string) => {
+      const page = pdf.addPage([A4_W, A4_H]);
+      page.drawRectangle({ x: MARGIN, y: 300, width: A4_W - MARGIN * 2, height: 180, color: rgb(0.97, 0.98, 0.99), borderColor: rgb(0.8, 0.84, 0.88), borderWidth: 1 });
+      page.drawText("DOCUMENT UNAVAILABLE", { x: MARGIN + 24, y: 405, size: 17, color: rgb(0.15, 0.2, 0.28) });
+      page.drawText(fitText(label, 70), { x: MARGIN + 24, y: 375, size: 10, color: rgb(0.4, 0.45, 0.52) });
+      page.drawText("The packet was generated without this missing attachment.", { x: MARGIN + 24, y: 345, size: 9, color: rgb(0.4, 0.45, 0.52) });
+    };
 
-            if (isPdf) {
-              const srcDoc = await PDFDocument.load(buf, { ignoreEncryption: true });
-              const copied = await pdf.copyPages(srcDoc, srcDoc.getPageIndices());
-              copied.forEach(page => pdf.addPage(page));
-            } else if (isPng || isJpg) {
-              const img = isPng ? await pdf.embedPng(buf) : await pdf.embedJpg(buf);
-              const maxW = A4_W - MARGIN * 2;
-              // WCC scans are preserved as captured; photo pages reserve room
-              // for the store identifier and optional field caption.
-              const isPhoto = p.kind === "photo";
-              const maxH = A4_H - (isPhoto ? 230 : MARGIN * 2);
-              const scale = Math.min(maxW / img.width, maxH / img.height);
-              const drawW = img.width * scale;
-              const drawH = img.height * scale;
-              const page = pdf.addPage([A4_W, A4_H]);
-              if (isPhoto) {
-                page.drawText(
-                  fitText(`${p.storeName || "Store"} — ${p.storeCode || "—"}`, 72),
-                  { x: MARGIN, y: A4_H - 72, size: 13, color: rgb(0.08, 0.12, 0.18) },
-                );
-                if (p.caption) page.drawText(fitText(p.caption, 90), { x: MARGIN, y: 52, size: 9, color: rgb(0.35, 0.39, 0.45) });
-              }
-              page.drawImage(img, { x: (A4_W - drawW) / 2, y: isPhoto ? 70 + (maxH - drawH) / 2 : (A4_H - drawH) / 2, width: drawW, height: drawH });
-            } else {
-              throw new Error(`Unsupported packet file type: ${contentType || pathname}`);
+    for (const p of targetPages) {
+      try {
+        if (p.storagePath) {
+          if (!p.filePath) { addUnavailablePage(p.label); continue; }
+          const res = await fetch(p.filePath);
+          if (!res.ok) { addUnavailablePage(p.label); continue; }
+          const buf = new Uint8Array(await res.arrayBuffer());
+          let pathname = p.storagePath || p.filePath;
+          try { pathname = decodeURIComponent(new URL(p.filePath).pathname); } catch { /* storage key */ }
+          const contentType = String(p.mimeType || res.headers.get("content-type") || "").split(";")[0].toLowerCase();
+          const isPdf = contentType === "application/pdf" || /\.pdf$/i.test(pathname);
+          const isPng = contentType === "image/png" || /\.png$/i.test(pathname);
+          const isJpg = contentType === "image/jpeg" || /\.(jpe?g)$/i.test(pathname);
+
+          if (isPdf) {
+            const srcDoc = await PDFDocument.load(buf, { ignoreEncryption: true });
+            const copied = await pdf.copyPages(srcDoc, srcDoc.getPageIndices());
+            copied.forEach(page => pdf.addPage(page));
+          } else if (isPng || isJpg) {
+            const { bytes: compBytes, isJpg: compIsJpg } = await compressImageForPdf(buf, contentType || (isPng ? "image/png" : "image/jpeg"));
+            const img = compIsJpg ? await pdf.embedJpg(compBytes) : await pdf.embedPng(compBytes);
+            const maxW = A4_W - MARGIN * 2;
+            const isPhoto = p.kind === "photo";
+            const maxH = A4_H - (isPhoto ? 230 : MARGIN * 2);
+            const scale = Math.min(maxW / img.width, maxH / img.height);
+            const drawW = img.width * scale;
+            const drawH = img.height * scale;
+            const page = pdf.addPage([A4_W, A4_H]);
+            if (isPhoto) {
+              page.drawText(
+                fitText(`${p.storeName || "Store"} — ${p.storeCode || "—"}`, 72),
+                { x: MARGIN, y: A4_H - 72, size: 13, color: rgb(0.08, 0.12, 0.18) },
+              );
+              if (p.caption) page.drawText(fitText(p.caption, 90), { x: MARGIN, y: 52, size: 9, color: rgb(0.35, 0.39, 0.45) });
             }
+            page.drawImage(img, { x: (A4_W - drawW) / 2, y: isPhoto ? 70 + (maxH - drawH) / 2 : (A4_H - drawH) / 2, width: drawW, height: drawH });
           } else {
-            // EstimateDocument and InvoiceDocument are the canonical document
-            // renderers. Capture the mounted packet page itself; an off-screen
-            // clone is not safe here because html2canvas paints it as blank.
-            const el = document.querySelector(`[data-packet-page="${p.id}"]`) as HTMLElement | null;
-            if (!el) throw new Error(`Missing rendered document page: ${p.label}`);
-            const canvas = await html2canvas(el, {
-              scale: 3,
-              useCORS: true,
-              backgroundColor: "#ffffff",
-              logging: false,
-              windowWidth: PRINTABLE_CSS_W,
-              onclone: (doc: Document) => {
-                // Reuse the normal Estimate print rules verbatim. The packet
-                // does not add a second document stylesheet or resize the
-                // renderer; it only supplies the standard A4 printable width.
-                doc.body.classList.add(`estimate-print-mode-${estimatePrintMode()}`);
-                const printRules: string[] = [];
-                Array.from(doc.styleSheets).forEach(sheet => {
-                  try {
-                    Array.from(sheet.cssRules || []).forEach(rule => {
-                      if (rule.type === 4) {
-                        const mediaRule = rule as CSSMediaRule;
-                        if (mediaRule.conditionText.includes("print")) {
-                          printRules.push(Array.from(mediaRule.cssRules).map(child => child.cssText).join("\n"));
-                        }
-                      }
-                    });
-                  } catch { /* cross-origin stylesheet; inline styles still apply */ }
-                });
-                if (printRules.length) {
-                  const printStyle = doc.createElement("style");
-                  printStyle.textContent = printRules.join("\n");
-                  doc.head.appendChild(printStyle);
-                }
-              },
+            throw new Error(`Unsupported packet file type: ${contentType || pathname}`);
+          }
+        } else {
+          const pageContainer = document.querySelector(`[data-packet-page="${p.id}"]`) as HTMLElement | null;
+          if (!pageContainer) throw new Error(`Missing rendered document page: ${p.label}`);
+
+          const docEl = (pageContainer.querySelector(".invoice-print, .estimate-print") as HTMLElement) || pageContainer;
+          const imgs = Array.from(docEl.querySelectorAll("img"));
+          await Promise.all(imgs.map(img => {
+            if (img.complete && img.naturalWidth > 0) return Promise.resolve();
+            return new Promise<void>((resolve) => {
+              img.onload = () => resolve();
+              img.onerror = () => resolve();
+              setTimeout(resolve, 800);
             });
-            // Never append a silent blank page. This catches renderer/capture
-            // regressions at generation time instead of producing a broken
-            // packet that looks successful to the user.
-            const pixels = canvas.getContext("2d")?.getImageData(0, 0, canvas.width, canvas.height).data;
-            let hasInk = false;
-            if (pixels) {
-              for (let i = 0; i < pixels.length; i += 4 * 64) {
-                if (pixels[i] < 245 || pixels[i + 1] < 245 || pixels[i + 2] < 245) { hasInk = true; break; }
+          }));
+
+          const prevScrollY = window.scrollY;
+          const prevScrollX = window.scrollX;
+          window.scrollTo(0, 0);
+
+          const canvas = await html2canvas(docEl, {
+            scale: 2,
+            useCORS: true,
+            backgroundColor: "#ffffff",
+            logging: false,
+            scrollX: 0,
+            scrollY: 0,
+          });
+
+          window.scrollTo(prevScrollX, prevScrollY);
+
+          const cW = canvas.width;
+          const cH = canvas.height;
+          const a4Aspect = PRINTABLE_H / PRINTABLE_W;
+          const pageCanvasH = Math.round(cW * a4Aspect);
+          const rawDrawH = PRINTABLE_W * (cH / cW);
+
+          // Check if this document should be fitted onto a single page:
+          // 1. User selected targetFitPages === 1 AND document height is reasonably within 1 page (<= 35% overflow)
+          // 2. Document naturally fits on 1 page (<= 4% overflow)
+          const shouldFitSinglePage = (targetFitPages === 1 && rawDrawH <= PRINTABLE_H * 1.35) || rawDrawH <= PRINTABLE_H * 1.04;
+
+          if (shouldFitSinglePage) {
+            const fitScale = Math.min(1, PRINTABLE_H / rawDrawH);
+            const drawW = PRINTABLE_W * fitScale;
+            const drawH = rawDrawH * fitScale;
+            const dataUrl = canvas.toDataURL("image/jpeg", 0.95);
+            const bytes = dataUrlToBytes(dataUrl);
+            const img = await pdf.embedJpg(bytes);
+
+            const page = pdf.addPage([A4_W, A4_H]);
+            page.drawImage(img, {
+              x: PRINT_MARGIN + (PRINTABLE_W - drawW) / 2,
+              y: A4_H - PRINT_MARGIN - drawH,
+              width: drawW,
+              height: drawH,
+            });
+          } else {
+            // Multi-page slicing at clean row boundaries
+            const docRect = docEl.getBoundingClientRect();
+            const rowEls = Array.from(docEl.querySelectorAll("[data-pdf-row], .invoice-footer-block, .estimate-footer-block, .estimate-store-section"));
+            const scaleFactor = cH / (docRect.height || 1);
+            const rowBottoms = rowEls.map(el => {
+              const r = el.getBoundingClientRect();
+              return Math.round((r.bottom - docRect.top) * scaleFactor);
+            }).filter(y => y > 0 && y < cH).sort((a, b) => a - b);
+
+            // Capture the table column header row to repeat on continuation pages
+            const colHeaderEl = docEl.querySelector("[data-pdf-col-header='true']");
+            let colHeaderCanvas: HTMLCanvasElement | null = null;
+            let colHeaderH = 0;
+            if (colHeaderEl) {
+              const chRect = colHeaderEl.getBoundingClientRect();
+              const chTop = Math.round((chRect.top - docRect.top) * scaleFactor);
+              colHeaderH = Math.round(chRect.height * scaleFactor);
+              if (colHeaderH > 0 && chTop >= 0 && chTop + colHeaderH <= cH) {
+                colHeaderCanvas = document.createElement("canvas");
+                colHeaderCanvas.width = cW;
+                colHeaderCanvas.height = colHeaderH;
+                const chCtx = colHeaderCanvas.getContext("2d");
+                if (chCtx) {
+                  chCtx.fillStyle = "#ffffff";
+                  chCtx.fillRect(0, 0, cW, colHeaderH);
+                  chCtx.drawImage(canvas, 0, chTop, cW, colHeaderH, 0, 0, cW, colHeaderH);
+                }
               }
             }
-            if (!hasInk) throw new Error(`Rendered document is blank: ${p.label}`);
 
-            // Row-aware slicing for invoice pages. data-pdf-row elements mark
-            // row/store-heading/footer blocks that must never be split across
-            // pages. Continuation pages receive a fresh copy of the table head.
-            const isInvoice = p.kind === "invoice";
-            const sliceHeight = PRINTABLE_CSS_H * 3;
-            const scale3 = 3;
-            const elRect = el.getBoundingClientRect();
-            const rowBoundaries: number[] = [];
-            const rowEls = isInvoice ? el.querySelectorAll("[data-pdf-row]") : [];
-            rowEls.forEach((rowEl) => {
-              const rect = rowEl.getBoundingClientRect();
-              rowBoundaries.push(Math.round((rect.top - elRect.top) * scale3));
-              rowBoundaries.push(Math.round((rect.bottom - elRect.top) * scale3));
-            });
-            const boundaries = Array.from(new Set(rowBoundaries))
-              .filter(y => y >= 0 && y <= canvas.height)
-              .sort((a, b) => a - b);
+            const slices: { startY: number; height: number; isContinuation: boolean }[] = [];
+            let currentY = 0;
 
-            const tableHead = isInvoice ? el.querySelector("[data-pdf-thead]") : null;
-            const tableHeadRect = tableHead?.getBoundingClientRect();
-            const tableHeadTop = tableHeadRect ? Math.round((tableHeadRect.top - elRect.top) * scale3) : 0;
-            const tableHeadBottom = tableHeadRect ? Math.round((tableHeadRect.bottom - elRect.top) * scale3) : 0;
-            const tableHeadHeight = Math.max(0, tableHeadBottom - tableHeadTop);
+            while (currentY < cH) {
+              const isContinuation = currentY > 0;
+              const repeatH = (isContinuation && colHeaderCanvas) ? colHeaderH : 0;
+              const availableContentH = pageCanvasH - repeatH;
+              const remainingH = cH - currentY;
 
-            const pageStarts: number[] = [0];
-            if (isInvoice && boundaries.length > 1) {
-              let start = 0;
-              let maxHeight = sliceHeight;
-              for (const boundary of boundaries) {
-                if (boundary <= start) continue;
-                if (boundary - start > maxHeight) {
-                  pageStarts.push(boundary);
-                  start = boundary;
-                  maxHeight = sliceHeight - tableHeadHeight;
-                }
+              if (remainingH <= availableContentH * 1.05) {
+                slices.push({ startY: currentY, height: remainingH, isContinuation });
+                break;
               }
-              // Avoid a mostly-blank final page: if the remaining content
-              // after the last break is less than 20% of a page, merge it
-              // into the previous page by removing the last break.
-              if (pageStarts.length > 1) {
-                const lastStart = pageStarts[pageStarts.length - 1];
-                const remainingHeight = canvas.height - lastStart;
-                if (remainingHeight < sliceHeight * 0.20) {
-                  pageStarts.pop();
-                }
-              }
-            } else {
-              for (let offset = sliceHeight; offset < canvas.height; offset += sliceHeight) pageStarts.push(offset);
+
+              const targetSplitY = currentY + availableContentH;
+              const candidate = rowBottoms.filter(b => b > currentY + availableContentH * 0.55 && b <= targetSplitY).pop();
+              const splitY = candidate || targetSplitY;
+              const sliceH = splitY - currentY;
+              slices.push({ startY: currentY, height: sliceH, isContinuation });
+              currentY = splitY;
             }
 
-            const totalPages = pageStarts.length;
-            for (let pi = 0; pi < pageStarts.length; pi++) {
-              const startY = pageStarts[pi];
-              const endY = pi < pageStarts.length - 1 ? pageStarts[pi + 1] : canvas.height;
-              const contentHeight = endY - startY;
-              if (contentHeight <= 0) continue;
+            for (const slice of slices) {
+              const sliceRepeatH = (slice.isContinuation && colHeaderCanvas) ? colHeaderH : 0;
+              const totalSliceH = slice.height + sliceRepeatH;
 
-              // Continuation pages prepend the captured table header so each
-              // page starts with the same column labels as page one.
-              const prependHeader = isInvoice && pi > 0 && tableHeadHeight > 0;
-              const outputHeight = contentHeight + (prependHeader ? tableHeadHeight : 0);
-              const slice = document.createElement("canvas");
-              slice.width = canvas.width;
-              slice.height = outputHeight;
-              const context = slice.getContext("2d");
-              if (!context) throw new Error("Could not prepare printable page");
-              context.fillStyle = "#ffffff";
-              context.fillRect(0, 0, slice.width, slice.height);
-              if (prependHeader) {
-                context.drawImage(canvas, 0, tableHeadTop, canvas.width, tableHeadHeight, 0, 0, canvas.width, tableHeadHeight);
+              const sliceCanvas = document.createElement("canvas");
+              sliceCanvas.width = cW;
+              sliceCanvas.height = totalSliceH;
+              const sCtx = sliceCanvas.getContext("2d");
+              if (sCtx) {
+                sCtx.fillStyle = "#ffffff";
+                sCtx.fillRect(0, 0, cW, totalSliceH);
+
+                if (sliceRepeatH > 0 && colHeaderCanvas) {
+                  sCtx.drawImage(colHeaderCanvas, 0, 0);
+                }
+                sCtx.drawImage(canvas, 0, slice.startY, cW, slice.height, 0, sliceRepeatH, cW, slice.height);
               }
-              context.drawImage(canvas, 0, startY, canvas.width, contentHeight, 0, prependHeader ? tableHeadHeight : 0, canvas.width, contentHeight);
 
-              const img = await pdf.embedPng(slice.toDataURL("image/png"));
-              const drawH = PRINTABLE_W * (outputHeight / canvas.width);
+              const dataUrl = sliceCanvas.toDataURL("image/jpeg", 0.95);
+              const bytes = dataUrlToBytes(dataUrl);
+              const img = await pdf.embedJpg(bytes);
+
+              const drawW = PRINTABLE_W;
+              const drawH = PRINTABLE_W * (totalSliceH / cW);
               const page = pdf.addPage([A4_W, A4_H]);
-              page.drawImage(img, { x: PRINT_MARGIN, y: A4_H - PRINT_MARGIN - drawH, width: PRINTABLE_W, height: Math.min(drawH, PRINTABLE_H) });
-
-              if (isInvoice) {
-                page.drawText(`Page ${pi + 1} of ${totalPages}`, {
-                  x: A4_W / 2 - 40,
-                  y: PRINT_MARGIN / 2 + 2,
-                  size: 8,
-                  color: rgb(0.4, 0.45, 0.52),
-                });
-              }
+              page.drawImage(img, {
+                x: PRINT_MARGIN,
+                y: A4_H - PRINT_MARGIN - drawH,
+                width: drawW,
+                height: drawH,
+              });
             }
           }
-        } catch (err) {
-          console.warn(`[packet-pdf] Failed to add page ${p.label}:`, err);
-          // Estimate and Invoice are required generated documents. Never
-          // replace a failed renderer with a blank/unavailable placeholder.
-          if (p.kind === "estimate" || p.kind === "invoice") throw err;
-          addUnavailablePage(p.label);
         }
+      } catch (err) {
+        console.warn(`[packet-pdf] Failed to add page ${p.label}:`, err);
+        if (p.kind === "estimate" || p.kind === "invoice") throw err;
+        addUnavailablePage(p.label);
       }
+    }
 
     if (pdf.getPageCount() === 0) {
       throw new Error("No pages could be assembled into a PDF. Check that documents are loaded.");
     }
 
+    pdf.setTitle(scope === "invoice" ? `Tax Invoice - ${packet.invoice?.invoiceNumber || selectedId}` : `Invoice Packet - ${packet.invoice?.invoiceNumber || selectedId}`);
+    pdf.setAuthor("Sunrise Media");
+    pdf.setCreator("Sunrise Media ERP");
+    pdf.setProducer("Sunrise Media ERP");
+
     const pdfBytes = await pdf.save();
     return new Blob([pdfBytes as BlobPart], { type: "application/pdf" });
   };
 
-  const runPacketAction = async (action: "download" | "print", force = false) => {
+  const runPacketAction = async (action: "download" | "print", force = false, scope: "all" | "invoice" = "all") => {
     if (!packet) return;
-    const gaps = computeMissing();
-    if (gaps.length && !force) {
-      setMissingDocs(gaps);
-      return;
+    if (scope === "all") {
+      const gaps = computeMissing();
+      if (gaps.length) {
+        setMissingDocs(gaps);
+      } else {
+        setMissingDocs(null);
+      }
     }
-    setMissingDocs(null);
 
     // Open the print target during the user's click so popup protection does
     // not turn Print into a second DOM/CSS rendering path.
     const printWindow = action === "print" ? window.open("about:blank", "_blank") : null;
     if (printWindow) {
-      printWindow.document.title = "Preparing invoice packet…";
-      printWindow.document.body.textContent = "Preparing invoice packet…";
+      printWindow.document.title = scope === "invoice" ? "Preparing invoice PDF…" : "Preparing invoice packet…";
+      printWindow.document.body.textContent = scope === "invoice" ? "Preparing invoice PDF…" : "Preparing invoice packet…";
     }
 
     setBuilding(true);
     try {
-      const blob = generatedPacketPdf || await buildInvoicePacketPdf();
-      if (!generatedPacketPdf) setGeneratedPacketPdf(blob);
+      const blob = await buildInvoicePacketPdf(scope);
       const url = URL.createObjectURL(blob);
       if (action === "download") {
         const a = document.createElement("a");
         a.href = url;
-        a.download = `Invoice_Packet_${packet.invoice?.invoiceNumber || selectedId}.pdf`;
+        a.download = scope === "invoice"
+          ? `Invoice_${packet.invoice?.invoiceNumber || selectedId}.pdf`
+          : `Invoice_Packet_${packet.invoice?.invoiceNumber || selectedId}.pdf`;
         a.click();
         window.setTimeout(() => URL.revokeObjectURL(url), 1000);
       } else if (printWindow) {
         printWindow.location.replace(url);
-        // The browser's PDF viewer owns printing from here. It prints these
-        // exact bytes instead of re-laying out the packet's preview DOM.
         window.setTimeout(() => {
-          try { printWindow.print(); } catch { /* PDF viewer still exposes its own Print action */ }
+          try { printWindow.print(); } catch { /* PDF viewer owns print */ }
           window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
         }, 1000);
       } else {
@@ -656,7 +838,7 @@ const InvoicePacketPage: React.FC = () => {
       }
     } catch (err: any) {
       printWindow?.close();
-      alert("Invoice Packet generation failed: " + (err?.message || err));
+      alert("PDF generation failed: " + (err?.message || err));
     } finally {
       setBuilding(false);
     }
@@ -722,21 +904,48 @@ const InvoicePacketPage: React.FC = () => {
 
           {packet && (
             <div className="glass-panel overflow-hidden">
-              <div className="px-4 py-2 border-b border-slate-200 bg-slate-50 flex items-center justify-between gap-2">
-                <h3 className="font-bold text-sm shrink-0">Packet Pages ({included.length})</h3>
-                <div className="flex gap-1.5 flex-wrap">
-                  <button onClick={() => runPacketAction("print")} disabled={building} className="flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-slate-900 hover:bg-slate-800 disabled:opacity-60 text-white text-xs font-semibold">
-                    <Printer className="w-3 h-3" /> Print
-                  </button>
-                  <button
-                    onClick={() => runPacketAction("download")}
-                    disabled={building}
-                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-orange-600 hover:bg-orange-700 disabled:opacity-60 text-white text-xs font-semibold"
-                    title="Generate a single client-ready PDF in submission order"
-                  >
-                    {building ? <Loader2 className="w-3 h-3 animate-spin" /> : <FileDown className="w-3 h-3" />}
-                    Generate Invoice Packet
-                  </button>
+              <div className="px-3 py-2.5 border-b border-slate-200 bg-slate-50 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-xs text-slate-700">Tax Invoice</span>
+                  <div className="flex gap-1.5">
+                    <button
+                      onClick={() => runPacketAction("print", false, "invoice")}
+                      disabled={building}
+                      className="flex items-center gap-1 px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 disabled:opacity-60 text-white text-xs font-semibold"
+                      title="Print Tax Invoice (A4 Portrait)"
+                    >
+                      <Printer className="w-3 h-3" /> Print
+                    </button>
+                    <button
+                      onClick={() => runPacketAction("download", false, "invoice")}
+                      disabled={building}
+                      className="flex items-center gap-1 px-2 py-1 rounded bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-xs font-semibold"
+                      title="Download Tax Invoice PDF"
+                    >
+                      <FileDown className="w-3 h-3" /> Invoice PDF
+                    </button>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between pt-1.5 border-t border-slate-200">
+                  <span className="font-bold text-xs text-slate-700">Packet ({included.length})</span>
+                  <div className="flex gap-1.5">
+                    <button
+                      onClick={() => runPacketAction("print", true, "all")}
+                      disabled={building}
+                      className="flex items-center gap-1 px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 disabled:opacity-60 text-white text-xs font-semibold"
+                      title="Print Invoice Packet (all pages)"
+                    >
+                      <Printer className="w-3 h-3" /> Print Packet
+                    </button>
+                    <button
+                      onClick={() => runPacketAction("download", true, "all")}
+                      disabled={building}
+                      className="flex items-center gap-1 px-2.5 py-1 rounded bg-orange-600 hover:bg-orange-700 disabled:opacity-60 text-white text-xs font-semibold"
+                      title="Generate a single client-ready PDF in submission order"
+                    >
+                      {building ? <Loader2 className="w-3 h-3 animate-spin" /> : <FileDown className="w-3 h-3" />} Packet PDF
+                    </button>
+                  </div>
                 </div>
               </div>
               <div className="divide-y divide-slate-100 max-h-[40vh] overflow-y-auto">
@@ -773,19 +982,150 @@ const InvoicePacketPage: React.FC = () => {
                           <li key={i} className="rounded-lg bg-white/70 border border-amber-200 p-3"><b className="block mb-1">{g.store}</b>{g.missing.map(item => <span key={item} className="block text-rose-700">✕ {item}</span>)}</li>
                         ))}
                       </ul>
-                      <div className="mt-3 flex flex-wrap gap-2"><button onClick={() => runPacketAction("download", true)} className="px-3 py-2 rounded-md bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold">Generate Anyway</button><button onClick={() => window.location.href = packet.estimate?.id ? `/operations?estimateId=${packet.estimate.id}#documents` : "/operations#documents"} className="px-3 py-2 rounded-md border border-amber-300 bg-white text-amber-900 text-xs font-semibold">Go Upload Documents</button></div>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <button onClick={() => runPacketAction("print", true, "all")} className="px-3 py-2 rounded-md bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold flex items-center gap-1.5"><Printer className="w-3.5 h-3.5" /> Print Anyway</button>
+                        <button onClick={() => runPacketAction("download", true, "all")} className="px-3 py-2 rounded-md bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold flex items-center gap-1.5"><FileDown className="w-3.5 h-3.5" /> Generate Anyway</button>
+                        <button onClick={() => window.location.href = packet.estimate?.id ? `/operations?estimateId=${packet.estimate.id}#documents` : "/operations#documents"} className="px-3 py-2 rounded-md border border-amber-300 bg-white text-amber-900 text-xs font-semibold">Go Upload Documents</button>
+                      </div>
                     </div>
                   </div>
                 </div>
               )}
+              {/* Excel/Word-style Page Setup Toolbar */}
+              <div className="glass-panel p-3 border border-slate-200 bg-slate-50/90 rounded-xl mb-4 flex flex-wrap items-center justify-between gap-3 print:hidden">
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-slate-700 tracking-wider">
+                    <SlidersHorizontal className="w-3.5 h-3.5 text-orange-600" />
+                    <span>PAGE SETUP:</span>
+                  </div>
+
+                  {/* Scale Presets */}
+                  <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-lg p-0.5">
+                    <span className="text-[10px] uppercase font-bold text-slate-400 px-1.5">Scale:</span>
+                    {[100, 90, 85, 75, 70].map((s) => (
+                      <button
+                        key={s}
+                        type="button"
+                        onClick={() => handleUpdatePrintScale(s, true)}
+                        className={`px-2 py-0.5 text-xs font-semibold rounded transition ${
+                          printScale === s && targetFitPages === null
+                            ? "bg-orange-500 text-white shadow-sm"
+                            : "text-slate-600 hover:bg-slate-100"
+                        }`}
+                      >
+                        {s}%
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Quick Fit Presets */}
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => handleFitToPages(1)}
+                      className={`px-2.5 py-1 text-xs font-semibold rounded-md border transition ${
+                        targetFitPages === 1
+                          ? "bg-orange-500 text-white border-orange-600 shadow-sm"
+                          : "bg-white hover:bg-slate-50 text-slate-700 border-slate-300"
+                      }`}
+                    >
+                      Fit to 1 Page
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleFitToPages(2)}
+                      className={`px-2.5 py-1 text-xs font-semibold rounded-md border transition ${
+                        targetFitPages === 2
+                          ? "bg-orange-500 text-white border-orange-600 shadow-sm"
+                          : "bg-white hover:bg-slate-50 text-slate-700 border-slate-300"
+                      }`}
+                    >
+                      Fit to 2 Pages
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleFitToPages(3)}
+                      className={`px-2.5 py-1 text-xs font-semibold rounded-md border transition ${
+                        targetFitPages === 3
+                          ? "bg-orange-500 text-white border-orange-600 shadow-sm"
+                          : "bg-white hover:bg-slate-50 text-slate-700 border-slate-300"
+                      }`}
+                    >
+                      Fit to 3 Pages
+                    </button>
+                  </div>
+
+                  {/* Density toggle */}
+                  <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-lg p-0.5">
+                    <span className="text-[10px] uppercase font-bold text-slate-400 px-1.5">Density:</span>
+                    <button
+                      type="button"
+                      onClick={() => handleUpdatePrintMode("normal")}
+                      className={`px-2 py-0.5 text-xs font-semibold rounded transition ${
+                        printMode === "normal" ? "bg-slate-800 text-white shadow-sm" : "text-slate-600 hover:bg-slate-100"
+                      }`}
+                    >
+                      Normal
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleUpdatePrintMode("compact")}
+                      className={`px-2 py-0.5 text-xs font-semibold rounded transition ${
+                        printMode === "compact" ? "bg-slate-800 text-white shadow-sm" : "text-slate-600 hover:bg-slate-100"
+                      }`}
+                    >
+                      Compact
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => runPacketAction("print", true, "all")}
+                    disabled={building}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-orange-600 hover:bg-orange-700 disabled:opacity-60 text-white text-xs font-bold shadow-sm transition"
+                  >
+                    <Printer className="w-3.5 h-3.5" />
+                    <span>Print Packet ({targetFitPages ? `Fit to ${targetFitPages} Page${targetFitPages > 1 ? "s" : ""}` : `${printScale}%`})</span>
+                  </button>
+                </div>
+              </div>
+
               {included.map((p, idx) => (
                 <div key={p.id} className={`packet-page bg-white border border-slate-200 print:border-0 rounded-lg shadow-sm print:shadow-none ${idx < included.length - 1 ? "packet-page-break" : ""}`}>
                   <div className="px-4 py-2 border-b border-slate-100 bg-slate-50 text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center justify-between print:hidden">
                     <span>Page {idx + 1}: {p.label}</span>
+                    {p.kind === "invoice" && (
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          onClick={() => runPacketAction("print", false, "invoice")}
+                          disabled={building}
+                          className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold flex items-center gap-1"
+                        >
+                          <Printer className="w-3 h-3" /> Print Invoice
+                        </button>
+                        <button
+                          onClick={() => runPacketAction("download", false, "invoice")}
+                          disabled={building}
+                          className="px-2 py-1 rounded bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold flex items-center gap-1"
+                        >
+                          <FileDown className="w-3 h-3" /> Invoice PDF
+                        </button>
+                      </div>
+                    )}
                   </div>
                   <div className="p-6 print:p-0" data-packet-page={p.id}>
-                    {p.kind === "invoice" && <InvoicePacketDocument packet={packet} sellerProfile={sellerProfile} assetToken={token} />}
-                    {p.kind === "estimate" && <EstimatePacketPage packet={packet} sellerProfile={sellerProfile} assetToken={token} />}
+                    {p.kind === "invoice" && (
+                      <div style={{ maxWidth: "800px", margin: "0 auto", overflowX: "auto" }}>
+                        <InvoicePacketDocument packet={packet} sellerProfile={sellerProfile} assetToken={token} />
+                      </div>
+                    )}
+                    {p.kind === "estimate" && (
+                      <div style={{ maxWidth: "800px", margin: "0 auto", overflowX: "auto" }}>
+                        <EstimatePacketPage packet={packet} sellerProfile={sellerProfile} assetToken={token} />
+                      </div>
+                    )}
                     {(p.kind === "po" || p.kind === "project" || p.kind === "photo" || p.kind === "wcc" || p.kind === "store-file") && (
                       <DocumentPreview label={p.label} filePath={p.filePath} mimeType={p.mimeType} />
                     )}

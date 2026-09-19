@@ -21,8 +21,20 @@ export const useInvoiceWorkflow = (
 ) => {
   const [invoiceEditor, setInvoiceEditor] = useState<InvoiceEditorState>({ open: false });
 
-  const openInvoiceEditor = (args: Omit<InvoiceEditorState, "open">) => {
-    setInvoiceEditor({ open: true, ...args });
+  const openInvoiceEditor = (args?: any) => {
+    if (!args) {
+      setInvoiceEditor({ open: true, invoiceId: null, estimateId: null, deliveryChallanId: null });
+      return;
+    }
+    const invoiceId = args.invoiceId ?? (args.invoiceNumber || args.lineItems || (args.totalAmount !== undefined && args.estimateNumber === undefined) ? args.id : null);
+    const estimateId = args.estimateId ?? (args.estimateNumber || (args.totalAmount !== undefined && args.invoiceNumber === undefined) ? args.id : null);
+    const deliveryChallanId = args.deliveryChallanId ?? null;
+    setInvoiceEditor({
+      open: true,
+      invoiceId: invoiceId ?? null,
+      estimateId: estimateId ?? null,
+      deliveryChallanId: deliveryChallanId ?? null,
+    });
   };
 
   const closeInvoiceEditor = () => setInvoiceEditor({ open: false });
