@@ -962,37 +962,39 @@ export async function submitEstimate(
     return res.json();
   }
 
-  // Bolt mode: update estimate status to "archived"
-  let { data: estData, error: estErr } = await supabase
-    .from("estimates")
-    .update({ status: "archived" })
-    .eq("id", estimateId)
-    .select()
-    .maybeSingle();
+  // Bolt mode: resolve authenticated Supabase Auth access token
+  const effectiveToken =
+    token ||
+    (await supabase.auth.getSession()).data.session?.access_token ||
+    (typeof window !== "undefined" ? localStorage.getItem("sunrise_token") : null) ||
+    null;
 
-  if (estErr || !estData) {
-    try {
-      const effectiveToken =
-        token ||
-        (await supabase.auth.getSession()).data.session?.access_token ||
-        (typeof window !== "undefined" ? localStorage.getItem("sunrise_token") : null) ||
-        null;
-      const res = await edgeFetch("estimate-save", effectiveToken, {
-        method: "PATCH",
-        pathSuffix: `?id=${encodeURIComponent(String(estimateId))}`,
-        body: JSON.stringify({ status: "archived" }),
-      });
-      if (res.ok) {
-        estData = await res.json();
-      } else if (estErr) {
-        throw new Error(estErr.message || "Failed to mark estimate as submitted");
-      }
-    } catch (fallbackErr: any) {
-      if (estErr) throw fallbackErr;
+  // 1. Update estimate status to "archived" via the authenticated Edge Function
+  let estData: any = null;
+  const res = await edgeFetch("estimate-save", effectiveToken, {
+    method: "PATCH",
+    pathSuffix: `?id=${encodeURIComponent(String(estimateId))}`,
+    body: JSON.stringify({ status: "archived" }),
+  });
+
+  if (res.ok) {
+    estData = await res.json();
+  } else {
+    // Fallback to direct authenticated client update if user has active session
+    const { data, error } = await supabase
+      .from("estimates")
+      .update({ status: "archived" })
+      .eq("id", estimateId)
+      .select()
+      .maybeSingle();
+    if (error || !data) {
+      const errJson = await res.json().catch(() => ({}));
+      throw new Error(errJson.message ?? error?.message ?? "Failed to mark estimate as submitted");
     }
+    estData = data;
   }
 
-  // Mark all linked active invoices as submitted
+  // 2. Mark linked active invoices as submitted
   const { data: invData, error: invErr } = await supabase
     .from("invoices")
     .update({ status: "submitted" })
