@@ -112,10 +112,11 @@ const SubmittedInvoicesPage: React.FC = () => {
           </h1>
           <p className="text-slate-500 text-sm mt-1">All sales invoices issued. Track status, paid amount, and balance.</p>
         </div>
-        <Link href="/automation/tally">
-          <a className="flex items-center gap-1 px-3 py-1.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold rounded-md">
-            <SettingsIcon className="w-3.5 h-3.5" /> Tally Settings
-          </a>
+        <Link
+          href="/automation/tally"
+          className="flex items-center gap-1 px-3 py-1.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold rounded-md"
+        >
+          <SettingsIcon className="w-3.5 h-3.5" /> Tally Settings
         </Link>
       </div>
 
@@ -241,10 +242,11 @@ const SubmittedInvoicesPage: React.FC = () => {
                           >
                             <FileCode2 className="w-3 h-3" /> Tally XML
                           </a>
-                          <Link href={`/invoice-packet?id=${inv.id}`}>
-                            <a className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline">
-                              Packet <ExternalLink className="w-3 h-3" />
-                            </a>
+                          <Link
+                            href={`/invoice-packet?id=${inv.id}`}
+                            className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline"
+                          >
+                            Packet <ExternalLink className="w-3 h-3" />
                           </Link>
                         </div>
                       </td>

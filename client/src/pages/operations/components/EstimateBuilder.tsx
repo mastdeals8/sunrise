@@ -1723,18 +1723,8 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
 	                                  <FileSpreadsheet className="w-3.5 h-3.5" />
 	                                </button>
 
-	                                {/* 5. Invoice action */}
-	                                {hasInv ? (
-	                                  <button
-	                                    type="button"
-	                                    onClick={() => openInvoiceEditor?.({ invoiceId: estInvoices[0].id })}
-	                                    title={`View invoice ${estInvoices.map((i: any) => i.invoiceNumber).join(", ")}`}
-	                                    className="inline-flex h-7 items-center gap-1 rounded border border-blue-200 bg-blue-50 px-2 text-[10px] font-bold text-blue-700 hover:bg-blue-100 transition shadow-xs"
-	                                  >
-	                                    <Receipt className="w-3.5 h-3.5" />
-	                                    Invoice
-	                                  </button>
-	                                ) : (
+	                                {/* 5. Invoice action: only show '+ Inv' if invoice is not yet made */}
+	                                {!hasInv && (
 	                                  <button
 	                                    type="button"
 	                                    onClick={() => openInvoiceEditor?.({ estimateId: e.id })}

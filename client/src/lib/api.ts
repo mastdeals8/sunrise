@@ -963,23 +963,32 @@ export async function submitEstimate(
   }
 
   // Bolt mode: update estimate status to "archived"
-  const { data: estData, error: estErr } = await supabase
+  let { data: estData, error: estErr } = await supabase
     .from("estimates")
     .update({ status: "archived" })
     .eq("id", estimateId)
     .select()
     .maybeSingle();
 
-  if (estErr) {
+  if (estErr || !estData) {
     try {
-      const res = await edgeFetch("estimate-save", token, {
+      const effectiveToken =
+        token ||
+        (await supabase.auth.getSession()).data.session?.access_token ||
+        (typeof window !== "undefined" ? localStorage.getItem("sunrise_token") : null) ||
+        null;
+      const res = await edgeFetch("estimate-save", effectiveToken, {
         method: "PATCH",
         pathSuffix: `?id=${encodeURIComponent(String(estimateId))}`,
         body: JSON.stringify({ status: "archived" }),
       });
-      if (!res.ok) throw new Error((await res.json()).message ?? "Failed to archive estimate");
-    } catch {
-      throw new Error(estErr.message || "Failed to mark estimate as submitted");
+      if (res.ok) {
+        estData = await res.json();
+      } else if (estErr) {
+        throw new Error(estErr.message || "Failed to mark estimate as submitted");
+      }
+    } catch (fallbackErr: any) {
+      if (estErr) throw fallbackErr;
     }
   }
 

@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { formatCurrency } from "@/utils/format";
 import { useAuth } from "../contexts/AuthContext";
 import { useGlobalDate } from "../contexts/GlobalDateContext";
-import { isBoltMode } from "../lib/supabase";
+import { supabase, isBoltMode } from "../lib/supabase";
 import { 
   Coins, 
   Plus, 
@@ -55,6 +55,31 @@ const PettyCashPage: React.FC = () => {
   const fetchData = async () => {
     try {
       setLoading(true);
+      if (isBoltMode) {
+        const { data: rows, error: errRows } = await supabase
+          .from("petty_cash_expenses")
+          .select("*")
+          .order("expense_date", { ascending: false });
+        if (errRows) {
+          console.warn("Error loading petty cash from supabase:", errRows.message);
+        }
+        const dataE = (rows || []).map((r: any) => ({
+          id: r.id,
+          category: r.category,
+          amount: Number(r.amount),
+          vendor: r.vendor,
+          description: r.description,
+          paidBy: r.paid_by,
+          expenseDate: r.expense_date,
+          status: r.status,
+          receiptImageUrl: r.receipt_image_url,
+          createdAt: r.created_at,
+        }));
+        setExpenses(dataE.filter((row: PettyCashExpense) => globalDate.isInRange(row.expenseDate)));
+        setStaffList([]);
+        return;
+      }
+
       const resE = await fetch("/api/petty-cash", {
         headers: { Authorization: `Bearer ${token}` }
       });
@@ -84,6 +109,32 @@ const PettyCashPage: React.FC = () => {
   const handleCreateExpense = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!amount || !category) return;
+
+    if (isBoltMode) {
+      const { error: insErr } = await supabase.from("petty_cash_expenses").insert({
+        category,
+        amount: Number(amount),
+        vendor: vendor || null,
+        description: description || null,
+        paid_by: paidBy || null,
+        expense_date: expenseDate || new Date().toISOString(),
+        status: "pending",
+        receipt_image_url: receiptName ? `/uploads/receipts/${receiptName}` : null
+      });
+      if (!insErr) {
+        setShowForm(false);
+        setCategory("office_supplies");
+        setAmount("");
+        setVendor("");
+        setDescription("");
+        setExpenseDate("");
+        setPaidBy(undefined);
+        setOcrSuccess(false);
+        setReceiptName("");
+        fetchData();
+      }
+      return;
+    }
 
     try {
       const res = await fetch("/api/petty-cash", {
@@ -122,6 +173,12 @@ const PettyCashPage: React.FC = () => {
   };
 
   const handleUpdateStatus = async (id: number, newStatus: string) => {
+    if (isBoltMode) {
+      await supabase.from("petty_cash_expenses").update({ status: newStatus }).eq("id", id);
+      fetchData();
+      return;
+    }
+
     try {
       const res = await fetch(`/api/petty-cash/${id}`, {
         method: "PUT",
@@ -142,6 +199,13 @@ const PettyCashPage: React.FC = () => {
 
   const handleDeleteExpense = async (id: number) => {
     if (!window.confirm("Are you sure you want to delete this expense record?")) return;
+
+    if (isBoltMode) {
+      await supabase.from("petty_cash_expenses").delete().eq("id", id);
+      fetchData();
+      return;
+    }
+
     try {
       const res = await fetch(`/api/petty-cash/${id}`, {
         method: "DELETE",
