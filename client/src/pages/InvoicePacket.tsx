@@ -7,6 +7,7 @@ import { PDFDocument, rgb } from "pdf-lib";
 import html2canvas from "html2canvas";
 import EstimateDocument from "../components/EstimateDocument";
 import InvoiceDocument from "../components/InvoiceDocument";
+import InvoiceSummaryDocument from "../components/InvoiceSummaryDocument";
 import type { Client, Product, Store } from "./operations/types";
 import { isBoltMode } from "../lib/supabase";
 import { fetchInvoices, fetchCompanySettings, fetchEstimateById, fetchEstimateItems, fetchDeliveryChallansForEstimate, fetchPaymentsForInvoice, fetchClients, fetchStores, fetchProducts, fetchExecutionDocuments, fetchExecutionStores, getExecutionDocumentSignedUrl } from "../lib/api";
@@ -46,7 +47,7 @@ interface PacketData {
 interface PacketPage {
   id: string;
   label: string;
-  kind: "invoice" | "po" | "estimate" | "project" | "photo" | "wcc" | "store-file";
+  kind: "summary" | "invoice" | "po" | "estimate" | "project" | "photo" | "wcc" | "store-file";
   filePath?: string | null;
   storagePath?: string | null;
   mimeType?: string | null;
@@ -171,7 +172,7 @@ const InvoicePacketPage: React.FC = () => {
           size: A4 portrait;
           margin: 6mm !important;
         }
-        .invoice-print, .estimate-print {
+        .invoice-print, .estimate-print, .summary-print {
           zoom: ${scaleRatio} !important;
           width: 100% !important;
         }
@@ -308,6 +309,7 @@ const InvoicePacketPage: React.FC = () => {
             entries.push({ type: "file", page });
           };
 
+          entries.push({ type: "static", page: { id: "summary", label: "Invoice Summary", kind: "summary", included: true } });
           entries.push({ type: "static", page: { id: "inv", label: "Client Billing Invoice", kind: "invoice", included: true } });
 
           // Prefer the Estimate's PO reference, then fall back to the active PO
@@ -566,7 +568,7 @@ const dataUrlToBytes = (dataUrl: string): Uint8Array => {
   return bytes;
 };
 
-  const buildInvoicePacketPdf = async (scope: "all" | "invoice" = "all"): Promise<Blob> => {
+  const buildInvoicePacketPdf = async (scope: "all" | "invoice" | "summary" = "all"): Promise<Blob> => {
     if (!packet) throw new Error("No invoice packet is loaded");
     const pdf = await PDFDocument.create();
     const A4_W = 595.28;
@@ -579,6 +581,8 @@ const dataUrlToBytes = (dataUrl: string): Uint8Array => {
 
     const targetPages = scope === "invoice"
       ? pages.filter(p => p.kind === "invoice")
+      : scope === "summary"
+      ? pages.filter(p => p.kind === "summary")
       : pages.filter(p => p.included);
 
     const addUnavailablePage = (label: string) => {
@@ -632,7 +636,7 @@ const dataUrlToBytes = (dataUrl: string): Uint8Array => {
           const pageContainer = document.querySelector(`[data-packet-page="${p.id}"]`) as HTMLElement | null;
           if (!pageContainer) throw new Error(`Missing rendered document page: ${p.label}`);
 
-          const docEl = (pageContainer.querySelector(".invoice-print, .estimate-print") as HTMLElement) || pageContainer;
+          const docEl = (pageContainer.querySelector(".invoice-print, .estimate-print, .summary-print") as HTMLElement) || pageContainer;
           const imgs = Array.from(docEl.querySelectorAll("img"));
           await Promise.all(imgs.map(img => {
             if (img.complete && img.naturalWidth > 0) return Promise.resolve();
@@ -667,7 +671,7 @@ const dataUrlToBytes = (dataUrl: string): Uint8Array => {
           // Check if this document should be fitted onto a single page:
           // 1. User selected targetFitPages === 1 AND document height is reasonably within 1 page (<= 35% overflow)
           // 2. Document naturally fits on 1 page (<= 4% overflow)
-          const shouldFitSinglePage = (targetFitPages === 1 && rawDrawH <= PRINTABLE_H * 1.35) || rawDrawH <= PRINTABLE_H * 1.04;
+          const shouldFitSinglePage = p.kind === "summary" || (targetFitPages === 1 && rawDrawH <= PRINTABLE_H * 1.35) || rawDrawH <= PRINTABLE_H * 1.04;
 
           if (shouldFitSinglePage) {
             const fitScale = Math.min(1, PRINTABLE_H / rawDrawH);
@@ -782,7 +786,13 @@ const dataUrlToBytes = (dataUrl: string): Uint8Array => {
       throw new Error("No pages could be assembled into a PDF. Check that documents are loaded.");
     }
 
-    pdf.setTitle(scope === "invoice" ? `Tax Invoice - ${packet.invoice?.invoiceNumber || selectedId}` : `Invoice Packet - ${packet.invoice?.invoiceNumber || selectedId}`);
+    pdf.setTitle(
+      scope === "invoice"
+        ? `Tax Invoice - ${packet.invoice?.invoiceNumber || selectedId}`
+        : scope === "summary"
+        ? `Invoice Summary - ${packet.invoice?.invoiceNumber || selectedId}`
+        : `Invoice Packet - ${packet.invoice?.invoiceNumber || selectedId}`
+    );
     pdf.setAuthor("Sunrise Media");
     pdf.setCreator("Sunrise Media ERP");
     pdf.setProducer("Sunrise Media ERP");
@@ -791,7 +801,7 @@ const dataUrlToBytes = (dataUrl: string): Uint8Array => {
     return new Blob([pdfBytes as BlobPart], { type: "application/pdf" });
   };
 
-  const runPacketAction = async (action: "download" | "print", force = false, scope: "all" | "invoice" = "all") => {
+  const runPacketAction = async (action: "download" | "print", force = false, scope: "all" | "invoice" | "summary" = "all") => {
     if (!packet) return;
     if (scope === "all") {
       const gaps = computeMissing();
@@ -806,8 +816,8 @@ const dataUrlToBytes = (dataUrl: string): Uint8Array => {
     // not turn Print into a second DOM/CSS rendering path.
     const printWindow = action === "print" ? window.open("about:blank", "_blank") : null;
     if (printWindow) {
-      printWindow.document.title = scope === "invoice" ? "Preparing invoice PDF…" : "Preparing invoice packet…";
-      printWindow.document.body.textContent = scope === "invoice" ? "Preparing invoice PDF…" : "Preparing invoice packet…";
+      printWindow.document.title = scope === "invoice" ? "Preparing invoice PDF…" : scope === "summary" ? "Preparing invoice summary…" : "Preparing invoice packet…";
+      printWindow.document.body.textContent = scope === "invoice" ? "Preparing invoice PDF…" : scope === "summary" ? "Preparing invoice summary…" : "Preparing invoice packet…";
     }
 
     setBuilding(true);
@@ -819,6 +829,8 @@ const dataUrlToBytes = (dataUrl: string): Uint8Array => {
         a.href = url;
         a.download = scope === "invoice"
           ? `Invoice_${packet.invoice?.invoiceNumber || selectedId}.pdf`
+          : scope === "summary"
+          ? `Invoice_Summary_${packet.invoice?.invoiceNumber || selectedId}.pdf`
           : `Invoice_Packet_${packet.invoice?.invoiceNumber || selectedId}.pdf`;
         a.click();
         window.setTimeout(() => URL.revokeObjectURL(url), 1000);
@@ -846,9 +858,10 @@ const dataUrlToBytes = (dataUrl: string): Uint8Array => {
 
   const included = pages.filter(p => p.included);
 
-  if (pdfMode === "invoice" || pdfMode === "estimate") {
+  if (pdfMode === "invoice" || pdfMode === "estimate" || pdfMode === "summary") {
     return <div style={{ background: "white", padding: 0, margin: 0 }}>
       {!packet ? <div style={{ padding: 40, textAlign: "center", color: "#666" }}>Loading…</div>
+        : pdfMode === "summary" ? <InvoiceSummaryDocument packet={packet} sellerProfile={sellerProfile} pages={pages} />
         : pdfMode === "invoice" ? <InvoicePacketDocument packet={packet} sellerProfile={sellerProfile} assetToken={token} />
         : <EstimatePacketPage packet={packet} sellerProfile={sellerProfile} assetToken={token} />}
     </div>;
@@ -906,6 +919,27 @@ const dataUrlToBytes = (dataUrl: string): Uint8Array => {
             <div className="glass-panel overflow-hidden">
               <div className="px-3 py-2.5 border-b border-slate-200 bg-slate-50 space-y-2">
                 <div className="flex items-center justify-between">
+                  <span className="font-bold text-xs text-slate-700">Invoice Summary</span>
+                  <div className="flex gap-1.5">
+                    <button
+                      onClick={() => runPacketAction("print", false, "summary")}
+                      disabled={building}
+                      className="flex items-center gap-1 px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 disabled:opacity-60 text-white text-xs font-semibold"
+                      title="Print Invoice Summary"
+                    >
+                      <Printer className="w-3 h-3" /> Print
+                    </button>
+                    <button
+                      onClick={() => runPacketAction("download", false, "summary")}
+                      disabled={building}
+                      className="flex items-center gap-1 px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white text-xs font-semibold"
+                      title="Download Invoice Summary PDF"
+                    >
+                      <FileDown className="w-3 h-3" /> Summary PDF
+                    </button>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between pt-1.5 border-t border-slate-200">
                   <span className="font-bold text-xs text-slate-700">Tax Invoice</span>
                   <div className="flex gap-1.5">
                     <button
@@ -1096,6 +1130,24 @@ const dataUrlToBytes = (dataUrl: string): Uint8Array => {
                 <div key={p.id} className={`packet-page bg-white border border-slate-200 print:border-0 rounded-lg shadow-sm print:shadow-none ${idx < included.length - 1 ? "packet-page-break" : ""}`}>
                   <div className="px-4 py-2 border-b border-slate-100 bg-slate-50 text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center justify-between print:hidden">
                     <span>Page {idx + 1}: {p.label}</span>
+                    {p.kind === "summary" && (
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          onClick={() => runPacketAction("print", false, "summary")}
+                          disabled={building}
+                          className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold flex items-center gap-1"
+                        >
+                          <Printer className="w-3 h-3" /> Print Summary
+                        </button>
+                        <button
+                          onClick={() => runPacketAction("download", false, "summary")}
+                          disabled={building}
+                          className="px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center gap-1"
+                        >
+                          <FileDown className="w-3 h-3" /> Summary PDF
+                        </button>
+                      </div>
+                    )}
                     {p.kind === "invoice" && (
                       <div className="flex items-center gap-1.5">
                         <button
@@ -1116,6 +1168,11 @@ const dataUrlToBytes = (dataUrl: string): Uint8Array => {
                     )}
                   </div>
                   <div className="p-6 print:p-0" data-packet-page={p.id}>
+                    {p.kind === "summary" && (
+                      <div style={{ maxWidth: "800px", margin: "0 auto", overflowX: "auto" }}>
+                        <InvoiceSummaryDocument packet={packet} sellerProfile={sellerProfile} pages={pages} />
+                      </div>
+                    )}
                     {p.kind === "invoice" && (
                       <div style={{ maxWidth: "800px", margin: "0 auto", overflowX: "auto" }}>
                         <InvoicePacketDocument packet={packet} sellerProfile={sellerProfile} assetToken={token} />

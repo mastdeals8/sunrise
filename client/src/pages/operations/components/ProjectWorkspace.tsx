@@ -315,13 +315,34 @@ export const projectStoresFromCanonicalRecords = (
   return estimateStoreScope(estimate, items, masterStores, activeChallans).map((scope, index) => {
     const overlay = executionOverlays.find(row =>
       (scope.storeId != null && Number(row.storeId) === scope.storeId) ||
-      String(row.storeCode || "").trim() === scope.storeCode,
+      (scope.storeCode && String(row.storeCode || "").trim().toLowerCase() === scope.storeCode.toLowerCase()),
     );
     const storeChallans = activeChallans.filter(challan => {
+      const challanStoreId = Number(challan?.metadata?.storeId || 0) || null;
+      if (scope.storeId != null && challanStoreId != null) {
+        return scope.storeId === challanStoreId;
+      }
       const code = challanStoreCode(challan);
-      return code === scope.storeCode || (scope.storeId != null && Number(challan?.metadata?.storeId || 0) === scope.storeId);
+      if (code && scope.storeCode) {
+        return code.toLowerCase() === scope.storeCode.toLowerCase();
+      }
+      return false;
     });
-    const storeDocs = documents.filter(doc => String(doc?.storeCode || "").trim() === scope.storeCode);
+    const storeDcIds = new Set(storeChallans.map(c => c.id));
+    const storeDocs = documents.filter(doc => {
+      if (doc?.deliveryChallanId && storeDcIds.has(Number(doc.deliveryChallanId))) {
+        return true;
+      }
+      const docStoreId = Number(doc?.metadata?.storeId || 0) || null;
+      if (scope.storeId != null && docStoreId != null) {
+        return scope.storeId === docStoreId;
+      }
+      const docCode = String(doc?.storeCode || "").trim().toLowerCase();
+      if (docCode && scope.storeCode) {
+        return docCode === scope.storeCode.toLowerCase();
+      }
+      return false;
+    });
     const wccRecords = storeChallans.filter(isWccChallan);
     const dcRecords = storeChallans.filter(challan => !isWccChallan(challan));
     const photoDocuments = storeDocs.filter(isInstallationPhoto);

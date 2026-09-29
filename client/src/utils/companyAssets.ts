@@ -38,8 +38,8 @@ export const companyAssetUrl = (filePath?: string | null, token?: string | null)
 
   // Early Bolt records sometimes saved only "/logo.png". Those paths point at
   // the Vite origin and 404 in production; company assets live in this bucket.
-  if (import.meta.env.VITE_BOLT_PREVIEW === "true" && /^\/[^/]+\.(png|jpe?g|webp|svg)$/i.test(cleanPath)) {
-    const supabaseUrl = (import.meta.env.VITE_SUPABASE_URL as string | undefined) ?? "";
+  if (import.meta.env?.VITE_BOLT_PREVIEW === "true" && /^\/[^/]+\.(png|jpe?g|webp|svg)$/i.test(cleanPath)) {
+    const supabaseUrl = (import.meta.env?.VITE_SUPABASE_URL as string | undefined) ?? "";
     return `${supabaseUrl}/storage/v1/object/public/company-assets/${encodeURIComponent(cleanPath.slice(1))}`;
   }
 

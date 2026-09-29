@@ -44,7 +44,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return isAblblFormat(value?.documentType || value?.clientFormat) ? "wcc" : String(value?.documentType || "").toLowerCase() === "wcc" ? "wcc" : "dc";
   };
   const storeCodeForDc = (value: any): string => {
-    return String(value?.storeCode || value?.metadata?.storeCode || value?.metadata?.storeId || "").trim();
+    return String(value?.store_code || value?.storeCode || value?.metadata?.storeCode || value?.metadata?.storeId || "").trim();
+  };
+  const isSameStoreWcc = (a: any, b: any): boolean => {
+    const metaA = (a?.metadata || {}) as Record<string, any>;
+    const metaB = (b?.metadata || {}) as Record<string, any>;
+    const idA = metaA.storeId != null ? Number(metaA.storeId) : (a?.store_id != null ? Number(a.store_id) : (a?.storeId != null ? Number(a.storeId) : null));
+    const idB = metaB.storeId != null ? Number(metaB.storeId) : (b?.store_id != null ? Number(b.store_id) : (b?.storeId != null ? Number(b.storeId) : null));
+
+    if (idA != null && idB != null && !isNaN(idA) && !isNaN(idB)) {
+      return idA === idB;
+    }
+
+    const codeA = storeCodeForDc(a).toLowerCase();
+    const codeB = storeCodeForDc(b).toLowerCase();
+    if (codeA && codeB) {
+      return codeA === codeB;
+    }
+
+    return false;
   };
   const normalizeStoreCode = (value: any) => String(value ?? "").trim();
   const storeCodeFromStore = (store: any, fallback: any) => normalizeStoreCode(store?.storeCode || fallback);
@@ -475,14 +493,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
   };
   const findActiveDuplicateWcc = async (payload: any, excludeId?: number) => {
     if (documentTypeForDc(payload) !== "wcc") return null;
-    const storeCode = storeCodeForDc(payload);
-    if (!payload.estimateId || !storeCode) return null;
-    const rows = await db.select().from(deliveryChallans).where(eq(deliveryChallans.estimateId, Number(payload.estimateId)));
+    const estId = Number(payload.estimateId || payload.estimate_id);
+    if (!estId) return null;
+    const rows = await db.select().from(deliveryChallans).where(eq(deliveryChallans.estimateId, estId));
     return (rows as any[]).find((row) => {
       if (excludeId && Number(row.id) === Number(excludeId)) return false;
       if (row.status === "deleted" || row.metadata?.deleted) return false;
       if (documentTypeForDc(row) !== "wcc") return false;
-      return storeCodeForDc(row) === storeCode;
+      return isSameStoreWcc(row, payload);
     }) || null;
   };
   const syncEstimateDocuments = async (estimate: any, uploadedBy?: number | null) => {
@@ -4216,6 +4234,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Drizzle timestamp columns -> z.date() (no coercion). See server/utils/dateFields.ts.
       const body = preprocessDateFields(req.body, [{ field: "deliveryDate", defaultTo: nowDefault }]);
       body.documentType = documentTypeForDc(body);
+      const rawDc = String(body.dcNumber ?? "").trim();
+      const legacyPlaceholder = /^(DC|WCC)-\d+(-.*)?$/i.test(rawDc);
+      if (!rawDc || legacyPlaceholder) {
+        body.dcNumber = await nextDocumentNumber("dc");
+      }
+      if (body.documentType === "wcc") {
+        const storeCode = storeCodeForDc(body);
+        if (storeCode) body.storeCode = storeCode;
+      }
       const parsed = insertDeliveryChallanSchema.safeParse(body);
       if (!parsed.success) {
         return res.status(400).json({ message: "Invalid delivery challan data", errors: parsed.error.errors });
@@ -6111,8 +6138,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ==========================================
   // Estimate: duplicate — copies all fields + items, assigns new number, status=draft
   // ==========================================
-  app.post("/api/operations/estimates/:id/duplicate", authenticateToken, requireRole(["admin", "manager", "designer"]), async (req: AuthRequest, res: Response) => {
+  app.post("/api/operations/estimates/:id/duplicate", authenticateToken, requireRole(["admin", "manager", "designer", "accounts"]), async (req: AuthRequest, res: Response) => {
     try {
+      if (!req.user) return res.status(401).json({ message: "Unauthorized" });
       const id = parseInt(req.params.id, 10);
       const [original] = await db.select().from(estimates).where(eq(estimates.id, id));
       if (!original) return res.status(404).json({ message: "Estimate not found" });
@@ -6122,21 +6150,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const [newEst] = await db.insert(estimates).values({
         ...rest,
         estimateNumber: newNumber,
+        estimateDate: new Date(),
         status: "draft",
         poNumber: null,
         poDate: null,
         poFilePath: null,
         poAmount: null,
+        poRemarks: null,
         followUpStatus: "none",
         followUpNote: null,
         followUpAt: null,
         promiseDate: null,
+        createdBy: req.user.id,
+        createdAt: new Date(),
       }).returning();
       if (originalItems.length > 0) {
         await db.insert(estimateItems).values(
           originalItems.map(({ id: _iid, estimateId: _eid, ...item }: any) => ({ ...item, estimateId: newEst.id }))
         );
       }
+      await backfillExecutionStores();
       res.json(newEst);
     } catch (err: any) {
       res.status(500).json({ message: err.message });

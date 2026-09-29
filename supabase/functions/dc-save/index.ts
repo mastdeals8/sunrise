@@ -37,10 +37,30 @@ function storeCodeForDc(value: Record<string, unknown>): string {
   const meta = value?.metadata as Record<string, unknown> | null | undefined;
   return String(
     value?.store_code ||
+    value?.storeCode ||
     meta?.storeCode ||
     meta?.storeId ||
     "",
   ).trim();
+}
+
+function isSameStoreWcc(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
+  const metaA = (a?.metadata || {}) as Record<string, unknown>;
+  const metaB = (b?.metadata || {}) as Record<string, unknown>;
+  const idA = metaA.storeId != null ? Number(metaA.storeId) : (a.store_id != null ? Number(a.store_id) : (a.storeId != null ? Number(a.storeId) : null));
+  const idB = metaB.storeId != null ? Number(metaB.storeId) : (b.store_id != null ? Number(b.store_id) : (b.storeId != null ? Number(b.storeId) : null));
+
+  if (idA != null && idB != null && !isNaN(idA) && !isNaN(idB)) {
+    return idA === idB;
+  }
+
+  const codeA = storeCodeForDc(a).toLowerCase();
+  const codeB = storeCodeForDc(b).toLowerCase();
+  if (codeA && codeB) {
+    return codeA === codeB;
+  }
+
+  return false;
 }
 
 // Convert camelCase keys to snake_case so the client can send either format.
@@ -131,7 +151,7 @@ Deno.serve(async (req: Request) => {
         const storeCode = storeCodeForDc({ ...uniquenessPayload, ...updates, document_type: effectiveType });
         if (storeCode) updates.store_code = storeCode;
         const estimateId = Number(uniquenessPayload.estimate_id);
-        if (estimateId && storeCode) {
+        if (estimateId) {
           const { data: siblings } = await db
             .from("delivery_challans")
             .select("*")
@@ -140,7 +160,7 @@ Deno.serve(async (req: Request) => {
             if (Number(row.id) === dcId) return false;
             if (row.status === "deleted" || (row.metadata as any)?.deleted) return false;
             if (documentTypeForDc(row) !== "wcc") return false;
-            return storeCodeForDc(row) === storeCode;
+            return isSameStoreWcc(row, { ...uniquenessPayload, ...updates });
           });
           if (conflict) {
             return jsonResponse({ message: "WCC already exists for this store", existingWcc: conflict }, 409);
@@ -194,7 +214,7 @@ Deno.serve(async (req: Request) => {
         const storeCode = storeCodeForDc(payload);
         if (storeCode) payload.store_code = storeCode;
         const estimateId = Number(payload.estimate_id);
-        if (estimateId && storeCode) {
+        if (estimateId) {
           const { data: siblings } = await db
             .from("delivery_challans")
             .select("*")
@@ -202,7 +222,7 @@ Deno.serve(async (req: Request) => {
           const existing = (siblings ?? []).find((row: any) => {
             if (row.status === "deleted" || (row.metadata as any)?.deleted) return false;
             if (documentTypeForDc(row) !== "wcc") return false;
-            return storeCodeForDc(row) === storeCode;
+            return isSameStoreWcc(row, payload);
           });
           if (existing) {
             return jsonResponse({ ...existing, duplicatePrevented: true, message: "WCC already exists for this store" }, 200);

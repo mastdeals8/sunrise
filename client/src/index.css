@@ -1003,6 +1003,12 @@ td.eb-cell, th.eb-cell {
   font-size: 11px;
   color: #0f172a;
   white-space: nowrap;
+  transition: color 0.15s ease;
+}
+.eb-store-name:hover {
+  color: #1d4ed8;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 .eb-store-code {
   font-family: monospace;
@@ -1014,12 +1020,23 @@ td.eb-cell, th.eb-cell {
   padding: 0 4px;
   border-radius: 2px;
   white-space: nowrap;
+  transition: all 0.15s ease;
+}
+.eb-store-code:hover {
+  background: #bfdbfe;
+  border-color: #2563eb;
 }
 .eb-store-city {
   font-size: 10px;
   font-weight: 600;
   color: #475569;
   white-space: nowrap;
+  transition: color 0.15s ease;
+}
+.eb-store-city:hover {
+  color: #1d4ed8;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 .eb-store-actions {
   display: inline-flex;

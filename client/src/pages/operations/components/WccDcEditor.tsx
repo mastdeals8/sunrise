@@ -593,7 +593,7 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
           const photosList = rawPhotos.filter((p: any) => { if (_seen.has(p.path)) return false; _seen.add(p.path); return true; });
           const authPersonVal = metadata?.authPerson || targetStore?.contactPerson || "";
           const shortageNotesVal = metadata?.shortageNotes || "";
-          const storeCodeVal = metadata?.storeCode || targetStore?.storeCode || "LP-01";
+          const storeCodeVal = metadata?.storeCode || targetStore?.storeCode || (targetStore?.id ? String(targetStore.id) : "");
           const companyName = sellerProfile.name || "Sunrise Media";
           const companyAddress = sellerProfile.address || "";
           const companyEmail = sellerProfile.email || "";
@@ -1113,9 +1113,12 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
                                 const existingWcc = storeId
                                   ? activeWccsForEditor.find((dc: any) => {
                                       const metaStoreId = Number(dc.metadata?.storeId || 0);
+                                      if (metaStoreId && metaStoreId === storeId) return true;
+                                      if (metaStoreId && metaStoreId !== storeId) return false;
                                       const targetStore = stores.find((s: any) => s.id === storeId);
-                                      return metaStoreId === storeId ||
-                                        (targetStore?.storeCode && dc.metadata?.storeCode === targetStore.storeCode);
+                                      const targetCode = String(targetStore?.storeCode || "").trim().toLowerCase();
+                                      const dcCode = String(dc.metadata?.storeCode || (dc as any).storeCode || "").trim().toLowerCase();
+                                      return Boolean(targetCode && dcCode && targetCode === dcCode);
                                     })
                                   : null;
                                 if (existingWcc && navigateWccEditor) {
@@ -1131,10 +1134,14 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
                               <option value="">(estimate primary store)</option>
                               {orderedSelectedStoreKeys.map(sid => {
                                 const tStore = stores.find(s => s.id === Number(sid));
-                                const hasWcc = activeWccsForEditor.some((dc: any) =>
-                                  Number(dc.metadata?.storeId || 0) === Number(sid) ||
-                                  (tStore?.storeCode && dc.metadata?.storeCode === tStore.storeCode)
-                                );
+                                const hasWcc = activeWccsForEditor.some((dc: any) => {
+                                  const metaStoreId = Number(dc.metadata?.storeId || 0);
+                                  if (metaStoreId && metaStoreId === Number(sid)) return true;
+                                  if (metaStoreId && metaStoreId !== Number(sid)) return false;
+                                  const targetCode = String(tStore?.storeCode || "").trim().toLowerCase();
+                                  const dcCode = String(dc.metadata?.storeCode || (dc as any).storeCode || "").trim().toLowerCase();
+                                  return Boolean(targetCode && dcCode && targetCode === dcCode);
+                                });
                                 return <option key={sid} value={sid}>{tStore?.storeCode ? `${tStore.storeCode} — ` : ""}{tStore?.name || `Store ${sid}`}{hasWcc ? " ✓" : ""}</option>;
                               })}
                             </select>
@@ -1190,7 +1197,14 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
                                         className="accent-purple-600 flex-shrink-0"
                                       />
                                       <span className="truncate">{s.storeCode ? `${s.storeCode} — ` : ""}{s.name}</span>
-                                      {activeWccsForEditor.some((dc: any) => Number(dc.metadata?.storeId) === s.id) && (
+                                      {activeWccsForEditor.some((dc: any) => {
+                                        const metaStoreId = Number(dc.metadata?.storeId || 0);
+                                        if (metaStoreId && metaStoreId === s.id) return true;
+                                        if (metaStoreId && metaStoreId !== s.id) return false;
+                                        const targetCode = String(s.storeCode || "").trim().toLowerCase();
+                                        const dcCode = String(dc.metadata?.storeCode || (dc as any).storeCode || "").trim().toLowerCase();
+                                        return Boolean(targetCode && dcCode && targetCode === dcCode);
+                                      }) && (
                                         <span className="ml-auto text-[9px] text-emerald-600 font-bold flex-shrink-0">✓</span>
                                       )}
                                     </label>

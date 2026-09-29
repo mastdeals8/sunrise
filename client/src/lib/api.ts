@@ -920,7 +920,97 @@ export async function createEstimate(
     body: JSON.stringify(payload),
   });
   if (!res.ok) throw new Error((await res.json()).message ?? "Failed to create estimate");
-  return res.json();
+  return toCamel(await res.json());
+}
+
+export async function duplicateEstimate(
+  token: string | null,
+  est: any
+): Promise<any> {
+  if (!isBoltMode) {
+    const res = await apiFetch(`/api/operations/estimates/${est.id}/duplicate`, token, {
+      method: "POST",
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.message ?? "Failed to duplicate estimate");
+    }
+    return res.json();
+  }
+
+  // Bolt mode: read original items and create fresh copy
+  const items = await fetchEstimateItems(token, est.id);
+  const cleanEstimatePayload: Record<string, unknown> = {
+    clientId: est.clientId,
+    brandId: est.brandId,
+    storeId: est.storeId,
+    title: est.title,
+    description: est.description || null,
+    clientFormat: est.clientFormat || "normal",
+    abfrlProjectType: est.abfrlProjectType || null,
+    subject: est.subject || null,
+    billingTo: est.billingTo || null,
+    shippingTo: est.shippingTo || null,
+    gstin: est.gstin || null,
+    pan: est.pan || null,
+    stateCode: est.stateCode || null,
+    vendorCode: est.vendorCode || null,
+    gstType: est.gstType || "CGST+SGST",
+    packingPercent: est.packingPercent ?? 0,
+    implementationPercent: est.implementationPercent ?? 0,
+    transportAmount: est.transportAmount ?? 0,
+    storeGrouping: est.storeGrouping || null,
+    billingProfileId: est.billingProfileId ? Number(est.billingProfileId) : null,
+    billingLegalNameSnapshot: est.billingLegalNameSnapshot || null,
+    billingGstinSnapshot: est.billingGstinSnapshot || null,
+    billingStateSnapshot: est.billingStateSnapshot || null,
+    billingStateCodeSnapshot: est.billingStateCodeSnapshot || null,
+    billingAddressSnapshot: est.billingAddressSnapshot || null,
+    shippingAddressSnapshot: est.shippingAddressSnapshot || null,
+    subtotal: est.subtotal ?? 0,
+    taxAmount: est.taxAmount ?? 0,
+    totalAmount: est.totalAmount ?? 0,
+    status: "draft",
+    estimateDate: new Date().toISOString(),
+  };
+
+  const cleanItems = (items || []).map((it: any, idx: number) => ({
+    productId: it.productId ? Number(it.productId) : null,
+    itemName: it.itemName || "",
+    description: it.description || null,
+    quantity: Number(it.quantity) || 1,
+    unit: it.unit || "pcs",
+    rate: Number(it.rate) || 0,
+    totalPrice: Number(it.totalPrice) || 0,
+    sl: Number(it.sl) || idx + 1,
+    isStandard: it.isStandard !== false,
+    hsn: it.hsn || null,
+    materialCode: it.materialCode || null,
+    materialCodeId: it.materialCodeId ? Number(it.materialCodeId) : null,
+    materialDescription: it.materialDescription || null,
+    width: it.width != null ? Number(it.width) : null,
+    height: it.height != null ? Number(it.height) : null,
+    totalSize: it.totalSize != null ? Number(it.totalSize) : null,
+    cgstPercent: Number(it.cgstPercent) || 0,
+    cgstAmount: Number(it.cgstAmount) || 0,
+    sgstPercent: Number(it.sgstPercent) || 0,
+    sgstAmount: Number(it.sgstAmount) || 0,
+    igstPercent: Number(it.igstPercent) || 0,
+    igstAmount: Number(it.igstAmount) || 0,
+    totalAmount: Number(it.totalAmount) || 0,
+    storeCode: it.storeCode || null,
+    storeSortOrder: it.storeSortOrder != null ? Number(it.storeSortOrder) : null,
+    rowSortOrder: it.rowSortOrder != null ? Number(it.rowSortOrder) : null,
+    manualStoreName: it.manualStoreName || null,
+    lineType: it.lineType || "product",
+    calculationType: it.calculationType || "fixed",
+    materialCodeSnapshot: it.materialCodeSnapshot || null,
+    productSnapshot: it.productSnapshot || null,
+  }));
+
+  const safeItems = cleanItems.length > 0 ? cleanItems : [{ sl: 1, itemName: "Item 1", quantity: 1, unit: "pcs", rate: 0, totalPrice: 0 }];
+
+  return createEstimate(token, { estimate: cleanEstimatePayload, items: safeItems });
 }
 
 export async function updateEstimate(

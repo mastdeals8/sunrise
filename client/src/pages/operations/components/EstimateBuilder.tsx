@@ -395,6 +395,7 @@ const ProductSearchCell: React.FC<ProductSearchCellProps> = ({
   const [query, setQuery] = React.useState(displayValue);
   const [open, setOpen] = React.useState(false);
   const [highlightedIndex, setHighlightedIndex] = React.useState(0);
+  const [userNavigatedDropdown, setUserNavigatedDropdown] = React.useState(false);
   const wrapperRef = React.useRef<HTMLDivElement | null>(null);
   const inputRef = React.useRef<HTMLInputElement | null>(null);
   const dropdownRef = React.useRef<HTMLDivElement | null>(null);
@@ -474,12 +475,14 @@ const ProductSearchCell: React.FC<ProductSearchCellProps> = ({
     }
     if (event.key === "Escape") {
       setOpen(false);
+      setUserNavigatedDropdown(false);
       onKeyDown?.(event);
       return;
     }
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       setOpen(true);
+      setUserNavigatedDropdown(true);
       if (matches.length === 0) return;
       setHighlightedIndex(prev => {
         const delta = event.key === "ArrowDown" ? 1 : -1;
@@ -487,25 +490,19 @@ const ProductSearchCell: React.FC<ProductSearchCellProps> = ({
       });
       return;
     }
-    // Enter/Tab on the "Create Product" option when dropdown shows it
-    if (showCreateOption && open && (event.key === "Enter" || (event.key === "Tab" && !event.shiftKey))) {
-      event.preventDefault();
-      setOpen(false);
-      onCreateProduct!(query.trim());
-      return;
-    }
-    const highlighted = open ? matches[highlightedIndex]?.product : null;
-    if (!highlighted) {
-      onKeyDown?.(event);
-      return;
-    }
     if (event.key === "Enter") {
-      selectProduct(highlighted);
+      const highlighted = open && userNavigatedDropdown ? matches[highlightedIndex]?.product : null;
+      if (highlighted) {
+        selectProduct(highlighted);
+      }
+      setOpen(false);
+      setUserNavigatedDropdown(false);
       onKeyDown?.(event);
       return;
     }
-    if (event.key === "Tab" && !event.shiftKey) {
-      selectProduct(highlighted);
+    if (event.key === "Tab") {
+      setOpen(false);
+      setUserNavigatedDropdown(false);
       onKeyDown?.(event);
       return;
     }
@@ -524,6 +521,7 @@ const ProductSearchCell: React.FC<ProductSearchCellProps> = ({
         onFocus={() => {
           onFocus?.();
           if (!readOnly) setOpen(true);
+          setUserNavigatedDropdown(false);
           setHighlightedIndex(0);
         }}
         onDoubleClick={onDoubleClick}
@@ -532,6 +530,7 @@ const ProductSearchCell: React.FC<ProductSearchCellProps> = ({
           const value = e.target.value;
           setQuery(value);
           setOpen(true);
+          setUserNavigatedDropdown(false);
           setHighlightedIndex(0);
           onDetailsChange(rowIndex, value);
         }}
@@ -624,11 +623,12 @@ const ProductSearchCell: React.FC<ProductSearchCellProps> = ({
 
 const nearestStandardSize = (value: string) => {
   const numeric = Number(value);
-  if (!Number.isFinite(numeric) || numeric <= 0) return null;
+  if (!Number.isFinite(numeric) || numeric < 6) return null;
   const remainder = numeric % 6;
   if (remainder === 0) return null;
   const lower = numeric - remainder;
-  return remainder === 1 ? lower : lower + 6;
+  const candidate = remainder === 1 && lower > 0 ? lower : lower + 6;
+  return candidate > 0 ? candidate : 6;
 };
 
 const SmartSizeInput: React.FC<{
@@ -695,19 +695,9 @@ const SmartSizeInput: React.FC<{
         onKeyDown={(event) => {
           onKeyDown?.(event);
           if (event.defaultPrevented) return;
-          if (event.key === "Escape") {
+          if (event.key === "Escape" || event.key === "Tab") {
             setOpen(false);
             return;
-          }
-          if (readOnly) return;
-          if (!open || suggestion == null) return;
-          if (event.key === "Enter" || event.key === "ArrowDown" || event.key === "ArrowUp") {
-            event.preventDefault();
-            acceptSuggestion();
-            return;
-          }
-          if (event.key === "Tab" && !event.shiftKey) {
-            acceptSuggestion();
           }
         }}
       />
@@ -860,6 +850,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
   const [gstProfileOpen, setGstProfileOpen] = React.useState(false);
   const [gstProfileHighlightIndex, setGstProfileHighlightIndex] = React.useState(0);
   const [storePickerOpen, setStorePickerOpen] = React.useState(false);
+  const [replacingStoreId, setReplacingStoreId] = React.useState<string | null>(null);
   const [storeHighlightIndex, setStoreHighlightIndex] = React.useState(0);
   const [manualStoreName, setManualStoreName] = React.useState("");
   const [manualStoreLocation, setManualStoreLocation] = React.useState("");
@@ -1682,6 +1673,17 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
 	                                  </button>
 	                                )}
 
+	                                {/* Duplicate Estimate */}
+	                                <button
+	                                  type="button"
+	                                  onClick={() => handleDuplicateEstimate?.(e)}
+	                                  title="Duplicate Estimate"
+	                                  className="inline-flex h-7 w-7 items-center justify-center rounded border border-slate-200 bg-white text-slate-700 hover:bg-slate-100 transition shadow-xs"
+	                                  aria-label="Duplicate Estimate"
+	                                >
+	                                  <Copy className="w-3.5 h-3.5" />
+	                                </button>
+
 	                                {/* 3. Project / Execution Workspace */}
 	                                <Link
 	                                  href={`/projects?estimateId=${e.id}`}
@@ -1909,7 +1911,16 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                   });
                 };
                 const openStorePickerAndFocusSearch = () => {
+                  setReplacingStoreId(null);
                   setStorePickerOpen(true);
+                  setPendingStoreIds([]);
+                  setStoreHighlightIndex(0);
+                  focusStoreSearch();
+                };
+                const openStorePickerToChange = (sid: string) => {
+                  setReplacingStoreId(sid);
+                  setStorePickerOpen(true);
+                  setPendingStoreIds([]);
                   setStoreHighlightIndex(0);
                   focusStoreSearch();
                 };
@@ -1955,7 +1966,10 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                   event.preventDefault();
                   openStorePickerAndFocusSearch();
                 };
-                const availableStores = eligibleStores.filter(s => !activeStoreIds.includes(String(s.id)));
+                const otherStoreIds = replacingStoreId
+                  ? activeStoreIds.filter(id => id !== replacingStoreId)
+                  : activeStoreIds;
+                const availableStores = eligibleStores.filter(s => !otherStoreIds.includes(String(s.id)));
                 const filteredStores = availableStores
                   .filter(s => {
                     const q = storeSearch.trim().toLowerCase();
@@ -1964,6 +1978,62 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                   })
                   .sort((a, b) => storeDisplay(a).localeCompare(storeDisplay(b)));
                 const visibleStores = filteredStores.slice(0, 80);
+
+                const replaceStore = (oldSid: string, newSid: string) => {
+                  if (!oldSid || !newSid) {
+                    setReplacingStoreId(null);
+                    setStorePickerOpen(false);
+                    setStoreSearch("");
+                    return;
+                  }
+                  if (oldSid === newSid) {
+                    setReplacingStoreId(null);
+                    setStorePickerOpen(false);
+                    setStoreSearch("");
+                    return;
+                  }
+
+                  const newStore = stores.find(s => String(s.id) === String(newSid));
+
+                  // 1. Reassign storeId on all existing rows belonging to oldSid without changing anything else
+                  setEstItems((prev: any[]) =>
+                    prev.map((item: any) =>
+                      String(item.storeId || "") === String(oldSid)
+                        ? { ...item, storeId: String(newSid) }
+                        : item
+                    )
+                  );
+
+                  // 2. Migrate and update estStoreOverrides from oldSid to newSid
+                  setEstStoreOverrides((prev: Record<string, any>) => {
+                    const oldOverrides = prev[oldSid] || {};
+                    const rest = { ...prev };
+                    delete rest[oldSid];
+                    return {
+                      ...rest,
+                      [String(newSid)]: {
+                        ...oldOverrides,
+                        storeName: newStore?.name || oldOverrides.storeName || "",
+                        storeCode: newStore?.storeCode || "",
+                        storeCity: newStore?.city || "",
+                        storeLocation: newStore?.location || newStore?.city || "",
+                        storeState: newStore?.state || "",
+                        storeAddress: newStore?.address || "",
+                      },
+                    };
+                  });
+
+                  // 3. Update collapsed state
+                  setCollapsedStoreIds((prev: string[]) =>
+                    prev.map(id => (id === oldSid ? String(newSid) : id))
+                  );
+
+                  // 4. Close picker
+                  setReplacingStoreId(null);
+                  setStorePickerOpen(false);
+                  setStoreSearch("");
+                  setPendingStoreIds([]);
+                };
 
                 const addStores = (storeIds: string[]) => {
                   const nextIds = Array.from(new Set(storeIds))
@@ -1995,11 +2065,16 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                 const selectHighlightedStore = () => {
                   const store = visibleStores[storeHighlightIndex] || visibleStores[0];
                   if (!store) return false;
+                  if (replacingStoreId) {
+                    replaceStore(replacingStoreId, String(store.id));
+                    return true;
+                  }
                   return addStoreAndFocusProduct(String(store.id));
                 };
                 const handleStoreSearchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
                   if (event.key === "Escape") {
                     setStorePickerOpen(false);
+                    setReplacingStoreId(null);
                     return;
                   }
                   if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -2011,35 +2086,46 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                     });
                     return;
                   }
-                  // Space = toggle highlighted store without closing picker (for multi-select)
-                  if (event.key === " ") {
-                    event.preventDefault();
-                    const store = visibleStores[storeHighlightIndex] || visibleStores[0];
-                    if (!store) return;
-                    const sid = String(store.id);
-                    if (activeStoreIds.includes(sid)) return;
-                    setPendingStoreIds(prev =>
-                      prev.includes(sid) ? prev.filter(id => id !== sid) : [...prev, sid]
-                    );
-                    return;
-                  }
-                  // Enter = add single highlighted store immediately and go to grid
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    if (pendingStoreIds.length > 0) {
-                      addStores(pendingStoreIds);
-                    } else {
-                      selectHighlightedStore();
+                  if (replacingStoreId) {
+                    if (event.key === "Enter" || (event.key === "Tab" && !event.shiftKey)) {
+                      event.preventDefault();
+                      const store = visibleStores[storeHighlightIndex] || visibleStores[0];
+                      if (store) {
+                        replaceStore(replacingStoreId, String(store.id));
+                      }
+                      return;
                     }
-                    return;
-                  }
-                  // Tab = confirm pending stores (or highlighted single) and close
-                  if (event.key === "Tab" && !event.shiftKey && visibleStores.length > 0) {
-                    event.preventDefault();
-                    if (pendingStoreIds.length > 0) {
-                      addStores(pendingStoreIds);
-                    } else {
-                      selectHighlightedStore();
+                  } else {
+                    // Space = toggle highlighted store without closing picker (for multi-select)
+                    if (event.key === " ") {
+                      event.preventDefault();
+                      const store = visibleStores[storeHighlightIndex] || visibleStores[0];
+                      if (!store) return;
+                      const sid = String(store.id);
+                      if (activeStoreIds.includes(sid)) return;
+                      setPendingStoreIds(prev =>
+                        prev.includes(sid) ? prev.filter(id => id !== sid) : [...prev, sid]
+                      );
+                      return;
+                    }
+                    // Enter = add single highlighted store immediately and go to grid
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      if (pendingStoreIds.length > 0) {
+                        addStores(pendingStoreIds);
+                      } else {
+                        selectHighlightedStore();
+                      }
+                      return;
+                    }
+                    // Tab = confirm pending stores (or highlighted single) and close
+                    if (event.key === "Tab" && !event.shiftKey && visibleStores.length > 0) {
+                      event.preventDefault();
+                      if (pendingStoreIds.length > 0) {
+                        addStores(pendingStoreIds);
+                      } else {
+                        selectHighlightedStore();
+                      }
                     }
                   }
                 };
@@ -2652,7 +2738,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                   column: EstimateGridColumn,
                   field: string,
                   fallback: string,
-                  opts: { align?: "left" | "right"; inputMode?: React.HTMLAttributes<HTMLInputElement>["inputMode"]; fontWeight?: number; placeholder?: string } = {},
+                  opts: { align?: "left" | "right"; inputMode?: React.HTMLAttributes<HTMLInputElement>["inputMode"]; fontWeight?: number; placeholder?: string; fontFamily?: string } = {},
                 ) => {
                   const editing = isEditingCell(rowIndex, column.id);
                   const value = editing ? getDraft(rowIndex, column.id, fallback) : String(fallback ?? "");
@@ -2680,7 +2766,11 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                           }
                         }}
                         onKeyDown={(event) => handleCellKeyDown(event, rowIndex, column.id, commit)}
-                        style={{ fontWeight: opts.fontWeight, textAlign: opts.align === "right" ? "right" : "left" }}
+                        style={{
+                          fontWeight: opts.fontWeight,
+                          textAlign: opts.align === "right" ? "right" : "left",
+                          fontFamily: opts.fontFamily,
+                        }}
                       />
                     </td>
                   );
@@ -2751,7 +2841,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                     );
                   }
                   if (column.id === "element") return renderTextInput(item, rowIndex, column, "itemName", item.itemName || "", { fontWeight: 600, placeholder: "Visual" });
-                  if (column.id === "materialCode") return renderReadOnlyCell(rowIndex, column, item.materialCode || "Auto", "left", { fontFamily: "monospace", color: item.materialCode ? "#0f172a" : "#94a3b8" });
+                  if (column.id === "materialCode") return renderTextInput(item, rowIndex, column, "materialCode", item.materialCode || "", { fontFamily: "monospace", placeholder: "Auto" });
                   if (column.id === "hsn") return renderTextInput(item, rowIndex, column, "hsn", item.hsn || "", { placeholder: "HSN" });
                   if (column.id === "standard") {
                     const editing = isEditingCell(rowIndex, column.id);
@@ -3108,7 +3198,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                         <span>Estimate Total <b>{formatCurrency(grandTotal)}</b></span>
                       </div>
 
-                      {eIsAbfrl && (storePickerOpen || (activeStoreIds.length === 0 && storeEntryBlocked)) && (
+                      {(storePickerOpen || (eIsAbfrl && activeStoreIds.length === 0 && storeEntryBlocked)) && (
                         <div className="eb-store-picker-panel">
                           {storeEntryBlocked ? (
                             <div className="eb-store-gate">
@@ -3119,7 +3209,30 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                           ) : null}
                           {storePickerOpen && !storeEntryBlocked && (
                             <div className="eb-store-picker">
-                              {!eIsAbfrl && (
+                              {replacingStoreId && (
+                                <div style={{
+                                  background: "#eff6ff",
+                                  border: "1px solid #bfdbfe",
+                                  borderRadius: "4px",
+                                  padding: "6px 10px",
+                                  marginBottom: "8px",
+                                  fontSize: "11px",
+                                  color: "#1e40af",
+                                  display: "flex",
+                                  justifyContent: "space-between",
+                                  alignItems: "center",
+                                  gap: "8px"
+                                }}>
+                                  <div>
+                                    <span style={{ fontWeight: 800 }}>Changing Store:</span>{" "}
+                                    <span>Replacing <b>{storeDisplayById(replacingStoreId)}</b></span>
+                                  </div>
+                                  <div style={{ fontSize: "10px", color: "#2563eb", fontWeight: 600 }}>
+                                    All existing estimate rows in this section will be preserved
+                                  </div>
+                                </div>
+                              )}
+                              {!eIsAbfrl && !replacingStoreId && (
                                 <div className="eb-manual-store">
                                   <input
                                     value={manualStoreName}
@@ -3146,18 +3259,31 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                                     setStoreHighlightIndex(0);
                                   }}
                                   onKeyDown={handleStoreSearchKeyDown}
-                                  placeholder="Type store code, name, city, state, region, location..."
+                                  placeholder={replacingStoreId ? "Type to search and replace current store..." : "Type store code, name, city, state, region, location..."}
                                 />
-                                <button type="button" onClick={() => addStores(pendingStoreIds)} disabled={pendingStoreIds.length === 0}>
-                                  Add ({pendingStoreIds.length})
-                                </button>
-                                <button type="button" onClick={() => setStorePickerOpen(false)}>Close</button>
+                                {!replacingStoreId ? (
+                                  <button type="button" onClick={() => addStores(pendingStoreIds)} disabled={pendingStoreIds.length === 0}>
+                                    Add ({pendingStoreIds.length})
+                                  </button>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const store = visibleStores[storeHighlightIndex] || visibleStores[0];
+                                      if (store) replaceStore(replacingStoreId, String(store.id));
+                                    }}
+                                    disabled={visibleStores.length === 0}
+                                  >
+                                    Select Store
+                                  </button>
+                                )}
+                                <button type="button" onClick={() => { setStorePickerOpen(false); setReplacingStoreId(null); }}>Close</button>
                               </div>
                               <div className="eb-store-results">
                                 {filteredStores.length === 0 ? (
                                   <div className="eb-store-empty">
                                     {storeSearch
-                                      ? "No matching stores."
+                                      ? (replacingStoreId ? "No matching stores found to replace this store." : "No matching stores.")
                                       : eIsAbfrl
                                         ? "No more stores available for this client/brand."
                                         : eClientIdNum
@@ -3168,22 +3294,36 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                                   visibleStores.map((s, optionIndex) => {
                                     const sid = String(s.id);
                                     const checked = pendingStoreIds.includes(sid);
+                                    const isCurrent = replacingStoreId === sid;
                                     return (
                                       <label
                                         key={s.id}
                                         onMouseEnter={() => setStoreHighlightIndex(optionIndex)}
-                                        className={optionIndex === storeHighlightIndex ? "active" : ""}
+                                        className={`${optionIndex === storeHighlightIndex ? "active" : ""} ${isCurrent ? "bg-blue-50 font-bold" : ""}`}
+                                        onClick={(e) => {
+                                          if (replacingStoreId) {
+                                            e.preventDefault();
+                                            replaceStore(replacingStoreId, sid);
+                                          }
+                                        }}
+                                        style={{ cursor: "pointer" }}
                                       >
-                                        <input
-                                          type="checkbox"
-                                          tabIndex={-1}
-                                          checked={checked}
-                                          onChange={(e) => {
-                                            setPendingStoreIds((prev) => e.target.checked
-                                              ? Array.from(new Set([...prev, sid]))
-                                              : prev.filter(id => id !== sid));
-                                          }}
-                                        />
+                                        {!replacingStoreId ? (
+                                          <input
+                                            type="checkbox"
+                                            tabIndex={-1}
+                                            checked={checked}
+                                            onChange={(e) => {
+                                              setPendingStoreIds((prev) => e.target.checked
+                                                ? Array.from(new Set([...prev, sid]))
+                                                : prev.filter(id => id !== sid));
+                                            }}
+                                          />
+                                        ) : (
+                                          <span style={{ fontSize: 10, color: isCurrent ? "#2563eb" : "#94a3b8", marginRight: 4, fontFamily: "monospace" }}>
+                                            {isCurrent ? "● Current" : "➔"}
+                                          </span>
+                                        )}
                                         <span>{storeDisplay(s)}</span>
                                       </label>
                                     );
@@ -3295,11 +3435,51 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                                             setRenamingStoreId(sid);
                                             setRenamingStoreName(storeNameLabel);
                                           }}
-                                          title="Double-click to rename"
+                                          title={!isNormalEstimateScope && sid ? "Click store name to change store (or double-click to rename text)" : undefined}
                                         >
-                                          <span className="eb-store-name">{storeNameLabel}</span>
-                                          {storeCodeLabel && <span className="eb-store-code">{storeCodeLabel}</span>}
-                                          {storeCityLabel && <span className="eb-store-city">{storeCityLabel}</span>}
+                                          <span
+                                            className="eb-store-name"
+                                            onClick={e => {
+                                              if (!isNormalEstimateScope && sid) {
+                                                e.stopPropagation();
+                                                openStorePickerToChange(sid);
+                                              }
+                                            }}
+                                            style={!isNormalEstimateScope && sid ? { cursor: "pointer" } : undefined}
+                                            title={!isNormalEstimateScope && sid ? "Click to change store" : undefined}
+                                          >
+                                            {storeNameLabel}
+                                          </span>
+                                          {storeCodeLabel && (
+                                            <span
+                                              className="eb-store-code"
+                                              onClick={e => {
+                                                if (!isNormalEstimateScope && sid) {
+                                                  e.stopPropagation();
+                                                  openStorePickerToChange(sid);
+                                                }
+                                              }}
+                                              style={!isNormalEstimateScope && sid ? { cursor: "pointer" } : undefined}
+                                              title={!isNormalEstimateScope && sid ? "Click to change store" : undefined}
+                                            >
+                                              {storeCodeLabel}
+                                            </span>
+                                          )}
+                                          {storeCityLabel && (
+                                            <span
+                                              className="eb-store-city"
+                                              onClick={e => {
+                                                if (!isNormalEstimateScope && sid) {
+                                                  e.stopPropagation();
+                                                  openStorePickerToChange(sid);
+                                                }
+                                              }}
+                                              style={!isNormalEstimateScope && sid ? { cursor: "pointer" } : undefined}
+                                              title={!isNormalEstimateScope && sid ? "Click to change store" : undefined}
+                                            >
+                                              {storeCityLabel}
+                                            </span>
+                                          )}
                                         </span>
                                       )}
                                     </button>
@@ -3402,9 +3582,16 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                                 const w = Number(item.width) || 0;
                                 const h = Number(item.height) || 0;
                                 const q = Number(item.quantity) || 0;
-                                const tsqft = item.calculationType === "running_inch"
-                                  ? w * h * q
-                                  : (w * h * q) / 144;
+                                const normUnit = String(item.unit || "").toLowerCase().trim();
+                                const isFeet = normUnit === "feet" || normUnit === "ft";
+                                const isPiece = normUnit === "nos" || normUnit === "job" || normUnit === "pcs" || normUnit === "unit" || (w === 0 && h === 0);
+                                const isRunningInch = normUnit === "running_inch" || (item.calculationType === "running_inch" && normUnit !== "inch" && normUnit !== "sqft");
+
+                                const tsqft = isPiece
+                                  ? 0
+                                  : isRunningInch || isFeet
+                                    ? w * h * q
+                                    : (w * h * q) / 144;
                                 return (
                                   <tr
                                     key={`r-${idx}`}

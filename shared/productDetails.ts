@@ -15,10 +15,17 @@ export const formatProductDetails = (
   fallbackDescription?: string | null,
   element?: string | null,
 ) => {
-  const alias = cleanText(product?.name);
-  const description = cleanText(product?.description || product?.defaultSpecification || fallbackDescription);
   const fallback = cleanText(fallbackDescription);
   const elementText = cleanText(element);
+  const alias = cleanText(product?.name);
+
+  // If a specific estimate description was provided (and it is not just the element name),
+  // preserve it as the estimate-specific override!
+  if (fallback && !sameDisplayText(fallback, elementText)) {
+    return fallback;
+  }
+
+  const description = cleanText(product?.description || product?.defaultSpecification);
 
   const composed = alias && description && sameDisplayText(alias, elementText)
     ? description

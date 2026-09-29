@@ -5,25 +5,37 @@ export const calculateEstimateRowValues = (
   qty: number,
   rate: number,
   gstPct: number,
-  gstType: string
+  gstType: string,
+  unit?: string,
 ) => {
   let amount = 0;
 
   // Smart amount calculation (auto-detect billing mode):
-  //   - percentage   → caller-handled rate                        (service products)
-  //   - running_inch → W × H × Q × Rate                            (linear measure, legacy)
-  //   - otherwise    → if T.Sqft > 0, area-based (T.Sqft × Rate);
-  //                    if T.Sqft is blank/0, piece-based (Q × Rate)
-  // No manual toggle: row data alone decides the mode, so generic
-  // products (Window Props / Branding / Other Items) calculate correctly
-  // without dimensions while area-based products keep their existing math.
+  //   - percentage   → caller-handled rate (service products)
+  //   - running_inch (unit === 'running_inch' or linear measure) → W × H × Q × Rate
+  //   - feet / ft    → W × H × Q × Rate (dimensions already in feet)
+  //   - piece / job  → Q × Rate (nos, job, pcs, or zero dimensions)
+  //   - inch / sqft  → ((W × H × Q) / 144) × Rate (convert inch dimensions to sqft)
   if (calcType === "percentage") {
     amount = rate;
-  } else if (calcType === "running_inch") {
-    amount = width * height * qty * rate;
   } else {
-    const sqft = (width * height * qty) / 144;
-    amount = sqft > 0 ? sqft * rate : qty * rate;
+    const normUnit = String(unit || "").toLowerCase().trim();
+    const isFeet = normUnit === "feet" || normUnit === "ft";
+    const isPiece = normUnit === "nos" || normUnit === "job" || normUnit === "pcs" || normUnit === "unit" || (width === 0 && height === 0);
+    const isRunningInch = normUnit === "running_inch" || (calcType === "running_inch" && normUnit !== "inch" && normUnit !== "sqft");
+
+    if (isPiece) {
+      amount = qty * rate;
+    } else if (isRunningInch) {
+      amount = width * height * qty * rate;
+    } else if (isFeet) {
+      const sqft = width * height * qty;
+      amount = sqft * rate;
+    } else {
+      // inch-based dimensions (unit === "inch", "sqft", or dimensions > 0)
+      const sqft = (width * height * qty) / 144;
+      amount = sqft > 0 ? sqft * rate : qty * rate;
+    }
   }
 
   let cgstPercent = 0;

@@ -32,8 +32,12 @@ const documentTypeForDc = (dc: DeliveryChallan) => {
   return isAblblFormat(dc.clientFormat) ? "wcc" : "dc";
 };
 
-const duplicateGroupKey = (dc: DeliveryChallan) =>
-  `${dc.estimateId}|${storeCodeForDc(dc)}|${documentTypeForDc(dc)}`;
+const duplicateGroupKey = (dc: DeliveryChallan) => {
+  const storeId = dc.metadata?.storeId ? String(dc.metadata.storeId) : "";
+  const storeCode = storeCodeForDc(dc);
+  const storeIdentity = storeId ? `id:${storeId}` : `code:${storeCode}`;
+  return `${dc.estimateId}|${storeIdentity}|${documentTypeForDc(dc)}`;
+};
 
 const createdTime = (dc: DeliveryChallan) => {
   const raw = (dc as any).createdAt || dc.deliveryDate || "";

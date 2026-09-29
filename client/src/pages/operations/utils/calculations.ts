@@ -32,18 +32,31 @@ export const calculateRowValues = (
   qty: number,
   rate: number,
   gstPct: number,
-  gstType: string
+  gstType: string,
+  unit?: string,
 ): RowCalcResult => {
   let amount = 0;
 
   if (calcType === "percentage") {
     amount = rate; // Will be computed relative to subtotal later or entered manually
-  } else if (calcType === "running_inch") {
-    amount = width * height * qty * rate;
   } else {
-    // sqft / fixed / manual / nos / job / per_km — auto-detect billing mode.
-    const sqft = (width * height * qty) / 144;
-    amount = sqft > 0 ? sqft * rate : qty * rate;
+    const normUnit = String(unit || "").toLowerCase().trim();
+    const isFeet = normUnit === "feet" || normUnit === "ft";
+    const isPiece = normUnit === "nos" || normUnit === "job" || normUnit === "pcs" || normUnit === "unit" || (width === 0 && height === 0);
+    const isRunningInch = normUnit === "running_inch" || (calcType === "running_inch" && normUnit !== "inch" && normUnit !== "sqft");
+
+    if (isPiece) {
+      amount = qty * rate;
+    } else if (isRunningInch) {
+      amount = width * height * qty * rate;
+    } else if (isFeet) {
+      const sqft = width * height * qty;
+      amount = sqft * rate;
+    } else {
+      // inch-based dimensions (unit === "inch", "sqft", or dimensions > 0)
+      const sqft = (width * height * qty) / 144;
+      amount = sqft > 0 ? sqft * rate : qty * rate;
+    }
   }
 
   let cgstPercent = 0;

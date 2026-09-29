@@ -47,7 +47,7 @@ import ProjectWorkspace from "./components/ProjectWorkspace";
 import WccDcEditor from "./components/WccDcEditor";
 import { useOperationsData, type Invoice } from "./hooks/useOperationsData";
 import { isBoltMode, supabase } from "../../lib/supabase";
-import { createEstimate, updateEstimate, createDeliveryChallan, updateDeliveryChallan, fetchEstimateItems, fetchDeliveryChallansForEstimate, fetchBillingProfiles as apiFetchBillingProfiles, fetchCompanySettings, createInvoice, createPayment, fetchClientLedger, masterDataSave, uploadToStorage, registerExecutionDocument, deleteExecutionDocument, deleteWccPhotoArtifacts, hydrateDeliveryChallanPhotos, normalizeWccPhotos } from "../../lib/api";
+import { createEstimate, updateEstimate, duplicateEstimate, createDeliveryChallan, updateDeliveryChallan, fetchEstimateItems, fetchDeliveryChallansForEstimate, fetchBillingProfiles as apiFetchBillingProfiles, fetchCompanySettings, createInvoice, createPayment, fetchClientLedger, masterDataSave, uploadToStorage, registerExecutionDocument, deleteExecutionDocument, deleteWccPhotoArtifacts, hydrateDeliveryChallanPhotos, normalizeWccPhotos } from "../../lib/api";
 import { useEstimateBuilder } from "./hooks/useEstimateBuilder";
 import { useInvoiceWorkflow } from "./hooks/useInvoiceWorkflow";
 import { useWccDcEditor } from "./hooks/useWccDcEditor";
@@ -552,6 +552,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
         Number(row.rate) || 0,
         gstPct,
         gstTypeValue,
+        row.unit,
       );
       return { ...row, ...calc };
     });
@@ -1134,7 +1135,8 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
         Number(updated[index].quantity) || 1,
         selectedProd.rate,
         selectedProd.gstPercent || 18,
-        estGstType
+        estGstType,
+        selectedProd.unit,
       );
 
       Object.assign(updated[index], calc);
@@ -1190,6 +1192,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
           Number(data.rate),
           gst,
           estGstType,
+          row.unit,
         );
         Object.assign(row, calc);
         next[index] = row;
@@ -1203,6 +1206,12 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
   const handleEstimateItemChange = (index: number, field: string, val: string) => {
     const updated = [...estItems];
     updated[index] = { ...updated[index], [field]: val } as EstimateItemInput;
+
+    // Material code edit: link to matched master ID if code exists, else null
+    if (field === "materialCode") {
+      const match = materialCodes.find(m => m.code.toLowerCase() === String(val).trim().toLowerCase());
+      updated[index].materialCodeId = match ? match.id : null;
+    }
 
     // Letter-signage helper: when user types individual letter sizes like
     // "27,26,26,26,28,27,27", parse them, sum the inches, and write into
@@ -1484,6 +1493,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
           Number(merged.rate) || 0,
           estGstType === "IGST" ? 18 : 18,
           estGstType,
+          merged.unit,
         );
         Object.assign(merged, calc);
         next.push(merged);
@@ -1648,9 +1658,15 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     setEstStoreOverrides({});
     const selectedCli = clients.find(c => c.id === Number(clientIdVal));
     if (selectedCli) {
-      // Estimate type is chosen in the builder and persisted on the estimate.
-      // Do not overwrite it when a client is selected: one client can have
-      // both a normal job and an ABFRL project.
+      // Auto-select Estimate Type from Customer's configured format
+      if (selectedCli.format) {
+        const clientDefaultFormat = normalizeFormatMode(selectedCli.format);
+        setEstFormat(clientDefaultFormat);
+        if (isAblblFormat(clientDefaultFormat) && !estAbfrlProjectType) {
+          setEstAbfrlProjectType("SELEX");
+        }
+      }
+
       // Seed Billing block with company name on line 1, address below.
       // Print/export expects this multi-line shape (whiteSpace: pre-wrap).
       const billingText = [
@@ -1802,9 +1818,12 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
         const selectedProduct = item.productId
           ? products.find(p => p.id === Number(item.productId))
           : null;
-        const productDetails = selectedProduct
-          ? formatProductDetails(selectedProduct, item.description || "", item.itemName)
-          : (sameDisplayText(item.description, item.itemName) ? "" : item.description || "");
+        const hasCustomDescription = item.description != null && String(item.description).trim() !== "" && !sameDisplayText(item.description, item.itemName);
+        const productDetails = hasCustomDescription
+          ? String(item.description).trim()
+          : (selectedProduct
+            ? formatProductDetails(selectedProduct, "", item.itemName)
+            : (item.description || ""));
 
         return {
           productId: item.productId ? Number(item.productId) : null,
@@ -1826,14 +1845,16 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
           width: Number(item.width) || 0,
           height: Number(item.height) || 0,
           totalSize: (() => {
-            // Mirror estimateCalculations.ts auto-detect:
-            //   - running_inch        → W × H × Q
-            //   - else with area > 0  → (W × H × Q) / 144     (area-based)
-            //   - else                → Q                      (piece-based)
             const w = Number(item.width) || 0;
             const h = Number(item.height) || 0;
             const q = Number(item.quantity) || 1;
-            if (item.calculationType === "running_inch") return w * h * q;
+            const normUnit = String(item.unit || "").toLowerCase().trim();
+            const isFeet = normUnit === "feet" || normUnit === "ft";
+            const isPiece = normUnit === "nos" || normUnit === "job" || normUnit === "pcs" || normUnit === "unit" || (w === 0 && h === 0);
+            const isRunningInch = normUnit === "running_inch" || (item.calculationType === "running_inch" && normUnit !== "inch" && normUnit !== "sqft");
+
+            if (isPiece) return q;
+            if (isRunningInch || isFeet) return w * h * q;
             const area = (w * h * q) / 144;
             return area > 0 ? area : q;
           })(),
@@ -2278,24 +2299,16 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
   };
 
   const handleDuplicateEstimate = async (est: Estimate) => {
-    if (isBoltMode) { alert("Duplicate estimate is not yet available in Bolt preview mode."); return; }
     if (!window.confirm(`Duplicate estimate ${est.estimateNumber}? A new draft copy will be created.`)) return;
     try {
-      const res = await fetch(`/api/operations/estimates/${est.id}/duplicate`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        alert(body.message || "Failed to duplicate estimate.");
-        return;
-      }
-      const newEst = await res.json();
+      const newEst = await duplicateEstimate(token, est);
       showSuccess(`Duplicated as ${newEst.estimateNumber}.`);
-      fetchData();
-    } catch (err) {
+      await fetchData();
+      setActiveTab("estimates");
+      await handleEditEstimate(newEst);
+    } catch (err: any) {
       console.error("Failed to duplicate estimate:", err);
-      alert("Failed to duplicate estimate.");
+      alert(err.message || "Failed to duplicate estimate.");
     }
   };
 
@@ -2950,12 +2963,16 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
 
   const findExistingWccForStore = (estimateId: number, storeCode: string | null | undefined, storeId?: number | null, source: DeliveryChallan[] = challans) => {
     const normalizedStoreCode = String(storeCode || "").trim().toLowerCase();
+    const targetStoreId = storeId ? Number(storeId) : null;
     return source.find((dc) => {
       if (dc.estimateId !== estimateId || !isAblblFormat(dc.clientFormat) || dc.status === "deleted") return false;
       const meta = dc.metadata || {};
+      const rowStoreId = Number(meta.storeId || (dc as any).storeId || 0) || null;
+      if (targetStoreId && rowStoreId) {
+        return targetStoreId === rowStoreId;
+      }
       const rowStoreCode = String(meta.storeCode || (dc as any).storeCode || "").trim().toLowerCase();
-      if (normalizedStoreCode && rowStoreCode === normalizedStoreCode) return true;
-      if (storeId && Number(meta.storeId || 0) === Number(storeId)) return true;
+      if (normalizedStoreCode && rowStoreCode && normalizedStoreCode === rowStoreCode) return true;
       return false;
     });
   };
@@ -3012,18 +3029,20 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
           width: it.width, height: it.height, rate: it.rate, totalAmount: it.totalAmount,
         }));
       if (storeItems.length === 0) continue;
+      const resolvedStoreCode = tStore?.storeCode || (tStore?.id ? String(tStore.id) : "");
       const payload = {
         dcNumber: "",
         estimateId: selectedEstimate.id,
         status: "draft",
+        documentType: "wcc",
         items: storeItems,
         deliveredBy: null,
         receivedBy: null,
         remarks: null,
         clientFormat: "ABFRL",
-        storeCode: tStore?.storeCode || null,
+        storeCode: resolvedStoreCode || null,
         metadata: {
-          storeCode: tStore?.storeCode || "",
+          storeCode: resolvedStoreCode,
           storeId: tStore?.id || null,
           storeName: tStore?.name || "",
           city: tStore?.city || "",
@@ -3083,8 +3102,14 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     try {
       const scopedStoreId = dcWccStoreScope ? Number(dcWccStoreScope) : selectedEstimate.storeId;
       const scopedStore = stores.find(s => s.id === scopedStoreId);
+      const currentEditingChallan = editingDcId ? challans.find(c => c.id === editingDcId) : null;
+      const resolvedStoreCode = String(
+        scopedStore?.storeCode ||
+        (currentEditingChallan?.metadata?.storeCode || (currentEditingChallan as any)?.storeCode) ||
+        (scopedStore?.id ? String(scopedStore.id) : (dcWccStoreScope || ""))
+      ).trim();
       if (isAblblFormat(dcFormat) && !editingDcId) {
-        const existing = await findActiveExistingWccForStore(selectedEstimate.id, scopedStore?.storeCode, scopedStore?.id);
+        const existing = await findActiveExistingWccForStore(selectedEstimate.id, resolvedStoreCode, scopedStore?.id || (dcWccStoreScope ? Number(dcWccStoreScope) : null));
         if (existing) {
           await openDcForEdit(existing, "WCC already exists for this store");
           return false;
@@ -3107,6 +3132,8 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
         dcNumber: dcNumberVal,
         estimateId: selectedEstimate.id,
         status: "draft",
+        documentType: isAblblFormat(dcFormat) ? "wcc" : "dc",
+        storeCode: resolvedStoreCode || null,
         items: formattedItems,
         deliveredBy: dcDeliveredBy || null,
         receivedBy: dcReceivedBy || null,
@@ -3117,8 +3144,8 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
           shortageNotes: wccShortageNotes || null,
           authPerson: wccAuthPerson || null,
           photos: cleanDcPhotos,
-          storeCode: scopedStore?.storeCode || "LP-01",
-          storeId: scopedStore?.id || null,
+          storeCode: resolvedStoreCode,
+          storeId: scopedStore?.id || (dcWccStoreScope ? Number(dcWccStoreScope) : null),
           storeName: scopedStore?.name || "",
           city: scopedStore?.city || "",
           state: scopedStore?.state || "",
