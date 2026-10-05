@@ -20,6 +20,7 @@ import path from "path";
 import jwt from "jsonwebtoken";
 import { JWT_SECRET, UPLOAD_DIR } from "../config.js";
 import { storage } from "../storage.js";
+import { extractInvoiceSequence, extractPoNumber, getPacketPdfFilename, getPacketPdfTitle } from "../../shared/textFormat.js";
 
 // ---------------------------------------------------------------------------
 // Chrome detection
@@ -252,15 +253,17 @@ export interface PacketBuildResult {
   buffer: Buffer;
   pageLog: string[];
   totalPages: number;
+  filename: string;
+  title: string;
 }
 
 /**
  * Build the complete invoice packet PDF server-side.
  *
  * Page order:
- *   1. Estimate (browser-rendered)
- *   2. Tax Invoice (browser-rendered)
- *   3. Purchase Order PDF (pdf-lib copyPages, ALL original pages)
+ *   1. Tax Invoice (browser-rendered)
+ *   2. Purchase Order PDF (pdf-lib copyPages, ALL original pages)
+ *   3. Estimate (browser-rendered)
  *   4. Per non-deleted DC:
  *      a. Transport receipt
  *      b. Signed WCC / Signed challan
@@ -306,24 +309,9 @@ export async function buildInvoicePacketPdf(params: {
   pageLog.push("=== Invoice Packet PDF — page sequence ===");
 
   // ------------------------------------------------------------------
-  // 2. Estimate (browser-rendered via the existing production renderer)
+  // 2. Tax Invoice (browser-rendered via the existing production renderer)
   // ------------------------------------------------------------------
-  if (estimate) {
-    pageLog.push("\n[Section 1] Estimate");
-    try {
-      const estBuffer = await renderPageToPdf(invoiceId, "estimate", userId, username, role, port);
-      totalPages += await appendRenderedPdf(merged, estBuffer, `Estimate ${estimate.estimateNumber}`, pageLog);
-    } catch (err: any) {
-      console.error("[pdfPacket] Failed to render Estimate:", err.message);
-      pageLog.push(`  ⚠ FAILED to render Estimate: ${err.message}`);
-      throw new Error(`Estimate PDF generation failed: ${err.message}`);
-    }
-  }
-
-  // ------------------------------------------------------------------
-  // 3. Tax Invoice (browser-rendered via the existing production renderer)
-  // ------------------------------------------------------------------
-  pageLog.push("\n[Section 2] Tax Invoice");
+  pageLog.push("\n[Section 1] Tax Invoice");
   try {
     const invBuffer = await renderPageToPdf(invoiceId, "invoice", userId, username, role, port);
     totalPages += await appendRenderedPdf(merged, invBuffer, "Tax Invoice", pageLog);
@@ -334,13 +322,28 @@ export async function buildInvoicePacketPdf(params: {
   }
 
   // ------------------------------------------------------------------
-  // 4. Purchase Order PDF (pdf-lib copyPages — all original pages)
+  // 3. Purchase Order PDF (pdf-lib copyPages — all original pages)
   // ------------------------------------------------------------------
   if (estimate?.poFilePath) {
-    pageLog.push("\n[Section 3] Purchase Order");
+    pageLog.push("\n[Section 2] Purchase Order");
     totalPages += await appendPdfFile(merged, estimate.poFilePath, `PO (${estimate.poNumber || "PO"})`, pageLog);
   } else {
-    pageLog.push("\n[Section 3] Purchase Order — no PO attached, skipped");
+    pageLog.push("\n[Section 2] Purchase Order — no PO attached, skipped");
+  }
+
+  // ------------------------------------------------------------------
+  // 4. Estimate (browser-rendered via the existing production renderer)
+  // ------------------------------------------------------------------
+  if (estimate) {
+    pageLog.push("\n[Section 3] Estimate");
+    try {
+      const estBuffer = await renderPageToPdf(invoiceId, "estimate", userId, username, role, port);
+      totalPages += await appendRenderedPdf(merged, estBuffer, `Estimate ${estimate.estimateNumber}`, pageLog);
+    } catch (err: any) {
+      console.error("[pdfPacket] Failed to render Estimate:", err.message);
+      pageLog.push(`  ⚠ FAILED to render Estimate: ${err.message}`);
+      throw new Error(`Estimate PDF generation failed: ${err.message}`);
+    }
   }
 
   // ------------------------------------------------------------------
@@ -392,6 +395,17 @@ export async function buildInvoicePacketPdf(params: {
     pageLog.push("\n[Section 4] No non-deleted DCs attached");
   }
 
+  const title = getPacketPdfTitle(invoice.invoiceNumber, invoice.poNumber || estimate?.poNumber);
+  const filename = getPacketPdfFilename(invoice.invoiceNumber, invoice.poNumber || estimate?.poNumber);
+
+  merged.setTitle(title);
+  merged.setSubject("Invoice Packet");
+  merged.setAuthor("Sunrise Media");
+  merged.setCreator("Sunrise Media ERP");
+  merged.setProducer("Sunrise Media ERP");
+  merged.setCreationDate(new Date());
+  merged.setModificationDate(new Date());
+
   pageLog.push(`\n=== Total pages in final PDF: ${totalPages} ===`);
   console.log(pageLog.join("\n"));
 
@@ -399,5 +413,7 @@ export async function buildInvoicePacketPdf(params: {
     buffer: Buffer.from(await merged.save()),
     pageLog,
     totalPages,
+    filename,
+    title,
   };
 }

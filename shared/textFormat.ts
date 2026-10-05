@@ -136,3 +136,65 @@ export function nameSimilarity(a: unknown, b: unknown): number {
 // loose that "Apollo" matches "Allen". Tuned empirically against the brand
 // override list and a small set of test pairs.
 export const NAME_SIMILAR_THRESHOLD = 0.82;
+
+/**
+ * Extract meaningful final invoice sequence number for client packet filename and metadata.
+ * Examples:
+ *   "26-27/SM/140"     -> "140"
+ *   "26-27/SM/141"     -> "141"
+ *   "SM/INV/26-27/140" -> "140"
+ *   "INV-140"          -> "140"
+ */
+export function extractInvoiceSequence(invoiceNumber?: string | null): string {
+  const raw = String(invoiceNumber || "").trim();
+  if (!raw) return "NA";
+  const slashParts = raw.split("/").map(s => s.trim()).filter(Boolean);
+  const candidate = slashParts.pop() || raw;
+  const hyphenParts = candidate.split("-").map(s => s.trim()).filter(Boolean);
+  const token = hyphenParts.length > 1 && !/^\d{2}$/.test(hyphenParts[hyphenParts.length - 1])
+    ? hyphenParts.pop()!
+    : candidate;
+  const sanitized = token.replace(/[/\\?%*:|"<>]/g, "").trim();
+  return sanitized || "NA";
+}
+
+/**
+ * Sanitize and extract clean PO number. Returns "NA" if unavailable.
+ */
+export function extractPoNumber(poNumber?: string | null): string {
+  const raw = String(poNumber || "").trim();
+  if (
+    !raw ||
+    raw === "—" ||
+    raw === "-" ||
+    raw.toUpperCase() === "N/A" ||
+    raw.toUpperCase() === "NOT AVAILABLE" ||
+    raw.toUpperCase() === "NA"
+  ) {
+    return "NA";
+  }
+  const sanitized = raw.replace(/[/\\?%*:|"<>]/g, "").trim();
+  return sanitized || "NA";
+}
+
+/**
+ * Standard packet PDF filename format:
+ * Inv_<invoice-number>_PO_<po-number>.pdf
+ * Example: Inv_140_PO_6010032186.pdf or Inv_140_PO_NA.pdf
+ */
+export function getPacketPdfFilename(invoiceNumber?: string | null, poNumber?: string | null): string {
+  const inv = extractInvoiceSequence(invoiceNumber);
+  const po = extractPoNumber(poNumber);
+  return `Inv_${inv}_PO_${po}.pdf`;
+}
+
+/**
+ * Standard packet PDF metadata title:
+ * Inv_<invoice-number>_PO_<po-number>
+ * Example: Inv_140_PO_6010032186
+ */
+export function getPacketPdfTitle(invoiceNumber?: string | null, poNumber?: string | null): string {
+  const inv = extractInvoiceSequence(invoiceNumber);
+  const po = extractPoNumber(poNumber);
+  return `Inv_${inv}_PO_${po}`;
+}

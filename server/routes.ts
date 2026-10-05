@@ -5227,7 +5227,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
       res.setHeader("Content-Type", "application/pdf");
-      res.setHeader("Content-Disposition", `attachment; filename="invoice-packet-${invoiceId}.pdf"`);
+      res.setHeader("Content-Disposition", `attachment; filename="${result.filename}"`);
       res.setHeader("Content-Length", result.buffer.length);
       res.setHeader("X-Packet-Pages", String(result.totalPages));
       res.send(result.buffer);

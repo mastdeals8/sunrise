@@ -1,6 +1,7 @@
-import React, { useMemo } from "react";
+import React, { useMemo, useState } from "react";
 import { formatCurrency } from "@/utils/format";
 import { orderedStoreKeysFromGrouping } from "../pages/operations/utils/estimateOrdering";
+import { Copy, Check, Mail } from "lucide-react";
 
 export interface InvoiceSummaryRow {
   field: string;
@@ -11,13 +12,17 @@ interface InvoiceSummaryDocumentProps {
   packet: any;
   sellerProfile?: any;
   pages?: any[];
+  onCopySuccess?: () => void;
 }
 
 export function getInvoiceSummaryRows(packet: any, sellerProfile: any, pages?: any[]): InvoiceSummaryRow[] {
   if (!packet) return [];
 
   // 1. PO No
-  const poNo = String(packet.invoice?.poNumber || packet.estimate?.poNumber || "").trim() || "—";
+  const rawPo = packet.invoice?.poNumber || packet.estimate?.poNumber;
+  const poNo = rawPo && String(rawPo).trim() && String(rawPo).trim() !== "—" && String(rawPo).trim() !== "N/A"
+    ? String(rawPo).trim()
+    : "Not Available";
 
   // 2. Invoice No
   const invoiceNo = String(packet.invoice?.invoiceNumber || "").trim() || "—";
@@ -27,14 +32,21 @@ export function getInvoiceSummaryRows(packet: any, sellerProfile: any, pages?: a
   const invoiceAmtPostGst = formatCurrency(rawTotal);
 
   // 4. Invoice Date
-  const rawDate = packet.invoice?.date;
   let invoiceDate = "—";
+  const rawDate = packet.invoice?.date;
   if (rawDate) {
-    const d = new Date(rawDate);
-    if (!isNaN(d.getTime())) {
-      invoiceDate = d.toLocaleDateString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric" });
+    if (typeof rawDate === "string" && /^\d{2}\/\d{2}\/\d{4}$/.test(rawDate.trim())) {
+      invoiceDate = rawDate.trim();
     } else {
-      invoiceDate = String(rawDate);
+      const d = new Date(rawDate);
+      if (!isNaN(d.getTime())) {
+        const dd = String(d.getDate()).padStart(2, "0");
+        const mm = String(d.getMonth() + 1).padStart(2, "0");
+        const yyyy = d.getFullYear();
+        invoiceDate = `${dd}/${mm}/${yyyy}`;
+      } else {
+        invoiceDate = String(rawDate);
+      }
     }
   }
 
@@ -101,7 +113,12 @@ export function getInvoiceSummaryRows(packet: any, sellerProfile: any, pages?: a
   // 9. WCC
   let wccStatus = "Pending";
   if (noOfStoresCount === 0) {
-    wccStatus = "Not Applicable";
+    if (packet.challans && packet.challans.length > 0) {
+      const allSigned = packet.challans.every((dc: any) => Boolean(dc.signedChallanPath));
+      wccStatus = allSigned ? "OK" : "Pending";
+    } else {
+      wccStatus = "Not Applicable";
+    }
   } else {
     let allWccComplete = true;
     for (const sc of storeCodesList) {
@@ -135,7 +152,12 @@ export function getInvoiceSummaryRows(packet: any, sellerProfile: any, pages?: a
   // 10. Photo Proof
   let photoStatus = "Pending";
   if (noOfStoresCount === 0) {
-    photoStatus = "Not Applicable";
+    if (packet.challans && packet.challans.length > 0) {
+      const allPhotos = packet.challans.every((dc: any) => Boolean(dc.photoPath) || (Array.isArray(dc.metadata?.photos) && dc.metadata.photos.length > 0));
+      photoStatus = allPhotos ? "OK" : "Pending";
+    } else {
+      photoStatus = "Not Applicable";
+    }
   } else {
     let allPhotosComplete = true;
     for (const sc of storeCodesList) {
@@ -210,7 +232,7 @@ export function getInvoiceSummaryRows(packet: any, sellerProfile: any, pages?: a
   let transportMode = "Not Applicable";
 
   if (isTransportApplicable) {
-    transportBill = hasTransportDoc ? "Attached" : "Pending";
+    transportBill = hasTransportDoc ? "OK" : "Pending";
 
     let savedMode: string | null = null;
     // 1. Check storeGrouping
@@ -274,104 +296,190 @@ export function getInvoiceSummaryRows(packet: any, sellerProfile: any, pages?: a
   ];
 }
 
-const InvoiceSummaryDocument: React.FC<InvoiceSummaryDocumentProps> = ({ packet, sellerProfile, pages }) => {
+/**
+ * Build the exact email-ready plain text summary.
+ */
+export function buildInvoiceSummaryEmailText(rows: InvoiceSummaryRow[]): string {
+  const padField = (field: string) => {
+    if (field === "Invoice Amt Post GST") return "Invoice Amt Post GST   ";
+    if (field === "Transport Bill") return "Transport Bill ";
+    if (field === "Transport Mode") return "Transport Mode ";
+    return field.padEnd(13, " ");
+  };
+
+  const lines = [
+    "Dear Sir / Madam,",
+    "",
+    "Attached is the invoice for your reference. Please let us know if you need any additional information.",
+    "",
+    "Kindly initiate the GRN process and notify us when it is completed.",
+    "",
+    ...rows.map(r => `${padField(r.field)}${r.value}`),
+  ];
+  return lines.join("\n");
+}
+
+/**
+ * Build the HTML email summary for rich text clipboard pasting in Gmail/Outlook.
+ */
+export function buildInvoiceSummaryEmailHtml(rows: InvoiceSummaryRow[]): string {
+  const escapeHtml = (val: any) =>
+    String(val ?? "").replace(/[&<>"']/g, ch => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      "\"": "&quot;",
+      "'": "&#039;",
+    }[ch] || ch));
+
+  const tableRows = rows.map(r => `
+    <tr>
+      <td style="padding: 2px 24px 2px 0; font-weight: 600; color: #1e293b; white-space: nowrap; font-family: Arial, sans-serif;">${escapeHtml(r.field)}</td>
+      <td style="padding: 2px 0; color: #0f172a; font-family: Arial, sans-serif;">${escapeHtml(r.value)}</td>
+    </tr>
+  `).join("");
+
+  return `
+    <div style="font-family: Arial, sans-serif; font-size: 13px; line-height: 1.6; color: #0f172a;">
+      <p style="margin: 0 0 12px 0;">Dear Sir / Madam,</p>
+      <p style="margin: 0 0 12px 0;">Attached is the invoice for your reference. Please let us know if you need any additional information.</p>
+      <p style="margin: 0 0 16px 0;">Kindly initiate the GRN process and notify us when it is completed.</p>
+      <table style="border-collapse: collapse; font-size: 13px; font-family: Arial, sans-serif;">
+        <tbody>
+          ${tableRows}
+        </tbody>
+      </table>
+    </div>
+  `.trim();
+}
+
+/**
+ * Copy the complete invoice email summary to clipboard.
+ * Supports both rich HTML and formatted plain text.
+ */
+export async function copyInvoiceSummaryToClipboard(
+  packet: any,
+  sellerProfile: any,
+  pages?: any[]
+): Promise<boolean> {
+  if (!packet) return false;
+  const rows = getInvoiceSummaryRows(packet, sellerProfile, pages);
+  const plainText = buildInvoiceSummaryEmailText(rows);
+  const html = buildInvoiceSummaryEmailHtml(rows);
+
+  try {
+    if (navigator.clipboard && "ClipboardItem" in window) {
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          "text/html": new Blob([html], { type: "text/html" }),
+          "text/plain": new Blob([plainText], { type: "text/plain" }),
+        }),
+      ]);
+    } else {
+      await navigator.clipboard.writeText(plainText);
+    }
+    return true;
+  } catch (err) {
+    try {
+      await navigator.clipboard.writeText(plainText);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
+/**
+ * Invoice Summary Document Component:
+ * Dedicated Email Utility UI in Invoice Packet Builder.
+ * Marked print:hidden so it is NEVER printed.
+ */
+const InvoiceSummaryDocument: React.FC<InvoiceSummaryDocumentProps> = ({
+  packet,
+  sellerProfile,
+  pages,
+  onCopySuccess,
+}) => {
+  const [copied, setCopied] = useState(false);
   const rows = useMemo(() => getInvoiceSummaryRows(packet, sellerProfile, pages), [packet, sellerProfile, pages]);
+  const emailText = useMemo(() => buildInvoiceSummaryEmailText(rows), [rows]);
 
   if (!packet) return null;
 
+  const handleCopy = async () => {
+    const ok = await copyInvoiceSummaryToClipboard(packet, sellerProfile, pages);
+    if (ok) {
+      setCopied(true);
+      onCopySuccess?.();
+      window.setTimeout(() => setCopied(false), 2500);
+    }
+  };
+
   return (
-    <div
-      className="summary-print bg-white text-black"
-      style={{
-        width: "100%",
-        maxWidth: "800px",
-        margin: "0 auto",
-        backgroundColor: "#ffffff",
-        color: "#000000",
-        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
-        boxSizing: "border-box",
-        padding: "36px 32px",
-        minHeight: "750px",
-      }}
-    >
-      <div style={{ maxWidth: "600px", margin: "20px auto 0 auto" }}>
-        <table
-          style={{
-            width: "100%",
-            borderCollapse: "collapse",
-            border: "1.5px solid #000000",
-            backgroundColor: "#ffffff",
-            fontSize: "11px",
-            lineHeight: 1.35,
-          }}
-        >
-          <thead>
-            <tr>
-              <th
-                style={{
-                  border: "1px solid #000000",
-                  padding: "7px 12px",
-                  textAlign: "center",
-                  verticalAlign: "middle",
-                  fontWeight: 700,
-                  backgroundColor: "#ffffff",
-                  color: "#000000",
-                  width: "45%",
-                  letterSpacing: "0.2px",
-                }}
-              >
-                Field
-              </th>
-              <th
-                style={{
-                  border: "1px solid #000000",
-                  padding: "7px 12px",
-                  textAlign: "center",
-                  verticalAlign: "middle",
-                  fontWeight: 700,
-                  backgroundColor: "#ffffff",
-                  color: "#000000",
-                  width: "55%",
-                  letterSpacing: "0.2px",
-                }}
-              >
-                Value
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row, index) => (
-              <tr key={index} data-pdf-row>
-                <td
-                  style={{
-                    border: "1px solid #000000",
-                    padding: "6.5px 12px",
-                    textAlign: "center",
-                    verticalAlign: "middle",
-                    fontWeight: 600,
-                    color: "#000000",
-                    backgroundColor: "#ffffff",
-                  }}
-                >
-                  {row.field}
-                </td>
-                <td
-                  style={{
-                    border: "1px solid #000000",
-                    padding: "6.5px 12px",
-                    textAlign: "center",
-                    verticalAlign: "middle",
-                    fontWeight: 500,
-                    color: "#000000",
-                    backgroundColor: "#ffffff",
-                  }}
-                >
-                  {row.value}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+    <div className="invoice-summary-utility print:hidden bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden my-2">
+      <div className="p-4 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <Mail className="w-5 h-5 text-orange-600" />
+          <div>
+            <div className="flex items-center gap-2">
+              <h2 className="text-sm font-bold text-slate-800">Invoice Summary</h2>
+              <span className="text-[10px] font-semibold tracking-wider uppercase px-2 py-0.5 rounded bg-orange-100 text-orange-800">
+                Email Utility Only
+              </span>
+            </div>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Copy and paste directly into Gmail / Outlook for client handover. Not part of packet PDF or print.
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={handleCopy}
+            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition shadow-sm"
+          >
+            {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+            {copied ? "Copied ✓" : "Copy Summary"}
+          </button>
+          {copied && <span className="text-xs font-bold text-emerald-600">Copied ✓</span>}
+        </div>
+      </div>
+
+      <div className="p-5 space-y-4">
+        <div className="text-xs text-slate-700 bg-slate-50/70 border border-slate-200 rounded-lg p-3 leading-relaxed space-y-1">
+          <p className="font-semibold text-slate-800">Dear Sir / Madam,</p>
+          <p>Attached is the invoice for your reference. Please let us know if you need any additional information.</p>
+          <p>Kindly initiate the GRN process and notify us when it is completed.</p>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs border border-slate-200 rounded-lg overflow-hidden">
+            <tbody>
+              {rows.map((row, index) => (
+                <tr key={index} className={index % 2 === 0 ? "bg-white" : "bg-slate-50/50"}>
+                  <td className="py-2 px-3 font-semibold text-slate-600 border-b border-slate-100 w-1/3 whitespace-nowrap">
+                    {row.field}
+                  </td>
+                  <td className="py-2 px-3 text-slate-900 font-mono font-medium border-b border-slate-100">
+                    {row.value}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="pt-2 flex items-center justify-between text-xs text-slate-400 border-t border-slate-100">
+          <span>Click "Copy Summary" to copy the exact text formatted for email.</span>
+          <button
+            type="button"
+            onClick={handleCopy}
+            className="text-emerald-700 hover:text-emerald-800 font-bold hover:underline"
+          >
+            {copied ? "Copied ✓" : "Copy to Clipboard"}
+          </button>
+        </div>
       </div>
     </div>
   );
