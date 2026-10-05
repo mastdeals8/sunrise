@@ -990,7 +990,7 @@ const dataUrlToBytes = (dataUrl: string): Uint8Array => {
                   <div className="flex gap-1.5">
                     <button
                       onClick={() => runPacketAction("print", true, "all")}
-                      disabled={building}
+                      disabled={building || included.length === 0}
                       className="flex items-center gap-1 px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 disabled:opacity-60 text-white text-xs font-semibold"
                       title="Print Invoice Packet (all pages)"
                     >
@@ -998,7 +998,7 @@ const dataUrlToBytes = (dataUrl: string): Uint8Array => {
                     </button>
                     <button
                       onClick={() => runPacketAction("download", true, "all")}
-                      disabled={building}
+                      disabled={building || included.length === 0}
                       className="flex items-center gap-1 px-2.5 py-1 rounded bg-orange-600 hover:bg-orange-700 disabled:opacity-60 text-white text-xs font-semibold"
                       title="Generate a single client-ready PDF in submission order"
                     >
