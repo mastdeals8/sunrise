@@ -2,7 +2,7 @@ import React from "react";
 import { Pager, usePagedList } from "@/components/Pager";
 import { createPortal } from "react-dom";
 import { Link } from "wouter";
-import { Archive, Building2, Check, CheckCircle2, ChevronDown, ChevronRight, ClipboardPaste, Copy, CreditCard as Edit3, Eye, FilePlus2, FileSpreadsheet, FileText, FileUp, Filter, FolderOpen, MoveDown, MoveUp, Plus, Receipt, Redo2, Search, Trash, Undo2 } from "lucide-react";
+import { Archive, Building2, Check, CheckCircle2, ChevronDown, ChevronRight, ClipboardPaste, Copy, CreditCard as Edit3, Eye, FilePlus2, FileSpreadsheet, FileText, FileUp, Filter, FolderOpen, MoreHorizontal, MoveDown, MoveUp, Plus, Receipt, Redo2, Search, Trash, Undo2 } from "lucide-react";
 import { displayFormatLabel, isAblblFormat, normalizeDisplayName, normalizeFormatMode, normalizeGstinPan } from "../../../../../shared/textFormat";
 import { getEstimateFormatProfile, isRetailSingleStoreFormat } from "../../../../../shared/estimateProfiles";
 import { formatProductDetails, sameDisplayText } from "../../../../../shared/productDetails";
@@ -884,6 +884,44 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
   } | null>(null);
   const [createClientFor, setCreateClientFor] = React.useState<{ initialName: string } | null>(null);
   const [storeWiseInvoiceEst, setStoreWiseInvoiceEst] = React.useState<any | null>(null);
+  const [openInvoiceMenu, setOpenInvoiceMenu] = React.useState<{
+    estimate: any;
+    rect: DOMRect;
+    completeInv: any;
+    storeInvs: any[];
+  } | null>(null);
+  const [openMoreMenu, setOpenMoreMenu] = React.useState<{
+    estimate: any;
+    rect: DOMRect;
+    hasInv: boolean;
+    estChallans: any[];
+    isAblbl: boolean;
+  } | null>(null);
+
+  React.useEffect(() => {
+    if (!openInvoiceMenu && !openMoreMenu) return;
+
+    const handleClose = () => {
+      setOpenInvoiceMenu(null);
+      setOpenMoreMenu(null);
+    };
+
+    const handleKey = (ev: KeyboardEvent) => {
+      if (ev.key === "Escape") handleClose();
+    };
+
+    window.addEventListener("click", handleClose);
+    window.addEventListener("scroll", handleClose, true);
+    window.addEventListener("resize", handleClose);
+    document.addEventListener("keydown", handleKey);
+
+    return () => {
+      window.removeEventListener("click", handleClose);
+      window.removeEventListener("scroll", handleClose, true);
+      window.removeEventListener("resize", handleClose);
+      document.removeEventListener("keydown", handleKey);
+    };
+  }, [openInvoiceMenu, openMoreMenu]);
 
   const {
     showEstimateForm,
@@ -1663,41 +1701,22 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                             </td>
 	                            <td className="px-3 py-2 text-right text-slate-900 font-bold font-mono">{formatCurrency(e.totalAmount)}</td>
 	                            <td className="px-3 py-2 text-center">
-	                              <div className="inline-flex items-center gap-1 justify-center flex-nowrap">
-	                                {/* 1. View Estimate */}
-	                                <button
-	                                  onClick={() => handleViewEstimateDetails(e, "estimate")}
-	                                  title="View estimate details & preview"
-	                                  className="inline-flex h-7 w-7 items-center justify-center rounded border border-slate-200 bg-white text-slate-700 hover:bg-slate-900 hover:text-white transition shadow-xs"
-	                                  aria-label="View estimate"
-	                                >
-	                                  <Eye className="w-3.5 h-3.5" />
-	                                </button>
-
-	                                {/* 2. Edit (only if not submitted/archived) */}
+	                              <div className="inline-flex items-center gap-1.5 justify-center flex-nowrap">
+	                                {/* 1. Edit (only if not submitted/archived) */}
 	                                {e.status !== "archived" && e.status !== "submitted" && (
 	                                  <button
+	                                    type="button"
 	                                    onClick={() => handleEditEstimate(e)}
 	                                    title="Edit estimate"
-	                                    className="inline-flex h-7 w-7 items-center justify-center rounded border border-slate-200 bg-white text-slate-700 hover:bg-slate-100 transition shadow-xs"
+	                                    className="inline-flex h-7 items-center gap-1 rounded border border-slate-200 bg-white px-2 text-[10px] font-semibold text-slate-700 hover:bg-slate-100 transition shadow-xs cursor-pointer"
 	                                    aria-label="Edit estimate"
 	                                  >
 	                                    <Edit3 className="w-3.5 h-3.5" />
+	                                    Edit
 	                                  </button>
 	                                )}
 
-	                                {/* Duplicate Estimate */}
-	                                <button
-	                                  type="button"
-	                                  onClick={() => handleDuplicateEstimate?.(e)}
-	                                  title="Duplicate Estimate"
-	                                  className="inline-flex h-7 w-7 items-center justify-center rounded border border-slate-200 bg-white text-slate-700 hover:bg-slate-100 transition shadow-xs"
-	                                  aria-label="Duplicate Estimate"
-	                                >
-	                                  <Copy className="w-3.5 h-3.5" />
-	                                </button>
-
-	                                {/* 3. Project / Execution Workspace */}
+	                                {/* 2. Project Workspace */}
 	                                <Link
 	                                  href={`/projects?estimateId=${e.id}`}
 	                                  title="Open project workspace & timeline"
@@ -1707,108 +1726,63 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
 	                                  Project
 	                                </Link>
 
-	                                {/* 4. Documents */}
+	                                {/* 3. Invoice Dropdown */}
 	                                <button
 	                                  type="button"
-	                                  onClick={() => openDocumentListForEstimate?.(e, isAblbl ? "wcc" : "dc")}
-	                                  title={`View documents (${estChallans.length} challans, PO)`}
-	                                  className="inline-flex h-7 items-center gap-1 rounded border border-slate-200 bg-white px-2 text-[10px] font-semibold text-slate-700 hover:bg-slate-100 transition shadow-xs"
-	                                >
-	                                  <FileText className="w-3.5 h-3.5 text-slate-500" />
-	                                  Docs
-	                                </button>
-
-	                                {/* Excel Export */}
-	                                <button
-	                                  type="button"
-	                                  title="Download as Excel"
-	                                  onClick={async (ev) => {
-	                                    ev.preventDefault();
-	                                    if (isBoltMode) {
-	                                      const items = await fetchEstimateItems(token, e.id);
-	                                      const client = clients.find((c: any) => c.id === e.clientId);
-	                                      await exportEstimateToExcel(e, items, client?.name, sellerProfile, stores, products);
+	                                  onClick={(ev) => {
+	                                    ev.stopPropagation();
+	                                    const rect = ev.currentTarget.getBoundingClientRect();
+	                                    if (openInvoiceMenu?.estimate.id === e.id) {
+	                                      setOpenInvoiceMenu(null);
 	                                    } else {
-	                                      window.open(`/api/operations/estimates/${e.id}/export-excel`, "_blank");
+	                                      setOpenMoreMenu(null);
+	                                      const completeInv = estInvoices.find((i: any) => !i.storeId && !i.storeCode);
+	                                      const storeInvs = estInvoices.filter((i: any) => Boolean(i.storeId || i.storeCode));
+	                                      setOpenInvoiceMenu({
+	                                        estimate: e,
+	                                        rect,
+	                                        completeInv,
+	                                        storeInvs,
+	                                      });
 	                                    }
 	                                  }}
-	                                  className="inline-flex h-7 w-7 items-center justify-center rounded border border-slate-200 bg-white text-emerald-700 hover:bg-emerald-50 transition shadow-xs"
-	                                  aria-label="Export Excel"
+	                                  title="Invoice operations"
+	                                  className={`inline-flex h-7 items-center gap-1 rounded border px-2 text-[10px] font-bold transition shadow-xs cursor-pointer ${
+	                                    hasInv
+	                                      ? "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
+	                                      : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+	                                  }`}
 	                                >
-	                                  <FileSpreadsheet className="w-3.5 h-3.5" />
+	                                  <Receipt className="w-3.5 h-3.5" />
+	                                  Invoice
+	                                  <ChevronDown className="w-3 h-3 text-slate-400" />
 	                                </button>
 
-	                                {/* 5. Invoice action: only show '+ Inv' if invoice is not yet made */}
-	                                {!hasInv && (
-	                                  <button
-	                                    type="button"
-	                                    onClick={() => openInvoiceEditor?.({ estimateId: e.id })}
-	                                    title="Generate invoice for this estimate"
-	                                    className="inline-flex h-7 items-center gap-1 rounded border border-blue-200 bg-blue-50/60 px-2 text-[10px] font-semibold text-blue-600 hover:bg-blue-100 transition shadow-xs"
-	                                  >
-	                                    <Receipt className="w-3.5 h-3.5" />
-	                                    + Inv
-	                                  </button>
-	                                )}
-
-	                                {/* Store-wise Invoice Action */}
+	                                {/* 4. More Actions Menu */}
 	                                <button
 	                                  type="button"
-	                                  onClick={() => setStoreWiseInvoiceEst(e)}
-	                                  title="Generate store-wise invoices for this estimate"
-	                                  className="inline-flex h-7 items-center gap-1 rounded border border-orange-200 bg-orange-50/80 px-2 text-[10px] font-bold text-orange-700 hover:bg-orange-100 transition shadow-xs"
+	                                  onClick={(ev) => {
+	                                    ev.stopPropagation();
+	                                    const rect = ev.currentTarget.getBoundingClientRect();
+	                                    if (openMoreMenu?.estimate.id === e.id) {
+	                                      setOpenMoreMenu(null);
+	                                    } else {
+	                                      setOpenInvoiceMenu(null);
+	                                      setOpenMoreMenu({
+	                                        estimate: e,
+	                                        rect,
+	                                        hasInv,
+	                                        estChallans,
+	                                        isAblbl,
+	                                      });
+	                                    }
+	                                  }}
+	                                  title="More actions"
+	                                  className="inline-flex h-7 w-7 items-center justify-center rounded border border-slate-200 bg-white text-slate-600 hover:bg-slate-100 hover:text-slate-900 transition shadow-xs cursor-pointer"
+	                                  aria-label="More actions"
 	                                >
-	                                  <Building2 className="w-3.5 h-3.5" />
-	                                  Store Invoices
+	                                  <MoreHorizontal className="w-3.5 h-3.5" />
 	                                </button>
-
-	                                {/* 6. Submitted Workflow (P0 Business Rules) */}
-	                                {e.status !== "archived" && e.status !== "submitted" ? (
-	                                  hasInv && (
-	                                    <button
-	                                      type="button"
-	                                      onClick={() => handleMarkSubmitted(e)}
-	                                      title="Invoice submitted to client for payment processing (archives estimate)"
-	                                      className="inline-flex h-7 items-center gap-1 rounded border border-purple-300 bg-purple-50 px-2 text-[10px] font-bold text-purple-700 hover:bg-purple-600 hover:text-white transition shadow-xs"
-	                                    >
-	                                      <CheckCircle2 className="w-3 h-3 text-purple-600 group-hover:text-white" />
-	                                      Submitted
-	                                    </button>
-	                                  )
-	                                ) : (
-	                                  <>
-	                                    <span
-	                                      title="Estimate archived / invoice submitted to client"
-	                                      className="inline-flex h-7 items-center gap-1 rounded border border-purple-200 bg-purple-50/70 px-2 text-[10px] font-semibold text-purple-700"
-	                                    >
-	                                      <Check className="w-3 h-3 text-purple-600" />
-	                                      Submitted
-	                                    </span>
-	                                    {estimateStatusFilter === "archived" && (
-	                                      <button
-	                                        type="button"
-	                                        onClick={() => handleUnarchiveEstimate(e)}
-	                                        title="Restore estimate to active register"
-	                                        className="inline-flex h-7 items-center gap-1 rounded border border-slate-200 bg-white px-2 text-[10px] font-bold text-slate-600 hover:bg-slate-100 transition shadow-xs"
-	                                      >
-	                                        <Archive className="w-3 h-3 text-slate-500" />
-	                                        Restore
-	                                      </button>
-	                                    )}
-	                                  </>
-	                                )}
-
-	                                {/* 7. Delete (only permitted for active estimates) */}
-	                                {e.status !== "archived" && e.status !== "submitted" && (
-	                                  <button
-	                                    onClick={() => handleDeleteEstimate(e)}
-	                                    title="Delete estimate"
-	                                    className="inline-flex h-7 w-7 items-center justify-center rounded border border-red-200 bg-white text-red-500 hover:bg-red-50 hover:text-red-700 transition shadow-xs"
-	                                    aria-label="Delete estimate"
-	                                  >
-	                                    <Trash className="w-3.5 h-3.5" />
-	                                  </button>
-	                                )}
 	                              </div>
 	                            </td>
                           </tr>
@@ -3981,6 +3955,249 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
             }}
             openInvoiceEditor={openInvoiceEditor}
           />
+
+          {/* Invoice Operations Floating Popover */}
+          {openInvoiceMenu && createPortal((
+            <div
+              style={{
+                position: "fixed",
+                top: `${Math.max(
+                  8,
+                  window.innerHeight - openInvoiceMenu.rect.bottom < 190
+                    ? openInvoiceMenu.rect.top - 180
+                    : openInvoiceMenu.rect.bottom + 4
+                )}px`,
+                right: `${Math.max(8, window.innerWidth - openInvoiceMenu.rect.right)}px`,
+                width: "288px",
+                zIndex: 9999,
+              }}
+              onClick={(e) => e.stopPropagation()}
+              className="rounded-xl border border-slate-200 bg-white p-1.5 shadow-2xl text-left animate-in fade-in zoom-in-95 duration-100 ring-1 ring-black/5"
+            >
+              <div className="px-2.5 py-1.5 border-b border-slate-100 flex items-center justify-between">
+                <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">
+                  INVOICE
+                </span>
+                <span className="text-[11px] font-mono font-bold text-slate-700 truncate max-w-[170px]">
+                  {openInvoiceMenu.estimate.estimateNumber}
+                </span>
+              </div>
+
+              <div className="p-1 space-y-1">
+                {/* Complete Invoice */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const est = openInvoiceMenu.estimate;
+                    const cInv = openInvoiceMenu.completeInv;
+                    setOpenInvoiceMenu(null);
+                    if (cInv) {
+                      openInvoiceEditor?.({ invoiceId: cInv.id });
+                    } else {
+                      openInvoiceEditor?.({ estimateId: est.id });
+                    }
+                  }}
+                  className="w-full flex items-start gap-2.5 p-2 rounded-lg text-left hover:bg-blue-50/70 transition group cursor-pointer"
+                >
+                  <div className="w-7 h-7 rounded-md bg-blue-50 border border-blue-200 flex items-center justify-center text-blue-600 shrink-0 mt-0.5 group-hover:bg-blue-100 transition">
+                    <Receipt className="w-3.5 h-3.5" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-slate-800 group-hover:text-blue-700 transition">
+                        Complete Invoice
+                      </span>
+                      {openInvoiceMenu.completeInv && (
+                        <span className="text-[9px] font-mono font-bold px-1.5 py-0.2 rounded bg-blue-100 text-blue-800 border border-blue-200">
+                          {openInvoiceMenu.completeInv.invoiceNumber}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-0.5 leading-tight">
+                      {openInvoiceMenu.completeInv
+                        ? "View complete estimate invoice"
+                        : "Create / view complete estimate invoice"}
+                    </p>
+                  </div>
+                </button>
+
+                {/* Store-wise Invoices */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const est = openInvoiceMenu.estimate;
+                    setOpenInvoiceMenu(null);
+                    setStoreWiseInvoiceEst(est);
+                  }}
+                  className="w-full flex items-start gap-2.5 p-2 rounded-lg text-left hover:bg-orange-50/70 transition group cursor-pointer"
+                >
+                  <div className="w-7 h-7 rounded-md bg-orange-50 border border-orange-200 flex items-center justify-center text-orange-600 shrink-0 mt-0.5 group-hover:bg-orange-100 transition">
+                    <Building2 className="w-3.5 h-3.5" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-slate-800 group-hover:text-orange-700 transition">
+                        Store-wise Invoices
+                      </span>
+                      {openInvoiceMenu.storeInvs.length > 0 && (
+                        <span className="text-[9px] font-mono font-bold px-1.5 py-0.2 rounded bg-orange-100 text-orange-800 border border-orange-200">
+                          {openInvoiceMenu.storeInvs.length} created
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-0.5 leading-tight">
+                      Create / view invoices by store
+                    </p>
+                  </div>
+                </button>
+              </div>
+            </div>
+          ), document.body)}
+
+          {/* More Actions Floating Popover */}
+          {openMoreMenu && createPortal((
+            <div
+              style={{
+                position: "fixed",
+                top: `${Math.max(
+                  8,
+                  window.innerHeight - openMoreMenu.rect.bottom < 260
+                    ? openMoreMenu.rect.top - 250
+                    : openMoreMenu.rect.bottom + 4
+                )}px`,
+                right: `${Math.max(8, window.innerWidth - openMoreMenu.rect.right)}px`,
+                width: "220px",
+                zIndex: 9999,
+              }}
+              onClick={(e) => e.stopPropagation()}
+              className="rounded-xl border border-slate-200 bg-white p-1.5 shadow-2xl text-left text-xs animate-in fade-in zoom-in-95 duration-100 ring-1 ring-black/5"
+            >
+              <div className="px-2 py-1 border-b border-slate-100 text-[10px] font-black uppercase tracking-wider text-slate-400">
+                MORE ACTIONS
+              </div>
+
+              <div className="py-1 space-y-0.5">
+                {/* View Estimate */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const est = openMoreMenu.estimate;
+                    setOpenMoreMenu(null);
+                    handleViewEstimateDetails(est, "estimate");
+                  }}
+                  className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-slate-700 hover:bg-slate-100 transition text-left cursor-pointer"
+                >
+                  <Eye className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                  <span className="font-medium">View Estimate</span>
+                </button>
+
+                {/* Duplicate Estimate */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const est = openMoreMenu.estimate;
+                    setOpenMoreMenu(null);
+                    handleDuplicateEstimate?.(est);
+                  }}
+                  className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-slate-700 hover:bg-slate-100 transition text-left cursor-pointer"
+                >
+                  <Copy className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                  <span className="font-medium">Duplicate Estimate</span>
+                </button>
+
+                {/* Documents */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const est = openMoreMenu.estimate;
+                    const isAblbl = openMoreMenu.isAblbl;
+                    setOpenMoreMenu(null);
+                    openDocumentListForEstimate?.(est, isAblbl ? "wcc" : "dc");
+                  }}
+                  className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-slate-700 hover:bg-slate-100 transition text-left cursor-pointer"
+                >
+                  <FileText className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                  <span className="font-medium">Documents ({openMoreMenu.estChallans.length})</span>
+                </button>
+
+                {/* Download Excel */}
+                <button
+                  type="button"
+                  onClick={async (ev) => {
+                    ev.preventDefault();
+                    const est = openMoreMenu.estimate;
+                    setOpenMoreMenu(null);
+                    if (isBoltMode) {
+                      const items = await fetchEstimateItems(token, est.id);
+                      const client = clients.find((c: any) => c.id === est.clientId);
+                      await exportEstimateToExcel(est, items, client?.name, sellerProfile, stores, products);
+                    } else {
+                      window.open(`/api/operations/estimates/${est.id}/export-excel`, "_blank");
+                    }
+                  }}
+                  className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-slate-700 hover:bg-slate-100 transition text-left cursor-pointer"
+                >
+                  <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                  <span className="font-medium">Download Excel</span>
+                </button>
+              </div>
+
+              {/* Workflow actions: Submit / Restore / Delete */}
+              <div className="border-t border-slate-100 pt-1 space-y-0.5">
+                {openMoreMenu.estimate.status !== "archived" && openMoreMenu.estimate.status !== "submitted" && openMoreMenu.hasInv && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const est = openMoreMenu.estimate;
+                      setOpenMoreMenu(null);
+                      handleMarkSubmitted(est);
+                    }}
+                    className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-purple-700 hover:bg-purple-50 transition text-left font-semibold cursor-pointer"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5 text-purple-600 shrink-0" />
+                    <span>Mark as Submitted</span>
+                  </button>
+                )}
+
+                {openMoreMenu.estimate.status === "submitted" && (
+                  <div className="px-2 py-1 text-[11px] font-semibold text-purple-700 flex items-center gap-1.5 bg-purple-50 rounded-md">
+                    <Check className="w-3 h-3 text-purple-600" />
+                    <span>Submitted to Client</span>
+                  </div>
+                )}
+
+                {estimateStatusFilter === "archived" && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const est = openMoreMenu.estimate;
+                      setOpenMoreMenu(null);
+                      handleUnarchiveEstimate(est);
+                    }}
+                    className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-slate-700 hover:bg-slate-100 transition text-left cursor-pointer"
+                  >
+                    <Archive className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                    <span className="font-medium">Restore Estimate</span>
+                  </button>
+                )}
+
+                {openMoreMenu.estimate.status !== "archived" && openMoreMenu.estimate.status !== "submitted" && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const est = openMoreMenu.estimate;
+                      setOpenMoreMenu(null);
+                      handleDeleteEstimate(est);
+                    }}
+                    className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-red-600 hover:bg-red-50 transition text-left font-medium cursor-pointer"
+                  >
+                    <Trash className="w-3.5 h-3.5 text-red-500 shrink-0" />
+                    <span>Delete Estimate</span>
+                  </button>
+                )}
+              </div>
+            </div>
+          ), document.body)}
         </div>
   );
 };
