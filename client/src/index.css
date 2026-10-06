@@ -633,6 +633,11 @@ td.eb-cell, th.eb-cell {
 .eb-sheet-savebar .eb-save-primary:hover {
   background: #f97316;
 }
+.eb-sheet-savebar .eb-save-primary:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  pointer-events: none;
+}
 .eb-sheet-body {
   flex: 1 1 auto;
   min-height: 0;

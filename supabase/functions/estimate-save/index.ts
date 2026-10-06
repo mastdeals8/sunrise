@@ -265,7 +265,20 @@ Deno.serve(async (req: Request) => {
         }
       }
 
-      // Insert estimate
+      // Atomic save via RPC: inserts estimate + items in a single transaction.
+      // If items insert fails, the entire transaction rolls back in Postgres.
+      const { data: atomicCreated, error: rpcErr } = await db.rpc("create_estimate_atomic", {
+        p_estimate: estimate,
+        p_items: items,
+      });
+
+      if (!rpcErr && atomicCreated) {
+        return jsonResponse(atomicCreated, 201);
+      }
+
+      console.warn("[estimate-save] create_estimate_atomic returned error, falling back to manual insert with rollback:", rpcErr?.message);
+
+      // Fallback: manual insert with guaranteed rollback if item insertion fails
       const { data: created, error: createErr } = await db
         .from("estimates")
         .insert(estimate)
@@ -280,7 +293,11 @@ Deno.serve(async (req: Request) => {
         estimate_id: created.id,
       }));
       const { error: itemErr } = await db.from("estimate_items").insert(itemRows);
-      if (itemErr) return errorResponse(`Items insert failed: ${itemErr.message}`, 400);
+      if (itemErr) {
+        // Rollback: delete the stranded estimate header so no empty duplicate remains
+        await db.from("estimates").delete().eq("id", created.id);
+        return errorResponse(`Items insert failed: ${itemErr.message}`, 400);
+      }
 
       return jsonResponse(created, 201);
     }

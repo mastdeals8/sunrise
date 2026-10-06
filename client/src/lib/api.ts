@@ -915,11 +915,55 @@ export async function createEstimate(
     if (!res.ok) throw new Error((await res.json()).message ?? "Failed to create estimate");
     return res.json();
   }
+  // 1. Try atomic RPC save directly in PostgreSQL (single transaction, guaranteed rollback)
+  try {
+    const { data: atomicCreated, error: rpcErr } = await supabase.rpc("create_estimate_atomic", {
+      p_estimate: payload.estimate,
+      p_items: payload.items,
+    });
+    if (!rpcErr && atomicCreated) {
+      return toCamel(atomicCreated);
+    }
+    if (rpcErr) {
+      console.warn("[api] create_estimate_atomic RPC returned error:", rpcErr.message);
+    }
+  } catch (err) {
+    console.warn("[api] create_estimate_atomic error:", err);
+  }
+
+  // 2. Fallback to Edge Function
   const res = await edgeFetch("estimate-save", token, {
     method: "POST",
     body: JSON.stringify(payload),
   });
-  if (!res.ok) throw new Error((await res.json()).message ?? "Failed to create estimate");
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    const errMsg = err.message ?? "Failed to create estimate";
+    // Safety check: if edge function failed after creating header, cleanup the empty orphan estimate
+    const estNum = (payload.estimate?.estimateNumber || payload.estimate?.estimate_number) as string | undefined;
+    if (estNum) {
+      try {
+        const { data: orphan } = await supabase
+          .from("estimates")
+          .select("id")
+          .eq("estimate_number", estNum)
+          .maybeSingle();
+        if (orphan?.id) {
+          const { count } = await supabase
+            .from("estimate_items")
+            .select("id", { count: "exact", head: true })
+            .eq("estimate_id", orphan.id);
+          if (count === 0) {
+            await supabase.from("estimates").delete().eq("id", orphan.id);
+            console.warn(`[api] Cleaned up orphaned empty estimate #${orphan.id} (${estNum}) after failed save`);
+          }
+        }
+      } catch (cleanErr) {
+        console.warn("[api] Orphan cleanup check error:", cleanErr);
+      }
+    }
+    throw new Error(errMsg);
+  }
   return toCamel(await res.json());
 }
 
@@ -977,6 +1021,7 @@ export async function duplicateEstimate(
 
   const cleanItems = (items || []).map((it: any, idx: number) => ({
     productId: it.productId ? Number(it.productId) : null,
+    storeId: it.storeId != null ? Number(it.storeId) : (cleanEstimatePayload.storeId ? Number(cleanEstimatePayload.storeId) : null),
     itemName: it.itemName || "",
     description: it.description || null,
     quantity: Number(it.quantity) || 1,

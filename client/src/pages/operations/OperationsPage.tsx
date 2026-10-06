@@ -408,6 +408,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
   // within the form but not page reloads.
   const [rowClipboard, setRowClipboard] = useState<EstimateItemInput[] | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const isSavingEstimateRef = useRef(false);
   const [isDirty, setIsDirty] = useState(false);
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
   const dirtyEnabledRef = useRef(false);
@@ -1284,7 +1285,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
   };
 
   // Keeps only the first packing/installation/transport row per store.
-  const deduplicateSpecialCharges = <T extends { lineType?: string; storeId?: string }>(items: T[]): T[] => {
+  const deduplicateSpecialCharges = <T extends { lineType?: string; storeId?: string | number | null }>(items: T[]): T[] => {
     const seen = new Map<string, Set<string>>();
     return items.filter(item => {
       if (!["packing", "installation", "transport"].includes(item.lineType ?? "")) return true;
@@ -1760,13 +1761,29 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
 
   const handleCreateEstimate = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (isSaving) return;
-    if ((!isBoltMode && !estNumber) || !estClientId || !estBrandId) return;
-    if (!estTitle && !estSubject) return;
+    if (isSavingEstimateRef.current || isSaving) {
+      console.warn("[save] Save ignored — save already in progress");
+      return;
+    }
+    isSavingEstimateRef.current = true;
+    setIsSaving(true);
+
+    if ((!isBoltMode && !estNumber) || !estClientId || !estBrandId) {
+      isSavingEstimateRef.current = false;
+      setIsSaving(false);
+      return;
+    }
+    if (!estTitle && !estSubject) {
+      isSavingEstimateRef.current = false;
+      setIsSaving(false);
+      return;
+    }
 
     // Phase 7: Validate estimate items
     const itemsValidation = validateEstimateItems(estItems);
     if (!itemsValidation.valid) {
+      isSavingEstimateRef.current = false;
+      setIsSaving(false);
       setMessage(itemsValidation.error || "Estimate must have at least one item");
       setTimeout(() => setMessage(""), 6000);
       return;
@@ -1775,6 +1792,8 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     // Phase 7: Validate all items (quantity, rate, HSN)
     const batchValidation = validateEstimateItemsBatch(estItems);
     if (!batchValidation.valid) {
+      isSavingEstimateRef.current = false;
+      setIsSaving(false);
       setMessage(batchValidation.errors.join("; "));
       setTimeout(() => setMessage(""), 8000);
       return;
@@ -1784,6 +1803,8 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     if (estGstin) {
       const gstinValidation = validateGstin(estGstin);
       if (!gstinValidation.valid) {
+        isSavingEstimateRef.current = false;
+        setIsSaving(false);
         setMessage(gstinValidation.error || "Invalid GSTIN");
         setTimeout(() => setMessage(""), 6000);
         return;
@@ -1794,6 +1815,8 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     if (estPan) {
       const panValidation = validatePan(estPan);
       if (!panValidation.valid) {
+        isSavingEstimateRef.current = false;
+        setIsSaving(false);
         setMessage(panValidation.error || "Invalid PAN");
         setTimeout(() => setMessage(""), 6000);
         return;
@@ -1809,6 +1832,8 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     const profile = getEstimateFormatProfile(effectiveProfileCode);
 
     if (profile.storeRequired && !isAbfrl && (!estStoreId || Number(estStoreId) <= 0)) {
+      isSavingEstimateRef.current = false;
+      setIsSaving(false);
       setMessage(`Store selection is required for ${profile.name} estimates.`);
       setTimeout(() => setMessage(""), 6000);
       return;
@@ -1819,6 +1844,8 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
         .map((it, i) => ({ sl: it.sl ?? i + 1, mc: it.materialCode, id: it.materialCodeId }))
         .filter(r => !r.mc && !r.id);
       if (missing.length > 0) {
+        isSavingEstimateRef.current = false;
+        setIsSaving(false);
         const msg = `ABLBL CAPEX requires a Material Code on every row. Missing on row(s): ${missing.map(m => m.sl).join(", ")}.`;
         setMessage(msg);
         setTimeout(() => setMessage(""), 6000);
@@ -1829,7 +1856,6 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     const _t0 = performance.now();
     const _ms = () => Math.round(performance.now() - _t0);
     console.log(`[save] handler entered`, { editingEstimateId, estNumber, items: estItems.length });
-    setIsSaving(true);
     try {
       const dedupedItems = deduplicateSpecialCharges(estItems);
       if (dedupedItems.length !== estItems.length) {
@@ -2052,6 +2078,13 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
       } else {
         const body = await res.text().catch(() => "");
         console.warn(`[save] non-OK response`, res.status, body.slice(0, 200));
+        let errMsg = "Failed to save estimate";
+        try {
+          const parsed = JSON.parse(body);
+          if (parsed.message) errMsg = parsed.message;
+        } catch {}
+        setMessage(errMsg);
+        setTimeout(() => setMessage(""), 8000);
       }
     } catch (err: any) {
       if (err?.name === "AbortError") {
@@ -2060,9 +2093,12 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
         setTimeout(() => setMessage(""), 8000);
       } else {
         console.error(`[save] error after ${_ms()}ms`, err);
+        setMessage(err?.message || "Failed to save estimate");
+        setTimeout(() => setMessage(""), 8000);
       }
     } finally {
       console.log(`[save] setIsSaving(false) — total ${_ms()}ms`);
+      isSavingEstimateRef.current = false;
       setIsSaving(false);
     }
   };

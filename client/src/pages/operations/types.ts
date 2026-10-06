@@ -136,6 +136,7 @@ export interface EstimateItem {
   igstAmount: number | null;
   totalAmount: number | null;
   storeCode?: string | null;
+  storeId?: number | null;
   lineType?: "product" | "packing" | "installation" | "transport" | "manual" | string | null;
   calculationType?: string | null;
 }
@@ -216,7 +217,7 @@ export interface EstimateItemInput {
   igstPercent: string;
   igstAmount: string;
   totalAmount: string;
-  storeId: string;
+  storeId?: string | number | null;
   storeSortOrder?: number | null;
   rowSortOrder?: number | null;
   description?: string;

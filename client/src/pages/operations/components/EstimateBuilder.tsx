@@ -3824,8 +3824,16 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                 <button
                   type="submit"
                   className="eb-save-primary"
-                  disabled={!!isSaving}
-                  onClick={() => console.log(`[save] button click`, { editingEstimateId, isSaving })}
+                  disabled={Boolean(isSaving)}
+                  style={{ pointerEvents: isSaving ? "none" : undefined }}
+                  onClick={(e) => {
+                    if (isSaving) {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      return;
+                    }
+                    console.log(`[save] button click`, { editingEstimateId, isSaving });
+                  }}
                 >
                   {isSaving ? "Saving..." : (editingEstimateId ? "Update Estimate" : "Save Draft Estimate")}
                 </button>
