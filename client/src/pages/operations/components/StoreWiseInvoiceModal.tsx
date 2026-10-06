@@ -12,7 +12,7 @@ import {
   ShieldCheck,
   Calendar,
 } from "lucide-react";
-import { fetchEstimateItems, createInvoice } from "@/lib/api";
+import { fetchEstimateItems, createInvoice, fetchNextInvoiceNumber } from "@/lib/api";
 import { computeStoreBreakdown, StoreBreakdownItem } from "@shared/storeBreakdown";
 
 interface StoreWiseInvoiceModalProps {
@@ -55,6 +55,7 @@ export const StoreWiseInvoiceModal: React.FC<StoreWiseInvoiceModalProps> = ({
   const [dueDate, setDueDate] = useState(
     new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0]
   );
+  const [storeInvoiceNumbers, setStoreInvoiceNumbers] = useState<Record<number, string>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [generationResults, setGenerationResults] = useState<GenerationResult[]>([]);
   const [generationComplete, setGenerationComplete] = useState(false);
@@ -113,6 +114,39 @@ export const StoreWiseInvoiceModal: React.FC<StoreWiseInvoiceModalProps> = ({
     }
   }, [storeBreakdowns, generationComplete]);
 
+  // Pre-fill smart sequential editable invoice numbers for un-invoiced stores
+  useEffect(() => {
+    if (!isOpen || storeBreakdowns.length === 0) return;
+    const uninvoiced = storeBreakdowns.filter((sb) => !sb.existingInvoice);
+    if (uninvoiced.length === 0) return;
+
+    let isCurrent = true;
+    fetchNextInvoiceNumber(token, invoiceDate)
+      .then((startNum) => {
+        if (!isCurrent) return;
+        const match = startNum.match(/^(.*\/SM\/)(\d+)$/i) || startNum.match(/^(.*\/)(\d+)$/);
+        const prefix = match ? match[1] : `${startNum}-`;
+        let seq = match ? parseInt(match[2], 10) : 1;
+
+        setStoreInvoiceNumbers((prev) => {
+          const nextMap: Record<number, string> = { ...prev };
+          uninvoiced.forEach((sb) => {
+            if (!nextMap[sb.storeId]) {
+              nextMap[sb.storeId] = `${prefix}${seq++}`;
+            }
+          });
+          return nextMap;
+        });
+      })
+      .catch((err) => {
+        console.warn("Failed to fetch next invoice number for stores:", err);
+      });
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [isOpen, storeBreakdowns, invoiceDate, token]);
+
   if (!isOpen || !estimate) return null;
 
   const formatCurrency = (val: number) => {
@@ -149,6 +183,22 @@ export const StoreWiseInvoiceModal: React.FC<StoreWiseInvoiceModalProps> = ({
   // Invoice creation execution
   const handleGenerateInvoices = async () => {
     if (selectedStoreIds.length === 0) return;
+
+    // Validate that every selected store has an invoice number and no duplicates within the batch
+    const numbersSeen = new Set<string>();
+    for (const store of selectedStores) {
+      const invNum = (storeInvoiceNumbers[store.storeId] || "").trim();
+      if (!invNum) {
+        alert(`Please enter an invoice number for store "${store.storeName}".`);
+        return;
+      }
+      if (numbersSeen.has(invNum)) {
+        alert(`Duplicate invoice number "${invNum}" entered. Each invoice must have a unique number.`);
+        return;
+      }
+      numbersSeen.add(invNum);
+    }
+
     setIsSubmitting(true);
 
     const initialResults: GenerationResult[] = selectedStores.map((sb) => ({
@@ -163,11 +213,13 @@ export const StoreWiseInvoiceModal: React.FC<StoreWiseInvoiceModalProps> = ({
 
     for (let i = 0; i < selectedStores.length; i++) {
       const store = selectedStores[i];
+      const invNumber = (storeInvoiceNumbers[store.storeId] || "").trim();
       updatedResults[i].status = "processing";
       setGenerationResults([...updatedResults]);
 
       try {
         const payload = {
+          invoiceNumber: invNumber,
           estimateId: estimate.id,
           clientId: estimate.clientId || estimate.client_id,
           storeId: store.storeId,
@@ -415,7 +467,8 @@ export const StoreWiseInvoiceModal: React.FC<StoreWiseInvoiceModalProps> = ({
                       <th className="px-3 py-2 text-right">Subtotal</th>
                       <th className="px-3 py-2 text-right">Taxes</th>
                       <th className="px-3 py-2 text-right">Total</th>
-                      <th className="px-3 py-2 text-center">Invoice Status</th>
+                      <th className="px-3 py-2">Invoice No. *</th>
+                      <th className="px-3 py-2 text-center">Status</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -461,10 +514,10 @@ export const StoreWiseInvoiceModal: React.FC<StoreWiseInvoiceModalProps> = ({
                           <td className="px-3 py-2.5 text-right font-mono font-bold text-slate-900">
                             {formatCurrency(sb.totalAmount)}
                           </td>
-                          <td className="px-3 py-2.5 text-center">
+                          <td className="px-3 py-2.5">
                             {hasInvoice ? (
                               <div className="inline-flex items-center gap-1.5">
-                                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
+                                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200 font-mono">
                                   {sb.existingInvoice.invoiceNumber || sb.existingInvoice.invoice_number}
                                 </span>
                                 <a
@@ -477,6 +530,25 @@ export const StoreWiseInvoiceModal: React.FC<StoreWiseInvoiceModalProps> = ({
                                   <ExternalLink className="w-3 h-3" />
                                 </a>
                               </div>
+                            ) : (
+                              <input
+                                type="text"
+                                value={storeInvoiceNumbers[sb.storeId] || ""}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setStoreInvoiceNumbers((prev) => ({ ...prev, [sb.storeId]: val }));
+                                }}
+                                disabled={isSubmitting}
+                                placeholder="e.g. 26-27/SM/171"
+                                className="w-32 px-2 py-1 text-xs font-mono font-bold bg-white border border-slate-300 rounded focus:border-orange-500 focus:ring-1 focus:ring-orange-500 focus:outline-hidden"
+                              />
+                            )}
+                          </td>
+                          <td className="px-3 py-2.5 text-center">
+                            {hasInvoice ? (
+                              <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-wider">
+                                Invoiced
+                              </span>
                             ) : (
                               <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
                                 Ready to Bill

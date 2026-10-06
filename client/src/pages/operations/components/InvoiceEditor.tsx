@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useAuth } from "../../../contexts/AuthContext";
 import { isBoltMode } from "../../../lib/supabase";
-import { fetchEstimates, fetchEstimateItems, fetchDeliveryChallans, fetchInvoiceById, createInvoice, updateInvoice, fetchExecutionDocuments, openExecutionDocument } from "../../../lib/api";
+import { fetchEstimates, fetchEstimateItems, fetchDeliveryChallans, fetchInvoiceById, createInvoice, updateInvoice, fetchExecutionDocuments, openExecutionDocument, fetchNextInvoiceNumber } from "../../../lib/api";
 import { Link } from "wouter";
 import { X, Plus, Trash2, Save, Send, Printer, ChevronLeft } from "lucide-react";
 import { normalizeDisplayName } from "../../../../../shared/textFormat";
@@ -161,11 +161,12 @@ const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ open, invoiceId, estimate
 
           // Build new invoice from estimate items
           if (isBoltMode) {
-            const [allEstimates, its, allDcs, docs] = await Promise.all([
+            const [allEstimates, its, allDcs, docs, nextNum] = await Promise.all([
               fetchEstimates(token),
               fetchEstimateItems(token, estimateId),
               deliveryChallanId ? fetchDeliveryChallans(token) : Promise.resolve([]),
               fetchExecutionDocuments(token, estimateId),
+              fetchNextInvoiceNumber(token, date),
             ]);
             setAttachments(docs as any[]);
             setSelectedAttachments((docs as any[]).map((d: any) => d.id));
@@ -182,8 +183,8 @@ const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ open, invoiceId, estimate
               const dc = (allDcs as any[]).find((d: any) => d.id === deliveryChallanId);
               if (dc) setLinkedDc(dc);
             }
-            // The server allocates the established Sunrise number on save.
-            setInvoiceNumber("");
+            // Pre-fill smart editable invoice number
+            setInvoiceNumber(nextNum);
           } else {
             const [eRes, iRes, dRes, numRes] = await Promise.all([
               fetch(`/api/operations/estimates`, { headers: { Authorization: `Bearer ${token}` } }),
@@ -191,7 +192,7 @@ const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ open, invoiceId, estimate
               deliveryChallanId
                 ? fetch(`/api/operations/delivery-challans/${deliveryChallanId}`, { headers: { Authorization: `Bearer ${token}` } })
                 : Promise.resolve(null),
-              fetch(`/api/numbering/invoice/next`, { headers: { Authorization: `Bearer ${token}` } }),
+              fetchNextInvoiceNumber(token, date),
             ]);
             if (eRes.ok) {
               const list = await eRes.json();
@@ -213,9 +214,8 @@ const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ open, invoiceId, estimate
               const dc = await dRes.json();
               setLinkedDc(dc);
             }
-            if (numRes.ok) {
-              const { number } = await numRes.json();
-              setInvoiceNumber(number);
+            if (numRes) {
+              setInvoiceNumber(numRes);
             }
           }
           setStatus("draft");
@@ -262,12 +262,13 @@ const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ open, invoiceId, estimate
 
   const save = async (mode: "draft" | "approved" | "stay") => {
     if (!token) return;
-    if (!invoiceNumber.trim() && (!isBoltMode || invoiceId)) { alert("Invoice number required"); return; }
+    const finalNumber = invoiceNumber.trim();
+    if (!finalNumber) { alert("Invoice number is required"); return; }
     if (items.length === 0 || items.every(it => !it.itemName)) { alert("Add at least one line item"); return; }
     setSaving(true);
     try {
       const payload: any = {
-        invoiceNumber,
+        invoiceNumber: finalNumber,
         type: "sales",
         partyName,
         amount: subtotal,
@@ -317,6 +318,8 @@ const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ open, invoiceId, estimate
       }
       onSaved();
       onClose();
+    } catch (err: any) {
+      alert(err.message || "Save failed");
     } finally { setSaving(false); }
   };
 

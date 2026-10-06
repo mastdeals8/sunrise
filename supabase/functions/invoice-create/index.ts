@@ -92,6 +92,9 @@ Deno.serve(async (req: Request) => {
     if (!rpcErr && atomicCreated) {
       return jsonResponse(atomicCreated, 201);
     }
+    if (rpcErr && (rpcErr.message?.includes("already in use") || rpcErr.message?.includes("unique") || rpcErr.message?.includes("Invoice number"))) {
+      return errorResponse(rpcErr.message, 400);
+    }
 
     if (payload.estimate_id) {
       let query = db.from("invoices").select("*")
@@ -110,11 +113,20 @@ Deno.serve(async (req: Request) => {
       if (existing) return jsonResponse(existing, 200);
     }
 
-    // Bolt's old editor used INV-<timestamp> as a display placeholder.  The
-    // established Sunrise invoice convention is allocated on the server.
+    // Allocate or validate established Sunrise invoice convention
     const requestedNumber = String(payload.invoice_number ?? "").trim();
     if (!requestedNumber || /^INV-\d+$/i.test(requestedNumber)) {
       payload.invoice_number = await nextDocumentNumber(db, "invoice");
+    } else {
+      const { data: existingDup } = await db
+        .from("invoices")
+        .select("id, invoice_number")
+        .eq("invoice_number", requestedNumber)
+        .neq("status", "cancelled")
+        .maybeSingle();
+      if (existingDup && existingDup.id !== payload.id) {
+        return errorResponse(`Invoice number "${requestedNumber}" is already in use. Please enter a unique invoice number.`, 400);
+      }
     }
 
     const { data: created, error } = await db

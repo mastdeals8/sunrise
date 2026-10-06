@@ -1188,6 +1188,67 @@ export async function unarchiveEstimate(
 
 // ─── Invoices ─────────────────────────────────────────────────────────────────
 
+export async function fetchNextInvoiceNumber(token: string | null, date?: string): Promise<string> {
+  const pDate = date || new Date().toISOString().split("T")[0];
+  if (isBoltMode) {
+    try {
+      const { data, error } = await supabase.rpc("next_sunrise_document_number", {
+        p_kind: "invoice",
+        p_date: pDate,
+      });
+      if (!error && typeof data === "string" && data) {
+        return data;
+      }
+      if (error) console.warn("[api] next_sunrise_document_number RPC error:", error.message);
+    } catch (e) {
+      console.warn("[api] next_sunrise_document_number exception:", e);
+    }
+  }
+  try {
+    const res = await apiFetch(`/api/numbering/invoice/next?date=${encodeURIComponent(pDate)}`, token);
+    if (res.ok) {
+      const json = await res.json();
+      if (json.number) return json.number;
+    }
+  } catch (e) {
+    console.warn("[api] Error fetching next invoice number:", e);
+  }
+  // Safe fallback calculation
+  const d = new Date(pDate);
+  const y = d.getFullYear();
+  const startYear = d.getMonth() < 3 ? y - 1 : y;
+  const fyLabel = `${String(startYear).slice(-2)}-${String(startYear + 1).slice(-2)}`;
+  return `${fyLabel}/SM/1`;
+}
+
+export async function setTallyInvoiceSequence(
+  token: string | null,
+  fy: string,
+  currentNumber: number
+): Promise<any> {
+  if (isBoltMode) {
+    try {
+      const { data, error } = await supabase.rpc("set_tally_invoice_sequence", {
+        p_fy: fy,
+        p_current_number: currentNumber,
+      });
+      if (!error && data) return data;
+      if (error) console.warn("[api] set_tally_invoice_sequence RPC error:", error.message);
+    } catch (e) {
+      console.warn("[api] set_tally_invoice_sequence exception:", e);
+    }
+  }
+  const res = await apiFetch("/api/numbering/invoice/tally-sync", token, {
+    method: "POST",
+    body: JSON.stringify({ fy, currentNumber }),
+  });
+  if (!res.ok) {
+    const j = await res.json().catch(() => ({}));
+    throw new Error(j.message || "Failed to update Tally invoice sequence");
+  }
+  return res.json();
+}
+
 export async function createInvoice(
   token: string | null,
   payload: Record<string, unknown>
@@ -1208,8 +1269,16 @@ export async function createInvoice(
     if (!rpcErr && atomicCreated) {
       return toCamel(atomicCreated);
     }
-    if (rpcErr) console.warn("[api] create_invoice_atomic RPC error:", rpcErr.message);
-  } catch (err) {
+    if (rpcErr) {
+      if (rpcErr.message && (rpcErr.message.includes("already in use") || rpcErr.message.includes("Invoice number") || rpcErr.message.includes("unique"))) {
+        throw new Error(rpcErr.message);
+      }
+      console.warn("[api] create_invoice_atomic RPC error:", rpcErr.message);
+    }
+  } catch (err: any) {
+    if (err.message && (err.message.includes("already in use") || err.message.includes("Invoice number"))) {
+      throw err;
+    }
     console.warn("[api] create_invoice_atomic exception:", err);
   }
 

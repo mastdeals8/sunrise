@@ -3,7 +3,7 @@ import { useAuth } from "../contexts/AuthContext";
 import { Settings as SettingsIcon, Save, Building2, FileText, CreditCard, Image as ImageIcon, Upload } from "lucide-react";
 import { INDIA_STATES, getStateCode } from "@/utils/indiaLocations";
 import { isBoltMode } from "../lib/supabase";
-import { fetchCompanySettings, uploadToStorage, saveAssetSetting, upsertAppSettings } from "../lib/api";
+import { fetchCompanySettings, uploadToStorage, saveAssetSetting, upsertAppSettings, setTallyInvoiceSequence } from "../lib/api";
 
 interface SettingsState {
   companyName: string;
@@ -55,9 +55,18 @@ const empty: SettingsState = {
   terms: "1. Payment within 30 days.\n2. Interest @ 2% pm on overdue.\n3. Subject to local jurisdiction.",
 };
 
+function getCurrentFyLabel(): string {
+  const d = new Date();
+  const y = d.getFullYear();
+  const startYear = d.getMonth() < 3 ? y - 1 : y;
+  return `${String(startYear).slice(-2)}-${String(startYear + 1).slice(-2)}`;
+}
+
 const SettingsPage: React.FC = () => {
   const { token, user } = useAuth();
   const [form, setForm] = useState<SettingsState>(empty);
+  const [tallyFy, setTallyFy] = useState(getCurrentFyLabel());
+  const [tallyStartingNumber, setTallyStartingNumber] = useState<number | string>("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
@@ -99,6 +108,13 @@ const SettingsPage: React.FC = () => {
             signatureStampPath: String(data.signatureStampPath ?? empty.signatureStampPath),
             terms: String(data.terms ?? empty.terms),
           });
+          const curFy = getCurrentFyLabel();
+          setTallyFy(curFy);
+          const numberingInv = data["numbering.invoice"];
+          if (numberingInv) {
+            const val = numberingInv.fySequences?.[curFy] ?? numberingInv.tallyCurrentNumber ?? numberingInv.startAt ?? "";
+            if (val !== undefined && val !== null && val !== "") setTallyStartingNumber(String(val));
+          }
         }
       } catch (err) {
         console.error(err);
@@ -135,6 +151,12 @@ const SettingsPage: React.FC = () => {
           "company.logoPath": form.companyLogoPath || null,
           "company.signatureStampPath": form.signatureStampPath || null,
         });
+        if (tallyStartingNumber !== "") {
+          const startNum = parseInt(String(tallyStartingNumber), 10);
+          if (Number.isFinite(startNum) && startNum >= 0) {
+            await setTallyInvoiceSequence(token, tallyFy.trim() || getCurrentFyLabel(), startNum);
+          }
+        }
         setMsg({ kind: "ok", text: "Settings saved." });
         setTimeout(() => setMsg(null), 3000);
         return;
@@ -194,6 +216,12 @@ const SettingsPage: React.FC = () => {
         signatureStampPath: String(saved.signatureStampPath ?? prev.signatureStampPath),
         terms: String(saved.terms ?? prev.terms),
       }));
+      if (tallyStartingNumber !== "") {
+        const startNum = parseInt(String(tallyStartingNumber), 10);
+        if (Number.isFinite(startNum) && startNum >= 0) {
+          await setTallyInvoiceSequence(token, tallyFy.trim() || getCurrentFyLabel(), startNum);
+        }
+      }
       setMsg({ kind: "ok", text: "Settings saved." });
       setTimeout(() => setMsg(null), 3000);
     } catch (err: any) {
@@ -382,6 +410,45 @@ const SettingsPage: React.FC = () => {
               <Field label="Invoice # prefix" k="defaultInvoicePrefix" />
               <Field label="DC # prefix" k="defaultDcPrefix" />
               <div className="md:col-span-3"><Field label="Default terms & conditions" k="terms" rows={4} /></div>
+            </div>
+          </div>
+
+          <div className="glass-panel p-5">
+            <h3 className="font-bold text-slate-900 flex items-center gap-2 mb-1">
+              <FileText className="w-5 h-5 text-orange-600" /> Tally / External Invoice Sequence Alignment
+            </h3>
+            <p className="text-xs text-slate-500 mb-4">
+              Synchronize Sunrise ERP with your latest external or Tally invoice sequence. Sunrise will automatically suggest the next invoice starting at this number + 1 (or the highest existing invoice, whichever is greater). Format is always <strong>&lt;FY&gt;/SM/&lt;number&gt;</strong> (e.g. 26-27/SM/171).
+            </p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-xl">
+              <div>
+                <label className="text-xs font-bold uppercase text-slate-600">Financial Year</label>
+                <input
+                  type="text"
+                  value={tallyFy}
+                  onChange={(e) => setTallyFy(e.target.value)}
+                  placeholder="e.g. 26-27"
+                  className="w-full border border-slate-200 rounded-md px-3 py-2 text-sm font-mono font-bold mt-1"
+                  disabled={!isAdmin}
+                />
+              </div>
+              <div>
+                <label className="text-xs font-bold uppercase text-slate-600">Current / Last External Invoice No.</label>
+                <input
+                  type="number"
+                  value={tallyStartingNumber}
+                  onChange={(e) => setTallyStartingNumber(e.target.value)}
+                  placeholder="e.g. 170"
+                  className="w-full border border-slate-200 rounded-md px-3 py-2 text-sm font-mono font-bold mt-1"
+                  disabled={!isAdmin}
+                />
+                <p className="text-[11px] text-slate-500 mt-1">
+                  Next suggested invoice:{" "}
+                  <span className="font-mono font-bold text-orange-600">
+                    {tallyStartingNumber ? `${tallyFy}/SM/${Number(tallyStartingNumber) + 1}` : "—"}
+                  </span>
+                </p>
+              </div>
             </div>
           </div>
         </>

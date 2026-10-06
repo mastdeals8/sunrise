@@ -1945,6 +1945,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
+      const invoiceNum = String(parsed.data.invoiceNumber || "").trim();
+      if (!invoiceNum) {
+        parsed.data.invoiceNumber = await nextDocumentNumber("invoice", parsed.data.date);
+      } else {
+        const dupNum = await db.select().from(invoices).where(
+          and(
+            eq(invoices.invoiceNumber, invoiceNum),
+            ne(invoices.status, "cancelled")
+          )
+        ).limit(1);
+        if (dupNum.length > 0) {
+          return res.status(409).json({
+            message: `Invoice number "${invoiceNum}" is already in use. Please enter a unique invoice number.`,
+          });
+        }
+        parsed.data.invoiceNumber = invoiceNum;
+      }
+
       const created = await storage.createInvoice(parsed.data);
       res.status(201).json(created);
     } catch (err: any) {
@@ -5994,9 +6012,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return { label, start, end };
   }
 
-  async function loadNumberingConfig(kind: string): Promise<{ prefix: string; startAt: number; fyAware: boolean }> {
+  async function loadNumberingConfig(kind: string): Promise<{ prefix: string; startAt: number; fyAware: boolean; tallyCurrentNumber?: number; fySequences?: Record<string, number> }> {
     const fallback = {
-      invoice:  { prefix: "SM/INV", startAt: 101, fyAware: true },
+      invoice:  { prefix: "SM",     startAt: 101, fyAware: true },
       estimate: { prefix: "SM/E",   startAt: 101, fyAware: true },
       dc:       { prefix: "SM/DC",  startAt: 101, fyAware: true },
     }[kind] ?? { prefix: "DOC", startAt: 1, fyAware: false };
@@ -6007,17 +6025,42 @@ export async function registerRoutes(app: Express): Promise<Server> {
         prefix: typeof v.prefix === "string" ? v.prefix : fallback.prefix,
         startAt: Number.isFinite(Number(v.startAt)) ? Number(v.startAt) : fallback.startAt,
         fyAware: v.fyAware !== false,
+        tallyCurrentNumber: Number.isFinite(Number(v.tallyCurrentNumber)) ? Number(v.tallyCurrentNumber) : undefined,
+        fySequences: v.fySequences && typeof v.fySequences === "object" ? v.fySequences : undefined,
       };
     } catch {
       return fallback;
     }
   }
 
-  async function nextDocumentNumber(kind: "invoice" | "estimate" | "dc"): Promise<string> {
+  async function nextDocumentNumber(kind: "invoice" | "estimate" | "dc", date?: Date): Promise<string> {
     const cfg = await loadNumberingConfig(kind);
     const map = docKindMap[kind];
     const all = (await db.select().from(map.table)) as any[];
-    const fy = fyForDate(new Date());
+    const fy = fyForDate(date || new Date());
+
+    if (kind === "invoice") {
+      // Required Sunrise invoice format: <FY>/SM/<number> (e.g. 26-27/SM/171)
+      const tallyStart = cfg.fySequences?.[fy.label] ?? cfg.tallyCurrentNumber ?? (cfg.startAt > 1 ? cfg.startAt : 0);
+      let maxSeq = Math.max(0, tallyStart);
+
+      const standardMatcher = new RegExp(`^${escapeReg(fy.label)}/SM/(\\d+)$`, "i");
+      const legacyMatcher = new RegExp(`^SM/INV/${escapeReg(fy.label)}/(\\d+)$`, "i");
+      const looseMatcher = new RegExp(`/${escapeReg(fy.label)}/(\\d+)$`, "i");
+
+      for (const row of all) {
+        if (row.status === "cancelled") continue;
+        const docNum = String(row[map.column] || "").trim();
+        const m = docNum.match(standardMatcher) || docNum.match(legacyMatcher) || docNum.match(looseMatcher);
+        if (m) {
+          const n = parseInt(m[1], 10);
+          if (Number.isFinite(n) && n > maxSeq) maxSeq = n;
+        }
+      }
+      const next = maxSeq + 1;
+      return `${fy.label}/SM/${next}`;
+    }
+
     const startAt = kind === "estimate"
       ? estimateFyStartAtOverrides[fy.label] ?? cfg.startAt
       : cfg.startAt;
@@ -6026,6 +6069,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       : new RegExp(`^${escapeReg(cfg.prefix)}/(\\d+)$`);
     let maxSeq = startAt - 1;
     for (const row of all) {
+      if (row.status === "cancelled") continue;
       const docNum = String(row[map.column] || "");
       const m = docNum.match(fyMatcher);
       if (m) {
@@ -6047,8 +6091,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const kind = req.params.kind;
       if (!docKindMap[kind]) return res.status(400).json({ message: "Unknown numbering kind" });
-      const number = await nextDocumentNumber(kind as any);
+      const date = req.query.date ? new Date(String(req.query.date)) : new Date();
+      const number = await nextDocumentNumber(kind as any, date);
       res.json({ number });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.post("/api/numbering/invoice/tally-sync", authenticateToken, requireRole(["admin", "accounts", "manager"]), async (req: AuthRequest, res: Response) => {
+    try {
+      const fy = String(req.body.fy || "").trim();
+      const currentNumber = parseInt(req.body.currentNumber, 10);
+      if (!fy || !Number.isFinite(currentNumber) || currentNumber < 0) {
+        return res.status(400).json({ message: "Invalid financial year or current invoice number" });
+      }
+      const current = (await storage.getAppSetting("numbering.invoice").catch(() => null) as any) || {};
+      const fySequences = { ...(current.fySequences || {}), [fy]: currentNumber };
+      const updated = {
+        ...current,
+        format: "FY/SM/NUM",
+        prefix: "SM",
+        fyAware: true,
+        startAt: currentNumber,
+        tallyCurrentNumber: currentNumber,
+        fySequences,
+      };
+      await storage.setAppSetting("numbering.invoice", updated);
+      res.json(updated);
     } catch (err: any) {
       res.status(500).json({ message: err.message });
     }

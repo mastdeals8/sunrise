@@ -22,9 +22,10 @@ const estimateFyStartAtOverrides: Record<string, number> = {
 async function loadNumberingConfig(
   db: SupabaseClient,
   kind: string,
+  fyLabel?: string,
 ): Promise<{ prefix: string; startAt: number; fyAware: boolean }> {
   const fallback = ({
-    invoice:  { prefix: "SM/INV", startAt: 101, fyAware: true },
+    invoice:  { prefix: "SM",     startAt: 101, fyAware: true },
     estimate: { prefix: "SM/E",   startAt: 101, fyAware: true },
     dc:       { prefix: "SM/DC",  startAt: 101, fyAware: true },
   } as Record<string, { prefix: string; startAt: number; fyAware: boolean }>)[kind]
@@ -36,9 +37,20 @@ async function loadNumberingConfig(
       .eq("key", `numbering.${kind}`)
       .maybeSingle();
     const v = (data?.value as any) ?? {};
+    let startAt = Number.isFinite(Number(v.startAt)) ? Number(v.startAt) : fallback.startAt;
+    if (kind === "invoice") {
+      const tallyStart = Number(
+        (fyLabel && v.fySequences?.[fyLabel]) ||
+        (fyLabel && v.tallyStartSeq?.[fyLabel]) ||
+        v.tallyCurrentNumber ||
+        v.startAt ||
+        0
+      );
+      if (tallyStart > 0) startAt = Math.max(startAt, tallyStart);
+    }
     return {
       prefix: typeof v.prefix === "string" ? v.prefix : fallback.prefix,
-      startAt: Number.isFinite(Number(v.startAt)) ? Number(v.startAt) : fallback.startAt,
+      startAt,
       fyAware: v.fyAware !== false,
     };
   } catch {
@@ -55,19 +67,23 @@ const tableForKind: Record<string, { table: string; column: string }> = {
 export async function nextDocumentNumber(
   db: SupabaseClient,
   kind: "invoice" | "estimate" | "dc",
+  docDate: Date = new Date(),
 ): Promise<string> {
-  // The SQL function serializes allocations when its migration is installed.
-  // Retain the existing scan as a compatibility fallback for undeployed/local
-  // environments; unique document-number constraints remain the final guard.
+  // Call the atomic SQL function first (preserves Tally alignment and lock serialization)
   try {
-    const { data, error } = await db.rpc("next_sunrise_document_number", { p_kind: kind });
+    const { data, error } = await db.rpc("next_sunrise_document_number", {
+      p_kind: kind,
+      p_date: docDate.toISOString().slice(0, 10),
+    });
     if (!error && typeof data === "string" && data) return data;
   } catch {
-    // Migration has not been applied yet.
+    // Compatibility fallback
   }
-  const cfg = await loadNumberingConfig(db, kind);
+
+  const fy = fyForDate(docDate);
+  const cfg = await loadNumberingConfig(db, kind, fy.label);
   const map = tableForKind[kind];
-  const fy = fyForDate(new Date());
+
   const startAt =
     kind === "estimate"
       ? estimateFyStartAtOverrides[fy.label] ?? cfg.startAt
@@ -77,11 +93,29 @@ export async function nextDocumentNumber(
     .from(map.table)
     .select(map.column);
 
+  let maxSeq = startAt - 1;
+
+  if (kind === "invoice") {
+    // Required Sunrise invoice format: <FY>/SM/<number> (e.g. 26-27/SM/171)
+    const stdMatcher = new RegExp(`^${escapeReg(fy.label)}/SM/(\\d+)$`, "i");
+    const legMatcher = new RegExp(`^SM/INV/${escapeReg(fy.label)}/(\\d+)$`, "i");
+
+    for (const row of (rows ?? [])) {
+      const docNum = String((row as any)[map.column] || "").trim();
+      const m = docNum.match(stdMatcher) || docNum.match(legMatcher);
+      if (m) {
+        const n = parseInt(m[1], 10);
+        if (Number.isFinite(n) && n > maxSeq) maxSeq = n;
+      }
+    }
+    const next = maxSeq + 1;
+    return `${fy.label}/SM/${next}`;
+  }
+
   const fyMatcher = cfg.fyAware
     ? new RegExp(`^${escapeReg(cfg.prefix)}/${escapeReg(fy.label)}/(\\d+)$`)
     : new RegExp(`^${escapeReg(cfg.prefix)}/(\\d+)$`);
 
-  let maxSeq = startAt - 1;
   for (const row of (rows ?? [])) {
     const docNum = String((row as any)[map.column] || "");
     const m = docNum.match(fyMatcher);
