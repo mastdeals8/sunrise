@@ -222,6 +222,26 @@ export const payments = pgTable("payments", {
 });
 
 // ==========================================
+// 9b. Estimate Format Profiles (Sunrise Custom)
+// ==========================================
+export const estimateFormatProfiles = pgTable("estimate_format_profiles", {
+  id: serial("id").primaryKey(),
+  code: text("code").notNull().unique(), // e.g. "RETAIL_SINGLE_STORE", "ABLBL", "normal"
+  name: text("name").notNull(),
+  description: text("description"),
+  storeMode: text("store_mode").notNull().default("single"), // "single" | "multi" | "none"
+  storeRequired: boolean("store_required").notNull().default(true),
+  storeCodeRequired: boolean("store_code_required").notNull().default(false),
+  materialCodeMode: text("material_code_mode").notNull().default("hidden"), // "required" | "optional" | "hidden"
+  defaultProjectType: text("default_project_type"), // e.g. "SELEX", "CAPEX"
+  dcDocumentType: text("dc_document_type").notNull().default("dc"), // "dc" | "wcc"
+  printLayout: text("print_layout").notNull().default("retail_single_store"), // "retail_single_store" | "abfrl_grouped" | "standard"
+  numberingPrefix: text("numbering_prefix"),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// ==========================================
 // 10. Clients (Sunrise Custom)
 // ==========================================
 export const clients = pgTable("clients", {
@@ -233,6 +253,8 @@ export const clients = pgTable("clients", {
   address: text("address"),
   gstNumber: text("gst_number"),
   format: text("format").notNull().default("normal"), // VALIDATION: Only "normal" or "ABLBL" allowed. Enforce in API layer.
+  defaultFormatProfileCode: text("default_format_profile_code"), // e.g. "RETAIL_SINGLE_STORE", "ABLBL", "normal"
+  allowedFormatProfileCodes: jsonb("allowed_format_profile_codes"), // string[] of allowed profile codes
   isActive: boolean("is_active").notNull().default(true),
   clientGroupName: text("client_group_name"),
   clientType: text("client_type").default("normal"), // corporate / normal / walk_in
@@ -348,6 +370,7 @@ export const estimates = pgTable("estimates", {
   totalAmount: real("total_amount").notNull().default(0),
   status: text("status").notNull().default("draft"), // draft, sent, approved, rejected, awaiting_po, po_received
   clientFormat: text("client_format").notNull().default("normal"), // VALIDATION: Only "normal" or "ABLBL" allowed. Enforce in API layer.
+  formatProfileCode: text("format_profile_code"), // e.g. "RETAIL_SINGLE_STORE", "ABLBL", "normal"
   subject: text("subject"),
   billingTo: text("billing_to"),
   shippingTo: text("shipping_to"),
@@ -802,6 +825,7 @@ export const insertMaterialCodeSchema = createInsertSchema(materialCodes).omit({
 export const insertAppSettingSchema = createInsertSchema(appSettings).omit({ id: true, updatedAt: true });
 export const insertCustomerRateCardSchema = createInsertSchema(customerRateCards).omit({ id: true, createdAt: true });
 export const insertCustomerRateItemSchema = createInsertSchema(customerRateItems).omit({ id: true, createdAt: true });
+export const insertEstimateFormatProfileSchema = createInsertSchema(estimateFormatProfiles).omit({ id: true, createdAt: true });
 
 export type User = typeof users.$inferSelect;
 export type InsertUser = z.infer<typeof insertUserSchema>;
@@ -884,3 +908,6 @@ export type InsertCustomerRateItem = z.infer<typeof insertCustomerRateItemSchema
 export const insertProjectStoreStatusSchema = createInsertSchema(projectStoreStatus).omit({ id: true, updatedAt: true });
 export type ProjectStoreStatus = typeof projectStoreStatus.$inferSelect;
 export type InsertProjectStoreStatus = z.infer<typeof insertProjectStoreStatusSchema>;
+
+export type EstimateFormatProfileRow = typeof estimateFormatProfiles.$inferSelect;
+export type InsertEstimateFormatProfile = z.infer<typeof insertEstimateFormatProfileSchema>;

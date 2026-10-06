@@ -53,6 +53,7 @@ import { useInvoiceWorkflow } from "./hooks/useInvoiceWorkflow";
 import { useWccDcEditor } from "./hooks/useWccDcEditor";
 import { importFieldsMap } from "./utils/importFieldsMap";
 import { displayFormatLabel, isAblblFormat, normalizeDisplayName, normalizeFormatMode, normalizeGstinPan } from "../../../../shared/textFormat";
+import { getEstimateFormatProfile, isRetailSingleStoreFormat, normalizeFormatProfileCode } from "../../../../shared/estimateProfiles";
 import { Building2, Tag, MapPin, Package, FileText, Plus, CircleCheck as CheckCircle, Trash, ShoppingBag, Download, Upload, Eye, Check, X, FileSpreadsheet, Image as ImageIcon, FileUp, Printer, ChevronDown, ChevronRight, Scale, CircleAlert as AlertCircle, Clock, Briefcase, Database, Copy, Truck, Receipt, Clipboard, ClipboardPaste, FolderOpen } from "lucide-react";
 
 const MATERIAL_CODE_MASTER = [
@@ -395,6 +396,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
   const [estStoreId, setEstStoreId] = useState("");
   const [estDescription, setEstDescription] = useState("");
   const [estFormat, setEstFormat] = useState("normal");
+  const [estFormatProfileCode, setEstFormatProfileCode] = useState("normal");
   // ABFRL project type: SELEX (no material code required) | CAPEX (material code required per row).
   // Only relevant when estFormat is ABLBL. See ARCHITECTURE_NOTES.md.
   const [estAbfrlProjectType, setEstAbfrlProjectType] = useState<"" | "SELEX" | "CAPEX">("");
@@ -1658,13 +1660,23 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     setEstStoreOverrides({});
     const selectedCli = clients.find(c => c.id === Number(clientIdVal));
     if (selectedCli) {
-      // Auto-select Estimate Type from Customer's configured format
-      if (selectedCli.format) {
-        const clientDefaultFormat = normalizeFormatMode(selectedCli.format);
-        setEstFormat(clientDefaultFormat);
-        if (isAblblFormat(clientDefaultFormat) && !estAbfrlProjectType) {
-          setEstAbfrlProjectType("SELEX");
-        }
+      // Auto-select Estimate Type from Customer's configured format profile
+      const profileCode = selectedCli.defaultFormatProfileCode
+        || (isAblblFormat(selectedCli.format) ? "ABLBL" : (selectedCli.format || "normal"));
+      setEstFormatProfileCode(profileCode);
+      if (isAblblFormat(profileCode)) {
+        setEstFormat("ABLBL");
+        if (!estAbfrlProjectType) setEstAbfrlProjectType("SELEX");
+      } else if (profileCode === "RETAIL_SINGLE_STORE") {
+        setEstFormat("RETAIL_SINGLE_STORE");
+      } else {
+        setEstFormat("normal");
+      }
+
+      // If client has a single brand, auto-select it
+      const clientBrands = brands.filter(b => b.parentClientId === Number(clientIdVal) || b.parentBrand?.toLowerCase() === selectedCli.name.toLowerCase());
+      if (clientBrands.length === 1) {
+        setEstBrandId(String(clientBrands[0].id));
       }
 
       // Seed Billing block with company name on line 1, address below.
@@ -1792,6 +1804,16 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     // ABFRL SELEX: material code is optional.
     // Non-ABFRL: not enforced.
     const isAbfrl = isAblblFormat(estFormat);
+    const effectiveProfileCode = estFormatProfileCode
+      || (isAbfrl ? "ABLBL" : (estFormat === "RETAIL_SINGLE_STORE" ? "RETAIL_SINGLE_STORE" : "normal"));
+    const profile = getEstimateFormatProfile(effectiveProfileCode);
+
+    if (profile.storeRequired && !isAbfrl && (!estStoreId || Number(estStoreId) <= 0)) {
+      setMessage(`Store selection is required for ${profile.name} estimates.`);
+      setTimeout(() => setMessage(""), 6000);
+      return;
+    }
+
     if (isAbfrl && estAbfrlProjectType === "CAPEX") {
       const missing = estItems
         .map((it, i) => ({ sl: it.sl ?? i + 1, mc: it.materialCode, id: it.materialCodeId }))
@@ -1818,6 +1840,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
         const selectedProduct = item.productId
           ? products.find(p => p.id === Number(item.productId))
           : null;
+        const selectedStore = stores.find(s => s.id === Number(item.storeId || estStoreId));
         const hasCustomDescription = item.description != null && String(item.description).trim() !== "" && !sameDisplayText(item.description, item.itemName);
         const productDetails = hasCustomDescription
           ? String(item.description).trim()
@@ -1827,6 +1850,9 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
 
         return {
           productId: item.productId ? Number(item.productId) : null,
+          storeId: (profile.code === "RETAIL_SINGLE_STORE" && estStoreId)
+            ? Number(estStoreId)
+            : (item.storeId ? Number(item.storeId) : null),
           itemName: item.itemName,
           description: productDetails,
           quantity: Number(item.quantity) || 1,
@@ -1868,7 +1894,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
           storeSortOrder: Number(item.storeSortOrder) || 0,
           rowSortOrder: Number(item.rowSortOrder) || Number(item.sl) || 0,
           lineType: item.lineType || "product",
-          storeCode: item.storeCode || null
+          storeCode: item.storeCode || selectedStore?.storeCode || null
         };
       });
 
@@ -1898,17 +1924,20 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
         estimateDate: estDate || todayYmd,
         clientId: Number(estClientId),
         brandId: Number(estBrandId),
-        storeId: Number(estStoreId)
-          || Number(Object.keys(storeGrouping)[0])
-          || stores.find(s => s.clientId === Number(estClientId))?.id
-          || 1,
+        storeId: (profile.code === "RETAIL_SINGLE_STORE" && estStoreId)
+          ? Number(estStoreId)
+          : (Number(estStoreId)
+            || Number(Object.keys(storeGrouping)[0])
+            || stores.find(s => s.clientId === Number(estClientId))?.id
+            || 1),
         title: estTitle || estSubject || estNumber,
         description: estDescription || null,
         subtotal: estimateSubtotal,
         taxAmount: estimateTax,
         totalAmount: estimateGrandTotal,
         ...(editingEstimateId ? {} : { status: "draft" }),
-        clientFormat: normalizeFormatMode(estFormat),
+        clientFormat: isAbfrl ? "ABLBL" : (profile.code === "RETAIL_SINGLE_STORE" ? "RETAIL_SINGLE_STORE" : normalizeFormatMode(estFormat)),
+        formatProfileCode: profile.code,
         subject: estSubject || null,
         billingTo: estBillingTo || null,
         shippingTo: estShippingTo || null,
@@ -2169,7 +2198,10 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
       setEstStoreId(String(est.storeId || ""));
       setEstTitle(est.title || "");
       setEstDescription(est.description || "");
-      setEstFormat(normalizeFormatMode(est.clientFormat));
+      const resolvedProfileCode = (est as any).formatProfileCode
+        || (isAblblFormat(est.clientFormat) ? "ABLBL" : (est.clientFormat === "RETAIL_SINGLE_STORE" ? "RETAIL_SINGLE_STORE" : "normal"));
+      setEstFormatProfileCode(resolvedProfileCode);
+      setEstFormat(isAblblFormat(resolvedProfileCode) ? "ABLBL" : (resolvedProfileCode === "RETAIL_SINGLE_STORE" ? "RETAIL_SINGLE_STORE" : "normal"));
       setEstAbfrlProjectType((est.abfrlProjectType as "" | "SELEX" | "CAPEX") || (isAblblFormat(est.clientFormat) ? "SELEX" : ""));
       setEstSubject(est.subject || est.title || "");
       setEstBillingTo(est.billingTo || "");
@@ -2210,12 +2242,15 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
       setEstStoreOverrides(overrides);
 
       const editingAbfrl = isAblblFormat(est.clientFormat);
+      const isRetailSingleStore = isRetailSingleStoreFormat(resolvedProfileCode || est.clientFormat);
       const hydratedItems = items.map((item, idx) => {
         // Historical normal estimates are represented by unscoped rows, not
         // an execution/store group. Keep that distinction when editing.
         const storeId = editingAbfrl
           ? (slToStore.get(Number(item.sl)) || String(est.storeId || ""))
-          : "";
+          : isRetailSingleStore
+            ? String(item.storeId || est.storeId || "")
+            : "";
         const lineType = (item.lineType || "product") as EstimateItemInput["lineType"];
         const rawRate = item.rate != null ? String(item.rate) : "0";
         const repairedRate = lineType === "packing" && parseRateInput(rawRate) === 0
@@ -3962,8 +3997,13 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
             fetchData,
             handleCreateEstimate,
             estClientId,
+            estStoreId,
+            setEstStoreId,
+            handleStoreSelectChange,
             estFormat,
             setEstFormat,
+            estFormatProfileCode,
+            setEstFormatProfileCode,
             estSubject,
             estNumber,
             estDate,

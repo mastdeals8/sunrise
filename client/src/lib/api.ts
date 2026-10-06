@@ -947,6 +947,7 @@ export async function duplicateEstimate(
     title: est.title,
     description: est.description || null,
     clientFormat: est.clientFormat || "normal",
+    formatProfileCode: est.formatProfileCode || null,
     abfrlProjectType: est.abfrlProjectType || null,
     subject: est.subject || null,
     billingTo: est.billingTo || null,

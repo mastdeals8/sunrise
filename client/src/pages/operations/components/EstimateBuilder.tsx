@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import { Link } from "wouter";
 import { Archive, Check, CheckCircle2, ChevronDown, ChevronRight, ClipboardPaste, Copy, CreditCard as Edit3, Eye, FilePlus2, FileSpreadsheet, FileText, FileUp, Filter, FolderOpen, MoveDown, MoveUp, Plus, Receipt, Redo2, Search, Trash, Undo2 } from "lucide-react";
 import { displayFormatLabel, isAblblFormat, normalizeDisplayName, normalizeFormatMode, normalizeGstinPan } from "../../../../../shared/textFormat";
+import { getEstimateFormatProfile, isRetailSingleStoreFormat } from "../../../../../shared/estimateProfiles";
 import { formatProductDetails, sameDisplayText } from "../../../../../shared/productDetails";
 import { formatCurrency } from "../utils/formatters";
 import ProductForm, { type ProductFormValue, emptyProductFormValue } from "./ProductForm";
@@ -912,8 +913,13 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
     fetchData,
     handleCreateEstimate,
     estClientId,
+    estStoreId = "",
+    setEstStoreId,
+    handleStoreSelectChange,
     estFormat,
     setEstFormat,
+    estFormatProfileCode = "",
+    setEstFormatProfileCode,
     estSubject,
     estNumber,
     estDate,
@@ -1126,7 +1132,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
   const addRowBelowSelection = () => {
     const baseIndex = selectedRowIndexes[selectedRowIndexes.length - 1] ?? activeCell?.rowIndex ?? estItems.length - 1;
     const baseRow = estItems[baseIndex];
-    const sid = String(baseRow?.storeId || estItems[0]?.storeId || "");
+    const sid = String(baseRow?.storeId || estStoreId || estItems[0]?.storeId || "");
     // Normal estimates use the existing unscoped-row model (`storeId: ""`).
     // Only ABFRL rows require a selected Store Master scope.
     if (isAblblFormat(estFormat) && !sid) return;
@@ -1431,9 +1437,14 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
   const storeBreakdownMemo = React.useMemo(() => {
     let grandMaterial = 0, grandSgst = 0, grandCgst = 0, grandIgst = 0;
     const isAbfrlEstimate = isAblblFormat(estFormat);
+    const isRetailSingleStore = isRetailSingleStoreFormat(estFormatProfileCode || estFormat);
     // A normal estimate is one unscoped item section. Empty storeId is the
     // pre-existing representation and intentionally creates no store grouping.
-    const sectionIds = isAbfrlEstimate ? activeStoreIds : (estItems.length > 0 ? [""] : []);
+    const sectionIds = isAbfrlEstimate
+      ? activeStoreIds
+      : isRetailSingleStore
+        ? (activeStoreIds.length > 0 ? activeStoreIds : (estStoreId ? [String(estStoreId)] : []))
+        : (estItems.length > 0 ? [""] : []);
     const breakdown = sectionIds.map((sid: string) => {
       const rows = sid ? estItems.filter((it: any) => String(it.storeId) === sid) : estItems;
       const productRows = rows.filter((r: any) => r.lineType === "product" || !r.lineType);
@@ -1457,7 +1468,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
       return { sid, rows, productRows, packingRows, installRows, transportRows, materialBase, materialSgst, materialCgst, materialIgst, packAmt, implAmt, trans };
     });
     return { breakdown, grandMaterial, grandSgst, grandCgst, grandIgst, grandTotal: grandMaterial + grandSgst + grandCgst + grandIgst };
-  }, [estItems, activeStoreIds, estFormat]);
+  }, [estItems, activeStoreIds, estFormat, estFormatProfileCode, estStoreId]);
 
   return (
         <div className="space-y-6">
@@ -1835,6 +1846,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                 // must not be inferred from (or overwritten by) the client:
                 // the same client can legitimately have normal and ABFRL jobs.
                 const eIsAbfrl = isAblblFormat(estFormat);
+                const eIsRetailSingleStore = isRetailSingleStoreFormat(estFormatProfileCode || estFormat);
 
                 // activeStoreIds is memoized at component level — do not redeclare here
                 const eClientIdNum = Number(estClientId) || null;
@@ -1857,7 +1869,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
 
                 // Store list visibility rules:
                 //   ABLBL  → require Client AND Brand before showing any stores.
-                //   Normal → require Client; Brand filters further when set.
+                //   Normal / Retail Single Store → require Client; Brand filters further when set.
                 const canShowStoreList = eIsAbfrl
                   ? Boolean(eClientIdNum && eBrandIdNum)
                   : Boolean(eClientIdNum);
@@ -1875,7 +1887,8 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                   && (!eBrandIdNum || s.brandId === eBrandIdNum)
                   && (!filterState
                       || (s.state || "").trim().toLowerCase() === filterState
-                      || activeStoreIds.includes(String(s.id)))
+                      || activeStoreIds.includes(String(s.id))
+                      || String(s.id) === String(estStoreId))
                 );
 
                 const handleBrandSelectChange = (brandIdVal: string) => {
@@ -2028,7 +2041,14 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                     prev.map(id => (id === oldSid ? String(newSid) : id))
                   );
 
-                  // 4. Close picker
+                  // 4. Update parent estStoreId
+                  if (handleStoreSelectChange) {
+                    handleStoreSelectChange(String(newSid));
+                  } else if (setEstStoreId) {
+                    setEstStoreId(String(newSid));
+                  }
+
+                  // 5. Close picker
                   setReplacingStoreId(null);
                   setStorePickerOpen(false);
                   setStoreSearch("");
@@ -2136,9 +2156,10 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                     .map((it: any, i: number) => ({ ...it, sl: i + 1 })));
                 };
                 const addRowToStore = (sid: string) => {
+                  const targetSid = sid || (eIsRetailSingleStore ? String(estStoreId || "") : "");
                   setEstItems((prev: any[]) => [
                     ...prev,
-                    blankRowForStore(sid, prev.length + 1, estGstType),
+                    blankRowForStore(targetSid, prev.length + 1, estGstType),
                   ]);
                 };
                 const moveStore = (sid: string, direction: "up" | "down") => {
@@ -2970,16 +2991,25 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                           <label>
                             <span>Estimate Type</span>
                             <select
-                              value={normalizeFormatMode(estFormat)}
+                              value={eIsRetailSingleStore ? "RETAIL_SINGLE_STORE" : normalizeFormatMode(estFormat)}
                               onChange={(e) => {
-                                const nextFormat = normalizeFormatMode(e.target.value);
-                                setEstFormat(nextFormat);
-                                // Preserve the existing ABFRL default when a
-                                // user switches into that workflow.
-                                if (isAblblFormat(nextFormat) && !estAbfrlProjectType) setEstAbfrlProjectType("SELEX");
+                                const nextVal = e.target.value;
+                                if (nextVal === "RETAIL_SINGLE_STORE") {
+                                  setEstFormat("RETAIL_SINGLE_STORE");
+                                  setEstFormatProfileCode?.("RETAIL_SINGLE_STORE");
+                                } else if (isAblblFormat(nextVal)) {
+                                  setEstFormat("ABLBL");
+                                  setEstFormatProfileCode?.("ABLBL");
+                                  if (!estAbfrlProjectType) setEstAbfrlProjectType("SELEX");
+                                } else {
+                                  const normalized = normalizeFormatMode(nextVal);
+                                  setEstFormat(normalized);
+                                  setEstFormatProfileCode?.(normalized);
+                                }
                               }}
                             >
                               <option value="normal">Normal / Non-ABFRL</option>
+                              <option value="RETAIL_SINGLE_STORE">Retail (Single Store)</option>
                               <option value="ABLBL">ABFRL Estimate</option>
                             </select>
                           </label>
@@ -3003,6 +3033,35 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                               ))}
                             </select>
                           </label>
+                          {eIsRetailSingleStore && (
+                            <label>
+                              <span>Store / Site *</span>
+                              <select
+                                required
+                                value={estStoreId || ""}
+                                onChange={(e) => {
+                                  const newSid = e.target.value;
+                                  if (handleStoreSelectChange) {
+                                    handleStoreSelectChange(newSid);
+                                  } else if (setEstStoreId) {
+                                    setEstStoreId(newSid);
+                                  }
+                                  if (newSid) {
+                                    setEstItems((prev: any[]) =>
+                                      prev.map((item: any) => ({ ...item, storeId: String(newSid) }))
+                                    );
+                                  }
+                                }}
+                              >
+                                <option value="">- select store -</option>
+                                {eligibleStores.map(s => (
+                                  <option key={s.id} value={s.id}>
+                                    {s.name} {s.storeCode ? `(${s.storeCode})` : ""}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                          )}
                           {eIsAbfrl ? (
                             <label>
                               <span>Project Type</span>
@@ -3507,15 +3566,24 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                                       >
                                         <Copy className="w-3.5 h-3.5" /><span>Copy Store</span>
                                       </button>
-                                      <button type="button" onClick={() => duplicateStore(sid)} title="Duplicate store with all its rows">
-                                        <FileSpreadsheet className="w-3.5 h-3.5" /><span>Duplicate</span>
-                                      </button>
-                                      <button type="button" onClick={() => moveStore(sid, "up")} disabled={!previousStoreId} title="Move store up">
-                                        <MoveUp className="w-3.5 h-3.5" /><span>↑</span>
-                                      </button>
-                                      <button type="button" onClick={() => moveStore(sid, "down")} disabled={!nextStoreId} title="Move store down">
-                                        <MoveDown className="w-3.5 h-3.5" /><span>↓</span>
-                                      </button>
+                                      {eIsRetailSingleStore && sid && (
+                                        <button type="button" onClick={() => openStorePickerToChange(sid)} title="Change store for this estimate">
+                                          <Edit3 className="w-3.5 h-3.5" /><span>Change Store</span>
+                                        </button>
+                                      )}
+                                      {!eIsRetailSingleStore && (
+                                        <>
+                                          <button type="button" onClick={() => duplicateStore(sid)} title="Duplicate store with all its rows">
+                                            <FileSpreadsheet className="w-3.5 h-3.5" /><span>Duplicate</span>
+                                          </button>
+                                          <button type="button" onClick={() => moveStore(sid, "up")} disabled={!previousStoreId} title="Move store up">
+                                            <MoveUp className="w-3.5 h-3.5" /><span>↑</span>
+                                          </button>
+                                          <button type="button" onClick={() => moveStore(sid, "down")} disabled={!nextStoreId} title="Move store down">
+                                            <MoveDown className="w-3.5 h-3.5" /><span>↓</span>
+                                          </button>
+                                        </>
+                                      )}
                                       <button type="button" onClick={() => removeStore(sid)} title="Delete store and all its rows" className="danger">
                                         <Trash className="w-3.5 h-3.5" /><span>Delete</span>
                                       </button>

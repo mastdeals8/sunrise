@@ -2449,6 +2449,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.get("/api/operations/estimate-format-profiles", authenticateToken, async (req: AuthRequest, res: Response) => {
+    try {
+      const list = await storage.getAllEstimateFormatProfiles();
+      res.json(list);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
   app.post("/api/operations/clients", authenticateToken, requireRole(["admin", "manager"]), async (req: AuthRequest, res: Response) => {
     try {
       const parsed = insertClientSchema.safeParse({
@@ -2691,6 +2700,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         "poDate",
       ]);
       preprocessed.estimateNumber = await nextDocumentNumber("estimate");
+
+      // Resolve format profile code
+      const resolvedFormatCode = estimate?.formatProfileCode
+        || (isAblblFormat(estimate?.clientFormat) ? "ABLBL" : (estimate?.clientFormat === "RETAIL_SINGLE_STORE" ? "RETAIL_SINGLE_STORE" : "normal"));
+      preprocessed.formatProfileCode = resolvedFormatCode;
+
+      if (resolvedFormatCode === "RETAIL_SINGLE_STORE" && (!preprocessed.storeId || Number(preprocessed.storeId) <= 0)) {
+        return res.status(400).json({ message: "Store selection is required for Retail Single Store estimates" });
+      }
 
       const parsedEstimate = insertEstimateSchema.safeParse(preprocessed);
       if (!parsedEstimate.success) {

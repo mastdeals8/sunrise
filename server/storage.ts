@@ -22,6 +22,7 @@ import {
   clientBillingProfiles,
   materialCodes,
   appSettings,
+  estimateFormatProfiles,
 } from "../shared/schema";
 import { eq, and, or, isNull, gte, lte, desc, sql } from "drizzle-orm";
 import * as bcrypt from "bcryptjs";
@@ -45,7 +46,8 @@ import type {
   DeliveryChallan, InsertDeliveryChallan,
   StaffAdvance, InsertStaffAdvance,
   Payroll, InsertPayroll,
-  ClientBillingProfile, InsertClientBillingProfile
+  ClientBillingProfile, InsertClientBillingProfile,
+  EstimateFormatProfileRow
 } from "../shared/schema";
 
 export interface IStorage {
@@ -141,6 +143,8 @@ export interface IStorage {
   createEstimate(estimate: InsertEstimate, items: InsertEstimateItem[]): Promise<Estimate>;
   getEstimateItems(estimateId: number): Promise<EstimateItem[]>;
   updateEstimate(id: number, updates: Partial<InsertEstimate>): Promise<Estimate | undefined>;
+  getAllEstimateFormatProfiles(): Promise<EstimateFormatProfileRow[]>;
+  getEstimateFormatProfile(code: string): Promise<EstimateFormatProfileRow | undefined>;
 
   // Delivery Challans
   getAllDeliveryChallans(): Promise<DeliveryChallan[]>;
@@ -834,6 +838,15 @@ export class DatabaseStorage implements IStorage {
 
   async updateEstimate(id: number, updates: Partial<InsertEstimate>): Promise<Estimate | undefined> {
     const result = await db.update(estimates).set(updates).where(eq(estimates.id, id)).returning();
+    return result[0];
+  }
+
+  async getAllEstimateFormatProfiles(): Promise<EstimateFormatProfileRow[]> {
+    return db.select().from(estimateFormatProfiles).where(eq(estimateFormatProfiles.isActive, true));
+  }
+
+  async getEstimateFormatProfile(code: string): Promise<EstimateFormatProfileRow | undefined> {
+    const result = await db.select().from(estimateFormatProfiles).where(eq(estimateFormatProfiles.code, code)).limit(1);
     return result[0];
   }
 

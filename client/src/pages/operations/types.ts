@@ -10,6 +10,8 @@ export interface Client {
   address: string | null;
   gstNumber: string | null;
   format: string; // normal, ABFRL
+  defaultFormatProfileCode?: string | null;
+  allowedFormatProfileCodes?: string[] | null;
   isActive: boolean;
   clientGroupName?: string | null;
   clientType?: string | null;
@@ -77,6 +79,7 @@ export interface Estimate {
   totalAmount: number;
   status: string; // draft, sent, approved, rejected, awaiting_po, po_received
   clientFormat: string; // normal, ABFRL
+  formatProfileCode?: string | null;
   subject: string | null;
   billingTo: string | null;
   shippingTo: string | null;
