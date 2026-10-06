@@ -173,6 +173,11 @@ export const invoices = pgTable("invoices", {
 
   // Project Workspace v2: transport cost line on the invoice
   transportCost: real("transport_cost").default(0),
+
+  // Store-wise Invoice linkage (Universal store-wise invoicing)
+  storeId: integer("store_id").references(() => stores.id, { onDelete: "set null" }),
+  storeCode: text("store_code"),
+  storeName: text("store_name"),
 });
 
 // ==========================================

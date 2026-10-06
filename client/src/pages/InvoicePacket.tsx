@@ -28,6 +28,9 @@ interface Invoice {
   taxAmount?: number;
   lineItems?: any[];
   poNumber?: string | null;
+  storeId?: number | null;
+  storeCode?: string | null;
+  storeName?: string | null;
 }
 
 interface PacketData {
@@ -409,7 +412,20 @@ const InvoicePacketPage: React.FC = () => {
             storeContexts.push({ storeCode: "", challans: challans.filter((dc: any) => !storeCodeFor(dc)) });
           }
 
-          for (const context of storeContexts) {
+          // Store isolation: if the invoice is scoped to a specific store,
+          // only include documents for that store. Otherwise (full project invoice), include all stores.
+          const invStoreCode = String(data.invoice?.storeCode || "").trim().toLowerCase();
+          const invStoreId = data.invoice?.storeId ? Number(data.invoice.storeId) : null;
+          const invStoreMaster = invStoreId
+            ? (data.stores || []).find((s: any) => s.id === invStoreId)
+            : null;
+          const targetStoreCode = invStoreCode || String(invStoreMaster?.storeCode || (invStoreMaster as any)?.code || "").trim().toLowerCase();
+
+          const effectiveStoreContexts = targetStoreCode
+            ? storeContexts.filter(c => c.storeCode.toLowerCase() === targetStoreCode)
+            : storeContexts;
+
+          for (const context of (effectiveStoreContexts.length > 0 ? effectiveStoreContexts : storeContexts)) {
             const storeCode = context.storeCode;
             const store = (data.stores || []).find((s: any) => String(s.code || s.storeCode || "") === storeCode);
             const storeLabel = store?.name ? `${store.name}${storeCode ? ` (${storeCode})` : ""}` : (storeCode || "Project");
@@ -513,7 +529,11 @@ const InvoicePacketPage: React.FC = () => {
       ...(packet?.executionStores || []).map((row: any) => String(row.storeCode || row.code || "").trim()),
       ...(packet?.challans || []).map((dc: any) => storeCodeFor(dc)),
     ].filter((value): value is string => Boolean(value))));
-    for (const sc of storeCodes) {
+    const invTargetCode = String(packet?.invoice?.storeCode || "").trim().toLowerCase();
+    const activeStoreCodes = invTargetCode
+      ? storeCodes.filter(sc => sc.toLowerCase() === invTargetCode)
+      : storeCodes;
+    for (const sc of activeStoreCodes) {
       const masterStore = (packet?.stores || []).find((store: any) => String(store.storeCode || store.code || "") === sc);
       const storeLabel = pages.find(p => p.storeCode === sc)?.label?.split(" — ")[0] || masterStore?.name || sc || "Store";
       const storeMissing: string[] = [];

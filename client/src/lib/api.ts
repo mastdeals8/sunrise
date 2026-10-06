@@ -1200,12 +1200,25 @@ export async function createInvoice(
     if (!res.ok) throw new Error((await res.json()).message ?? "Failed to create invoice");
     return res.json();
   }
+  // Try atomic RPC first in Bolt mode (preserves store fields & enforces duplicate protection)
+  try {
+    const { data: atomicCreated, error: rpcErr } = await supabase.rpc("create_invoice_atomic", {
+      p_invoice: payload,
+    });
+    if (!rpcErr && atomicCreated) {
+      return toCamel(atomicCreated);
+    }
+    if (rpcErr) console.warn("[api] create_invoice_atomic RPC error:", rpcErr.message);
+  } catch (err) {
+    console.warn("[api] create_invoice_atomic exception:", err);
+  }
+
   const res = await edgeFetch("invoice-create", token, {
     method: "POST",
     body: JSON.stringify(payload),
   });
   if (!res.ok) throw new Error((await res.json()).message ?? "Failed to create invoice");
-  return res.json();
+  return toCamel(await res.json());
 }
 
 export async function updateInvoice(token: string | null, id: number, payload: Record<string, unknown>): Promise<any> {

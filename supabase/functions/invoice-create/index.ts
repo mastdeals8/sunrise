@@ -22,7 +22,7 @@ function preprocessDate(value: unknown): string | null {
   return isNaN(d.getTime()) ? null : d.toISOString();
 }
 
-const invoiceFields = new Set(["invoice_number", "type", "party_name", "amount", "tax_amount", "total_amount", "date", "due_date", "status", "estimate_id", "client_id", "paid_amount", "balance_amount", "packet_settings", "remarks", "delivery_challan_id", "line_items", "po_number", "po_reference", "transport_cost"]);
+const invoiceFields = new Set(["invoice_number", "type", "party_name", "amount", "tax_amount", "total_amount", "date", "due_date", "status", "estimate_id", "client_id", "paid_amount", "balance_amount", "packet_settings", "remarks", "delivery_challan_id", "line_items", "po_number", "po_reference", "transport_cost", "store_id", "store_code", "store_name"]);
 const toSnake = (key: string) => key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
 function normalizeInvoicePayload(body: Record<string, unknown>) {
   const payload: Record<string, unknown> = {};
@@ -85,9 +85,26 @@ Deno.serve(async (req: Request) => {
       return jsonResponse(updated);
     }
 
+    // Try atomic RPC first (single transaction with store-level duplicate protection)
+    const { data: atomicCreated, error: rpcErr } = await db.rpc("create_invoice_atomic", {
+      p_invoice: payload,
+    });
+    if (!rpcErr && atomicCreated) {
+      return jsonResponse(atomicCreated, 201);
+    }
+
     if (payload.estimate_id) {
-      const { data: existing, error: lookupError } = await db.from("invoices").select("*")
-        .eq("estimate_id", payload.estimate_id).neq("status", "cancelled")
+      let query = db.from("invoices").select("*")
+        .eq("estimate_id", payload.estimate_id)
+        .neq("status", "cancelled");
+      if (payload.store_id) {
+        query = query.eq("store_id", payload.store_id);
+      } else if (payload.store_code) {
+        query = query.eq("store_code", payload.store_code);
+      } else {
+        query = query.is("store_id", null);
+      }
+      const { data: existing, error: lookupError } = await query
         .order("created_at", { ascending: true }).limit(1).maybeSingle();
       if (lookupError) return errorResponse(lookupError.message, 400);
       if (existing) return jsonResponse(existing, 200);

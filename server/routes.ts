@@ -1919,14 +1919,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(409).json({ message: "Invoice readiness is incomplete", readiness });
         }
 
-        // Duplicate guard: If an active (non-cancelled) invoice already exists for this estimate, reject duplicate creation
+        // Duplicate guard: If an active (non-cancelled) invoice already exists for this estimate & store, handle idempotently
+        const isStoreScoped = Boolean(parsed.data.storeId || parsed.data.storeCode);
+        const storeCondition = parsed.data.storeId
+          ? eq(invoices.storeId, Number(parsed.data.storeId))
+          : parsed.data.storeCode
+            ? eq(invoices.storeCode, String(parsed.data.storeCode))
+            : isNull(invoices.storeId);
+
         const existingInvs = await db.select().from(invoices).where(
           and(
             eq(invoices.estimateId, Number(parsed.data.estimateId)),
+            storeCondition,
             ne(invoices.status, "cancelled")
           )
         ).limit(1);
         if (existingInvs.length > 0) {
+          if (isStoreScoped) {
+            return res.status(200).json(existingInvs[0]);
+          }
           return res.status(409).json({
             message: `Invoice ${existingInvs[0].invoiceNumber} already exists for this estimate. Multiple full invoices are not allowed.`,
             existingInvoice: existingInvs[0],

@@ -2,7 +2,7 @@ import React from "react";
 import { Pager, usePagedList } from "@/components/Pager";
 import { createPortal } from "react-dom";
 import { Link } from "wouter";
-import { Archive, Check, CheckCircle2, ChevronDown, ChevronRight, ClipboardPaste, Copy, CreditCard as Edit3, Eye, FilePlus2, FileSpreadsheet, FileText, FileUp, Filter, FolderOpen, MoveDown, MoveUp, Plus, Receipt, Redo2, Search, Trash, Undo2 } from "lucide-react";
+import { Archive, Building2, Check, CheckCircle2, ChevronDown, ChevronRight, ClipboardPaste, Copy, CreditCard as Edit3, Eye, FilePlus2, FileSpreadsheet, FileText, FileUp, Filter, FolderOpen, MoveDown, MoveUp, Plus, Receipt, Redo2, Search, Trash, Undo2 } from "lucide-react";
 import { displayFormatLabel, isAblblFormat, normalizeDisplayName, normalizeFormatMode, normalizeGstinPan } from "../../../../../shared/textFormat";
 import { getEstimateFormatProfile, isRetailSingleStoreFormat } from "../../../../../shared/estimateProfiles";
 import { formatProductDetails, sameDisplayText } from "../../../../../shared/productDetails";
@@ -13,6 +13,7 @@ import ClientForm, { type ClientFormValue, emptyClientFormValue } from "./Client
 import { isBoltMode } from "../../../lib/supabase";
 import { fetchEstimateItems, masterDataSave, openExecutionDocument, submitEstimate, unarchiveEstimate } from "../../../lib/api";
 import { exportEstimateToExcel } from "../utils/exportHelpers";
+import StoreWiseInvoiceModal from "./StoreWiseInvoiceModal";
 
 // ─── Create Product Drawer ───────────────────────────────────────────────────
 // Renders as a fixed right-side panel (pointer-events passthrough backdrop so
@@ -882,6 +883,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
     initialName: string;
   } | null>(null);
   const [createClientFor, setCreateClientFor] = React.useState<{ initialName: string } | null>(null);
+  const [storeWiseInvoiceEst, setStoreWiseInvoiceEst] = React.useState<any | null>(null);
 
   const {
     showEstimateForm,
@@ -1748,6 +1750,17 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
 	                                    + Inv
 	                                  </button>
 	                                )}
+
+	                                {/* Store-wise Invoice Action */}
+	                                <button
+	                                  type="button"
+	                                  onClick={() => setStoreWiseInvoiceEst(e)}
+	                                  title="Generate store-wise invoices for this estimate"
+	                                  className="inline-flex h-7 items-center gap-1 rounded border border-orange-200 bg-orange-50/80 px-2 text-[10px] font-bold text-orange-700 hover:bg-orange-100 transition shadow-xs"
+	                                >
+	                                  <Building2 className="w-3.5 h-3.5" />
+	                                  Store Invoices
+	                                </button>
 
 	                                {/* 6. Submitted Workflow (P0 Business Rules) */}
 	                                {e.status !== "archived" && e.status !== "submitted" ? (
@@ -3954,6 +3967,20 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
               )}
             </form>
           )}
+
+          <StoreWiseInvoiceModal
+            isOpen={Boolean(storeWiseInvoiceEst)}
+            onClose={() => setStoreWiseInvoiceEst(null)}
+            estimate={storeWiseInvoiceEst}
+            clients={clients}
+            stores={stores}
+            invoices={invoices}
+            token={token}
+            onSuccess={async () => {
+              await fetchData?.();
+            }}
+            openInvoiceEditor={openInvoiceEditor}
+          />
         </div>
   );
 };
