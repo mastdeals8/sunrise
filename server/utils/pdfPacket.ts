@@ -299,6 +299,17 @@ export async function buildInvoicePacketPdf(params: {
           d.status !== "deleted" &&
           !(d.metadata as any)?.deleted
       );
+      if (invoice.storeId || invoice.storeCode) {
+        const invStoreCode = String(invoice.storeCode || "").trim().toLowerCase();
+        const invStoreId = invoice.storeId ? Number(invoice.storeId) : null;
+        challans = challans.filter((d: any) => {
+          const dcStoreCode = String(d.storeCode || d.metadata?.storeCode || "").trim().toLowerCase();
+          const dcStoreId = d.storeId || d.metadata?.storeId ? Number(d.storeId || d.metadata?.storeId) : null;
+          if (invStoreCode && dcStoreCode) return dcStoreCode === invStoreCode;
+          if (invStoreId && dcStoreId) return dcStoreId === invStoreId;
+          return false;
+        });
+      }
     }
   }
 

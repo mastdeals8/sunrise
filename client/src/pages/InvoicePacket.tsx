@@ -84,6 +84,11 @@ const SafeImage: React.FC<React.ImgHTMLAttributes<HTMLImageElement> & { fallback
   return <img {...props} onError={(event) => { props.onError?.(event); setFailed(true); }} />;
 };
 
+import {
+  getEstimateScopedStores,
+  getInvoiceScopedStores,
+  isStoreWiseInvoice,
+} from "@shared/storeScoping";
 import { orderedStoreKeysFromGrouping } from "./operations/utils/estimateOrdering";
 
 const docTypeLabel = (type: string) => ({
@@ -341,15 +346,49 @@ const InvoicePacketPage: React.FC = () => {
             entries.push({ type: "static", page: { id: "est", label: `Estimate ${data.estimate.estimateNumber}`, kind: "estimate", included: true } });
           }
 
-          // Transport/project uploads are the final packet section. Preserve
-          // their existing upload/store order without changing their source.
-          const projectDocs = docs
-            .filter((doc: any) => !isPoType(doc.documentType) && !isExcludedDoc(doc) && !isSignedType(doc.documentType) && !isPhotoType(doc.documentType) && !isStoreScopeDoc(doc))
-            .sort(byUploadTime);
-          const legacyProjectDocs = (data.challans || []).flatMap((dc: any) => [
+          // Universal store scoping:
+          // 1. Resolve stores belonging strictly to this estimate (store_grouping, items, store_id)
+          // 2. Scope to invoice: if store-wise invoice, narrow strictly to that 1 store; if complete, include all estimate stores
+          const estimateScopedStores = getEstimateScopedStores(
+            data.estimate,
+            data.estimateItems || [],
+            data.stores || [],
+            data.challans || []
+          );
+          const activeScopedStores = getInvoiceScopedStores(
+            estimateScopedStores,
+            data.invoice,
+            data.stores || []
+          );
+          const isStoreScoped = isStoreWiseInvoice(data.invoice);
+          const scopedStoreCodes = new Set(activeScopedStores.map(s => s.storeCode.toLowerCase()).filter(Boolean));
+          const scopedStoreIds = new Set(activeScopedStores.map(s => s.storeId).filter((id): id is number => id != null));
+
+          const isChallanInScope = (dc: any): boolean => {
+            const dcCode = storeCodeFor(dc).toLowerCase();
+            const dcSid = dc.storeId || dc.metadata?.storeId ? Number(dc.storeId || dc.metadata?.storeId) : null;
+            if (dcCode && scopedStoreCodes.has(dcCode)) return true;
+            if (dcSid && scopedStoreIds.has(dcSid)) return true;
+            if (!isStoreScoped && activeScopedStores.length === 0) return true;
+            return false;
+          };
+
+          const scopedChallans = [...(data.challans || [])].filter(isChallanInScope);
+          const scopedChallanIds = new Set(scopedChallans.map((dc: any) => Number(dc.id)));
+
+          // Transport / project uploads:
+          // For store-wise invoice: only store-scoped transport docs are included with that store
+          // For complete invoice: general project docs (no store code, no DC id) are included here
+          const projectDocs = isStoreScoped
+            ? []
+            : docs
+                .filter((doc: any) => !isPoType(doc.documentType) && !isExcludedDoc(doc) && !isSignedType(doc.documentType) && !isPhotoType(doc.documentType) && !isStoreScopeDoc(doc))
+                .sort(byUploadTime);
+          const legacyProjectDocs = scopedChallans.flatMap((dc: any) => [
             dc.transportReceiptPath && { id: `legacy-transport-${dc.id}`, documentType: "transport_receipt", storagePath: dc.transportReceiptPath, createdAt: dc.createdAt },
             dc.extraDocPath && { id: `legacy-extra-${dc.id}`, documentType: "extra", storagePath: dc.extraDocPath, createdAt: dc.createdAt },
           ]).filter(Boolean).sort(byUploadTime) as any[];
+
           for (const doc of [...projectDocs, ...legacyProjectDocs].sort(byUploadTime)) {
             queueFile({
               id: `project-${doc.id}`,
@@ -361,82 +400,54 @@ const InvoicePacketPage: React.FC = () => {
             });
           }
 
-          // Order stores by the Estimate's store sequence (the master order),
-          // never alphabetical, by store ID, by WCC/DC number, or by upload
-          // date. Fall back to challan id for legacy data.
-          const estimateGrouping = (data.estimate?.storeGrouping || {}) as Record<string, any>;
-          const estimateOrderedSids = orderedStoreKeysFromGrouping(estimateGrouping);
-          const estimateStoreCodeOrder = new Map<string, number>();
-          estimateOrderedSids.forEach((sid, i) => {
-            const masterStore = (data.stores || []).find((s: any) => s.id === Number(sid));
-            const code = String(masterStore?.storeCode || (masterStore as any)?.code || "").trim();
-            if (code) estimateStoreCodeOrder.set(code, i);
+          // Build storeContexts strictly from activeScopedStores (never from global or phantom stores)
+          const storeContexts: { storeCode: string; storeName: string; storeId: number | null; challans: any[] }[] = activeScopedStores.map(store => {
+            const matchingChallans = scopedChallans.filter(dc => {
+              const dcCode = storeCodeFor(dc).toLowerCase();
+              const dcSid = dc.storeId || dc.metadata?.storeId ? Number(dc.storeId || dc.metadata?.storeId) : null;
+              if (store.storeCode && dcCode && store.storeCode.toLowerCase() === dcCode) return true;
+              if (store.storeId && dcSid && store.storeId === dcSid) return true;
+              return false;
+            });
+            return {
+              storeCode: store.storeCode,
+              storeName: store.storeName,
+              storeId: store.storeId,
+              challans: matchingChallans,
+            };
           });
-          const execOrder = new Map<string, number>();
-          (data.executionStores || []).forEach((s: any, i: number) => {
-            const code = String(s.code || s.storeCode || "");
-            if (code && !estimateStoreCodeOrder.has(code)) execOrder.set(code, estimateOrderedSids.length + i);
-          });
-          const storeRank = (code: string): number => {
-            const er = estimateStoreCodeOrder.get(code);
-            if (er !== undefined) return er;
-            const xr = execOrder.get(code);
-            if (xr !== undefined) return xr;
-            return Infinity;
-          };
-          const challans = [...(data.challans || [])].sort((a: any, b: any) => {
-            const oa = storeRank(storeCodeFor(a));
-            const ob = storeRank(storeCodeFor(b));
-            if (oa !== ob) return oa - ob;
-            return Number(a.id) - Number(b.id);
-          });
-          const storeContexts: { storeCode: string; challans: any[] }[] = [];
-          const ensureStore = (storeCode: string) => {
-            if (!storeCode || storeContexts.some(row => row.storeCode === storeCode)) return;
-            storeContexts.push({ storeCode, challans: challans.filter(dc => storeCodeFor(dc) === storeCode) });
-          };
-          // First: stores in Estimate order
-          estimateOrderedSids.forEach(sid => {
-            const masterStore = (data.stores || []).find((s: any) => s.id === Number(sid));
-            const code = String(masterStore?.storeCode || (masterStore as any)?.code || "").trim();
-            if (code) ensureStore(code);
-          });
-          // Then: any execution stores not in the estimate grouping (legacy)
-          [...(data.executionStores || [])]
-            .sort((a: any, b: any) => storeRank(String(a.storeCode || a.code || "").trim()) - storeRank(String(b.storeCode || b.code || "").trim()))
-            .forEach((row: any) => ensureStore(String(row.storeCode || row.code || "").trim()));
-          // Then: any challans/docs whose store wasn't seen yet
-          challans.forEach((dc: any) => ensureStore(storeCodeFor(dc)));
-          docs.filter(isStoreScopeDoc).forEach((doc: any) => ensureStore(storeCodeFor(doc)));
-          if (challans.some((dc: any) => !storeCodeFor(dc)) || docs.some((doc: any) => (isSignedType(doc.documentType) || isPhotoType(doc.documentType) || isStoreScopeDoc(doc)) && !storeCodeFor(doc))) {
-            storeContexts.push({ storeCode: "", challans: challans.filter((dc: any) => !storeCodeFor(dc)) });
+
+          // Fallback for general estimates with no stores
+          if (activeScopedStores.length === 0 && (scopedChallans.length > 0 || docs.some(d => isSignedType(d.documentType) || isPhotoType(d.documentType)))) {
+            storeContexts.push({
+              storeCode: "",
+              storeName: "Project",
+              storeId: null,
+              challans: scopedChallans,
+            });
           }
 
-          // Store isolation: if the invoice is scoped to a specific store,
-          // only include documents for that store. Otherwise (full project invoice), include all stores.
-          const invStoreCode = String(data.invoice?.storeCode || "").trim().toLowerCase();
-          const invStoreId = data.invoice?.storeId ? Number(data.invoice.storeId) : null;
-          const invStoreMaster = invStoreId
-            ? (data.stores || []).find((s: any) => s.id === invStoreId)
-            : null;
-          const targetStoreCode = invStoreCode || String(invStoreMaster?.storeCode || (invStoreMaster as any)?.code || "").trim().toLowerCase();
-
-          const effectiveStoreContexts = targetStoreCode
-            ? storeContexts.filter(c => c.storeCode.toLowerCase() === targetStoreCode)
-            : storeContexts;
-
-          for (const context of (effectiveStoreContexts.length > 0 ? effectiveStoreContexts : storeContexts)) {
+          for (const context of storeContexts) {
             const storeCode = context.storeCode;
-            const store = (data.stores || []).find((s: any) => String(s.code || s.storeCode || "") === storeCode);
-            const storeLabel = store?.name ? `${store.name}${storeCode ? ` (${storeCode})` : ""}` : (storeCode || "Project");
+            const storeId = context.storeId;
+            const store = (data.stores || []).find((s: any) =>
+              (storeId && s.id === storeId) ||
+              (storeCode && String(s.code || s.storeCode || "").trim().toLowerCase() === storeCode.toLowerCase())
+            );
+            const storeLabel = context.storeName || store?.name || (storeCode ? `Store ${storeCode}` : "Project");
             const challanIds = new Set(context.challans.map(dc => Number(dc.id)));
-            const owned = docs.filter((d: any) => (
-              challanIds.has(Number(d.deliveryChallanId))
-              || (storeCode ? storeCodeFor(d) === storeCode : (!d.deliveryChallanId && !storeCodeFor(d)))
-            ) && !isPoType(d.documentType) && !isExcludedDoc(d));
+            const owned = docs.filter((d: any) => {
+              if (isPoType(d.documentType) || isExcludedDoc(d)) return false;
+              if (d.deliveryChallanId && challanIds.has(Number(d.deliveryChallanId))) return true;
+              const dCode = storeCodeFor(d);
+              if (storeCode && dCode) return dCode.toLowerCase() === storeCode.toLowerCase();
+              if (!storeCode && !d.deliveryChallanId && !dCode) return true;
+              return false;
+            });
             const legacy = context.challans.flatMap((dc: any) => [
               dc.signedChallanPath && { id: `legacy-signed-${dc.id}`, documentType: isAblblFormat(dc.clientFormat) ? "signed_wcc" : "signed_dc", storagePath: dc.signedChallanPath },
             ]).filter(Boolean) as any[];
+
             // Per store: signed WCC, photos, then any other store attachment.
             const ordered = [...owned, ...legacy].sort((a: any, b: any) => {
               const rank = (d: any) => isSignedType(d.documentType) ? 0
@@ -446,17 +457,18 @@ const InvoicePacketPage: React.FC = () => {
                 : isPhotoType(d.documentType) ? 4 : 5;
               return rank(a) - rank(b) || new Date(a.uploadedAt || a.createdAt).getTime() - new Date(b.uploadedAt || b.createdAt).getTime();
             });
+
             for (const doc of ordered) {
               queueFile({
                 id: `exec-${doc.id}`,
                 label: isPhotoType(doc.documentType)
-                  ? `${store?.name || "Store"} — ${storeCode || "—"}`
+                  ? `${context.storeName || store?.name || "Store"} — ${storeCode || "—"}`
                   : `${storeLabel} — ${docTypeLabel(doc.documentType)}`,
                 kind: isPhotoType(doc.documentType) ? "photo" : isSignedType(doc.documentType) ? "wcc" : "store-file",
                 storagePath: doc.storagePath || doc.filePath,
                 mimeType: doc.mimeType,
                 storeCode,
-                storeName: store?.name || storeLabel,
+                storeName: context.storeName || store?.name || storeLabel,
                 caption: doc.caption || doc.description || doc.notes || null,
               });
             }
@@ -515,31 +527,45 @@ const InvoicePacketPage: React.FC = () => {
     if (!pages.some(p => p.kind === "po" && p.filePath)) coreMissing.push("Purchase Order");
     if (!pages.some(p => p.kind === "estimate")) coreMissing.push("Estimate");
     if (coreMissing.length) gaps.push({ store: "Project-level", missing: coreMissing });
-    const estimateGrouping = (packet?.estimate?.storeGrouping || {}) as Record<string, any>;
-    const estimateOrderedSids = orderedStoreKeysFromGrouping(estimateGrouping);
-    const estimateOrderedStoreCodes = estimateOrderedSids
-      .map(sid => {
-        const masterStore = (packet?.stores || []).find((store: any) => store.id === Number(sid));
-        return String(masterStore?.storeCode || (masterStore as any)?.code || "").trim();
-      })
-      .filter(Boolean);
-    const storeCodes = Array.from(new Set([
-      ...estimateOrderedStoreCodes,
-      ...pages.map(p => p.storeCode),
-      ...(packet?.executionStores || []).map((row: any) => String(row.storeCode || row.code || "").trim()),
-      ...(packet?.challans || []).map((dc: any) => storeCodeFor(dc)),
-    ].filter((value): value is string => Boolean(value))));
-    const invTargetCode = String(packet?.invoice?.storeCode || "").trim().toLowerCase();
-    const activeStoreCodes = invTargetCode
-      ? storeCodes.filter(sc => sc.toLowerCase() === invTargetCode)
-      : storeCodes;
-    for (const sc of activeStoreCodes) {
-      const masterStore = (packet?.stores || []).find((store: any) => String(store.storeCode || store.code || "") === sc);
-      const storeLabel = pages.find(p => p.storeCode === sc)?.label?.split(" — ")[0] || masterStore?.name || sc || "Store";
+
+    if (!packet?.estimate) return gaps;
+
+    // Use canonical estimate and invoice store scoping (never global/orphan execution stores)
+    const estStores = getEstimateScopedStores(
+      packet.estimate,
+      packet.estimateItems || [],
+      packet.stores || [],
+      packet.challans || []
+    );
+    const activeStores = getInvoiceScopedStores(
+      estStores,
+      packet.invoice,
+      packet.stores || []
+    );
+
+    for (const store of activeStores) {
+      const sc = store.storeCode;
+      const scLower = sc.toLowerCase();
+      const storeLabel = store.storeName || (sc ? `Store ${sc}` : "Store");
       const storeMissing: string[] = [];
-      if (!pages.some(p => p.storeCode === sc && p.kind === "wcc" && p.filePath)) storeMissing.push("Signed WCC");
-      if (!pages.some(p => p.storeCode === sc && p.kind === "photo" && p.filePath)) storeMissing.push("Installation Photos");
-      if (storeMissing.length) gaps.push({ store: storeLabel, missing: storeMissing });
+
+      const hasWcc = pages.some(p =>
+        p.kind === "wcc" &&
+        p.filePath &&
+        (scLower ? String(p.storeCode || "").trim().toLowerCase() === scLower : true)
+      );
+      if (!hasWcc) storeMissing.push("Signed WCC");
+
+      const hasPhoto = pages.some(p =>
+        p.kind === "photo" &&
+        p.filePath &&
+        (scLower ? String(p.storeCode || "").trim().toLowerCase() === scLower : true)
+      );
+      if (!hasPhoto) storeMissing.push("Installation Photos");
+
+      if (storeMissing.length) {
+        gaps.push({ store: storeLabel, missing: storeMissing });
+      }
     }
     return gaps;
   };

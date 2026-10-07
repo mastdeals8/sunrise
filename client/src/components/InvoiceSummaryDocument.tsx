@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from "react";
 import { formatCurrency } from "@/utils/format";
-import { orderedStoreKeysFromGrouping } from "../pages/operations/utils/estimateOrdering";
+import { getEstimateScopedStores, getInvoiceScopedStores } from "@shared/storeScoping";
 import { Copy, Check, Mail } from "lucide-react";
 
 export interface InvoiceSummaryRow {
@@ -61,49 +61,21 @@ export function getInvoiceSummaryRows(packet: any, sellerProfile: any, pages?: a
   ).trim() || "—";
 
   // 6. Store & 8. No of Stores
-  const estimateGrouping = (packet.estimate?.storeGrouping || {}) as Record<string, any>;
-  const orderedSids = orderedStoreKeysFromGrouping(estimateGrouping);
+  const estStores = getEstimateScopedStores(
+    packet.estimate,
+    packet.estimateItems || [],
+    packet.stores || [],
+    packet.challans || []
+  );
+  const scopedStores = getInvoiceScopedStores(
+    estStores,
+    packet.invoice,
+    packet.stores || []
+  );
+  const storeCodesList = scopedStores.map(s => s.storeCode).filter(Boolean);
+  const storeNamesList = scopedStores.map(s => s.storeName).filter(Boolean);
 
-  const storeCodesList: string[] = [];
-  const storeNamesList: string[] = [];
-
-  const registerStore = (code: string, name: string) => {
-    const cleanCode = String(code || "").trim();
-    if (!cleanCode || storeCodesList.includes(cleanCode)) return;
-    storeCodesList.push(cleanCode);
-    storeNamesList.push(String(name || cleanCode).trim());
-  };
-
-  if (orderedSids.length > 0) {
-    orderedSids.forEach(sid => {
-      const master = (packet.stores || []).find((s: any) => s.id === Number(sid));
-      const code = String(master?.storeCode || (master as any)?.code || sid).trim();
-      const name = master?.name || code;
-      registerStore(code, name);
-    });
-  }
-
-  (packet.executionStores || []).forEach((es: any) => {
-    const code = String(es.code || es.storeCode || "").trim();
-    const name = es.name || es.storeName || code;
-    registerStore(code, name);
-  });
-
-  (packet.challans || []).forEach((dc: any) => {
-    const code = String(dc.storeCode || dc.metadata?.storeCode || "").trim();
-    const name = dc.metadata?.storeName || code;
-    registerStore(code, name);
-  });
-
-  if (storeCodesList.length === 0 && packet.estimate?.storeId) {
-    const master = (packet.stores || []).find((s: any) => s.id === Number(packet.estimate.storeId));
-    if (master) {
-      const code = String(master.storeCode || (master as any)?.code || master.id).trim();
-      registerStore(code, master.name || code);
-    }
-  }
-
-  const noOfStoresCount = storeCodesList.length;
+  const noOfStoresCount = scopedStores.length;
   const noOfStores = String(noOfStoresCount);
   const store = noOfStoresCount > 1 ? "Multiple" : noOfStoresCount === 1 ? (storeNamesList[0] || "—") : "—";
 
