@@ -3116,6 +3116,41 @@ export async function registerRoutes(app: Express): Promise<Server> {
           shippingAddress = shippingRaw.split("\n").map(s => s.trim()).filter(Boolean).join("\n");
         }
       }
+
+      // Derive store for Shipping To
+      const storeGroupKeys = estimate.storeGrouping && typeof estimate.storeGrouping === "object"
+        ? Object.keys(estimate.storeGrouping).filter(k => k && k !== "undefined" && k !== "null")
+        : [];
+      const isMultiStore = storeGroupKeys.length > 1;
+
+      let singleStoreObj: any = null;
+      if (!isMultiStore) {
+        if (storeGroupKeys.length === 1) {
+          const sid = storeGroupKeys[0];
+          singleStoreObj = storesList.find(st => String(st.id) === sid);
+        } else if (estimate.storeId) {
+          singleStoreObj = store || storesList.find(st => st.id === estimate.storeId || String(st.id) === String(estimate.storeId));
+        }
+      }
+
+      const shippingStoreName: string | null = (!isMultiStore && singleStoreObj?.name)
+        ? singleStoreObj.name
+        : (!isMultiStore && storeGroupKeys.length === 1 && (estimate.storeGrouping as any)[storeGroupKeys[0]]?.storeName)
+        ? (estimate.storeGrouping as any)[storeGroupKeys[0]].storeName
+        : null;
+
+      if (shippingStoreName && shippingName.trim().toLowerCase() === shippingStoreName.trim().toLowerCase()) {
+        shippingName = billingName;
+      }
+
+      const storeMasterAddress: string = (singleStoreObj?.address || "").trim() ||
+        [singleStoreObj?.location, singleStoreObj?.city, singleStoreObj?.state].filter(Boolean).join(", ").trim();
+
+      let effectiveShippingAddress = shippingAddress;
+      if (!isMultiStore && storeMasterAddress) {
+        effectiveShippingAddress = storeMasterAddress;
+      }
+
       const dateStr = ((estimate as any).estimateDate || estimate.createdAt)
         ? new Date((estimate as any).estimateDate || estimate.createdAt).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }).replace(/ /g, "-")
         : "";
@@ -3179,7 +3214,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       addHeaderRow("", S_BILL, estimate.vendorCode ? "Vendor Code -" : "", estimate.vendorCode || "");
       addHeaderRow("Shipping To", S_BILL_LABEL, "", "");
       addHeaderRow(`M/S : ${shippingName}`, S_BILL_LABEL, "", "");
-      addHeaderRow(wrapAddressForExcel(shippingAddress), S_BILL, "", "");
+      if (shippingStoreName) {
+        addHeaderRow(shippingStoreName, S_BILL_LABEL, "", "");
+      }
+      addHeaderRow(wrapAddressForExcel(effectiveShippingAddress), S_BILL, "", "");
       addHeaderRow(billingGstin ? `GSTN - ${billingGstin}` : "", S_BILL_LABEL, "", "");
 
       // Spacer

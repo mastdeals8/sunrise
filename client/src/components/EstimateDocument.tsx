@@ -118,6 +118,42 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
   const shippingGstin = billingGstin;
   const isIgst = est.gstType === "IGST";
 
+  // Derive store for Shipping To (single store vs multi-store)
+  const storeGroupKeys = est.storeGrouping && typeof est.storeGrouping === "object"
+    ? Object.keys(est.storeGrouping as any).filter(k => k && k !== "undefined" && k !== "null")
+    : [];
+  const isMultiStore = storeGroupKeys.length > 1;
+
+  let singleStoreObj: any = null;
+  if (!isMultiStore) {
+    if (storeGroupKeys.length === 1) {
+      const sid = storeGroupKeys[0];
+      singleStoreObj = stores.find((s: any) => String(s.id) === sid) || targetStore;
+    } else if (est.storeId) {
+      singleStoreObj = targetStore || stores.find((s: any) => s.id === est.storeId || String(s.id) === String(est.storeId));
+    }
+  }
+
+  const shippingStoreName: string | null = (!isMultiStore && singleStoreObj?.name)
+    ? singleStoreObj.name
+    : (!isMultiStore && storeGroupKeys.length === 1 && (est.storeGrouping as any)[storeGroupKeys[0]]?.storeName)
+    ? (est.storeGrouping as any)[storeGroupKeys[0]].storeName
+    : null;
+
+  // Never replace customer legal entity name with store name
+  if (shippingStoreName && shippingName.trim().toLowerCase() === shippingStoreName.trim().toLowerCase()) {
+    shippingName = billingName;
+  }
+
+  // Address must come from existing Store master data
+  const storeMasterAddress: string = (singleStoreObj?.address || "").trim() ||
+    [singleStoreObj?.location, singleStoreObj?.city, singleStoreObj?.state].filter(Boolean).join(", ").trim();
+
+  let effectiveShippingAddress = shippingAddress;
+  if (!isMultiStore && storeMasterAddress) {
+    effectiveShippingAddress = storeMasterAddress;
+  }
+
   // Build sections (one per store for ABFRL, single section otherwise)
   type SectionRow = {
     label: string;
@@ -434,7 +470,8 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
             {billingGstin && <div style={{ fontWeight: 700 }}>GSTN - {billingGstin}</div>}
             <div style={{ marginTop: "10px", fontWeight: 700 }}>Shipping To</div>
             <div style={{ fontWeight: 700 }}>M/S : {shippingName}</div>
-            {shippingAddress && <div style={{ whiteSpace: "pre-wrap" }}>{wrapAddress(shippingAddress)}</div>}
+            {shippingStoreName && <div style={{ fontWeight: 700 }}>{shippingStoreName}</div>}
+            {effectiveShippingAddress && <div style={{ whiteSpace: "pre-wrap" }}>{wrapAddress(effectiveShippingAddress)}</div>}
             {shippingGstin && <div style={{ fontWeight: 700 }}>GSTN - {shippingGstin}</div>}
           </td>
           <td style={{ padding: "8px 12px", width: "40%", textAlign: "right", fontSize: "11px", verticalAlign: "top" }}>

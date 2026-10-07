@@ -1615,6 +1615,21 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                         const hasDc = estChallans.length > 0;
                         const hasInv = estInvoices.length > 0;
                         const isAblbl = isAblblFormat(e.clientFormat);
+                        const groupKeys = e.storeGrouping && typeof e.storeGrouping === "object"
+                          ? Object.keys(e.storeGrouping).filter(k => k && k !== "undefined" && k !== "null")
+                          : [];
+                        let storeSubtitle: string | null = null;
+                        if (groupKeys.length > 1) {
+                          storeSubtitle = `${groupKeys.length} Stores`;
+                        } else if (groupKeys.length === 1) {
+                          const sid = groupKeys[0];
+                          const s = stores.find((st: any) => String(st.id) === sid);
+                          const g = (e.storeGrouping as any)[sid];
+                          storeSubtitle = s?.name || g?.storeName || null;
+                        } else if (e.storeId) {
+                          const s = stores.find((st: any) => st.id === e.storeId || String(st.id) === String(e.storeId));
+                          storeSubtitle = s?.name || null;
+                        }
                         return (
 	                          <tr key={e.id} id={`est-${e.id}`} className="hover:bg-orange-50/30 transition">
 	                            <td className="px-3 py-2 font-mono text-orange-600 font-bold">
@@ -1628,7 +1643,12 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                                 {e.estimateNumber}
                               </button>
                             </td>
-	                            <td className="px-3 py-2 font-semibold text-slate-900 max-w-[340px] min-w-[160px] truncate" title={e.title}>{e.title}</td>
+	                            <td className="px-3 py-1.5 max-w-[340px] min-w-[160px]" title={storeSubtitle ? `${e.title} • ${storeSubtitle}` : e.title}>
+                                <div className="font-semibold text-slate-900 truncate leading-tight">{e.title}</div>
+                                {storeSubtitle && (
+                                  <div className="text-[11px] text-slate-500 font-normal truncate leading-tight mt-0.5">{storeSubtitle}</div>
+                                )}
+                              </td>
 	                            <td className="px-3 py-2 text-slate-700">
                               <Link href={`/clients/${e.clientId}`} className="hover:text-orange-600 hover:underline">{normalizeDisplayName(client?.name) || `ID: ${e.clientId}`}</Link>
                             </td>

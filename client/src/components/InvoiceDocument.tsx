@@ -229,6 +229,63 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({
     return groups.filter(g => g.items.length > 0);
   }, [lines, stores, est]);
 
+  // Store resolution for Ship To:
+  // 1. Is this invoice explicitly store-scoped (store-wise invoice)?
+  const isInvoiceStoreScoped = Boolean(
+    inv.storeId ||
+    inv.storeCode ||
+    inv.packetSettings?.storeId ||
+    inv.packetSettings?.storeCode ||
+    (inv.storeName && String(inv.storeName).trim().length > 0)
+  );
+
+  const estGroupKeys = est?.storeGrouping && typeof est?.storeGrouping === "object"
+    ? Object.keys(est.storeGrouping).filter(k => k && k !== "undefined" && k !== "null")
+    : [];
+
+  // Multi-store complete invoice: contains multiple stores and is NOT store-scoped
+  const isMultiStoreInvoice = !isInvoiceStoreScoped && (storeGroups.length > 1 || estGroupKeys.length > 1);
+
+  let targetInvoiceStore: any = null;
+  if (isInvoiceStoreScoped) {
+    targetInvoiceStore = (stores || []).find((s: any) =>
+      (inv.storeId && s.id === Number(inv.storeId)) ||
+      (inv.packetSettings?.storeId && s.id === Number(inv.packetSettings.storeId)) ||
+      (inv.storeCode && String(s.storeCode || "").trim().toLowerCase() === String(inv.storeCode).trim().toLowerCase()) ||
+      (inv.packetSettings?.storeCode && String(s.storeCode || "").trim().toLowerCase() === String(inv.packetSettings.storeCode).trim().toLowerCase()) ||
+      (inv.storeName && String(s.name || "").trim().toLowerCase() === String(inv.storeName).trim().toLowerCase())
+    );
+  } else if (!isMultiStoreInvoice) {
+    // Single-store estimate/invoice
+    if (storeGroups.length === 1 && storeGroups[0].storeCode) {
+      targetInvoiceStore = (stores || []).find((s: any) => String(s.storeCode || "").trim().toLowerCase() === storeGroups[0].storeCode.toLowerCase());
+    }
+    if (!targetInvoiceStore && estGroupKeys.length === 1) {
+      targetInvoiceStore = (stores || []).find((s: any) => String(s.id) === estGroupKeys[0]);
+    }
+    if (!targetInvoiceStore && est?.storeId) {
+      targetInvoiceStore = (stores || []).find((s: any) => s.id === Number(est.storeId));
+    }
+  }
+
+  const shippingStoreName: string | null = !isMultiStoreInvoice
+    ? (targetInvoiceStore?.name || inv.storeName || (isInvoiceStoreScoped ? inv.packetSettings?.storeName : null) || null)
+    : null;
+
+  const targetStoreMasterAddress = targetInvoiceStore
+    ? ((targetInvoiceStore.address || "").trim() || [targetInvoiceStore.location, targetInvoiceStore.city, targetInvoiceStore.state].filter(Boolean).join(", ").trim())
+    : "";
+
+  const shippingAddress = (!isMultiStoreInvoice && targetStoreMasterAddress)
+    ? targetStoreMasterAddress
+    : (est?.shippingAddressSnapshot || billingAddress);
+
+  const shippingState = targetInvoiceStore?.state
+    ? targetInvoiceStore.state
+    : targetInvoiceStore?.stateCode
+    ? (targetInvoiceStore.stateCode === "27" ? "Maharashtra" : targetInvoiceStore.stateCode)
+    : (billingStateCode === "27" ? "Maharashtra" : billingStateCode);
+
   const hasStoreHeadings = storeGroups.length > 1 || (storeGroups.length === 1 && storeGroups[0].storeCode !== "" && storeGroups[0].storeCode !== "default");
 
   let itemCounter = 0;
@@ -337,8 +394,9 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({
             <td style={{ border: "1px solid #000", padding: "6px 8px", fontSize: "9.5px", lineHeight: 1.35, width: "37%" }}>
               <div style={{ fontWeight: 800, marginBottom: "2px" }}>Ship To,</div>
               <div style={{ fontWeight: 700 }}>{billingName}</div>
-              {billingAddress && <div style={{ whiteSpace: "pre-wrap" }}>{billingAddress}</div>}
-              {billingStateCode && <div>State : {billingStateCode === "27" ? "Maharashtra" : billingStateCode}</div>}
+              {shippingStoreName && <div style={{ fontWeight: 700 }}>{shippingStoreName}</div>}
+              {shippingAddress && <div style={{ whiteSpace: "pre-wrap" }}>{shippingAddress}</div>}
+              {shippingState && <div>State : {shippingState}</div>}
               {billingGstin && <div style={{ fontWeight: 700 }}>GSTIN : {billingGstin}</div>}
             </td>
             <td style={{ border: "1px solid #000", padding: "6px 8px", width: "26%", fontSize: "9.5px", verticalAlign: "top" }}>
