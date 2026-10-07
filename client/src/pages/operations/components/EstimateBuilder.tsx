@@ -2,7 +2,7 @@ import React from "react";
 import { Pager, usePagedList } from "@/components/Pager";
 import { createPortal } from "react-dom";
 import { Link } from "wouter";
-import { Archive, Building2, Check, CheckCircle2, ChevronDown, ChevronRight, ClipboardPaste, Copy, CreditCard as Edit3, Eye, FilePlus2, FileSpreadsheet, FileText, FileUp, Filter, FolderOpen, MoreHorizontal, MoveDown, MoveUp, Plus, Receipt, Redo2, Search, Trash, Undo2 } from "lucide-react";
+import { Archive, Building2, Check, CheckCircle2, ChevronDown, ChevronRight, ClipboardPaste, Copy, CreditCard as Edit3, Eye, FilePlus2, FileSpreadsheet, FileText, FileUp, Filter, FolderOpen, MoreHorizontal, MoveDown, MoveUp, Pencil, Plus, Receipt, Redo2, Search, Trash, Undo2 } from "lucide-react";
 import { displayFormatLabel, isAblblFormat, normalizeDisplayName, normalizeFormatMode, normalizeGstinPan } from "../../../../../shared/textFormat";
 import { getEstimateFormatProfile, isRetailSingleStoreFormat } from "../../../../../shared/estimateProfiles";
 import { formatProductDetails, sameDisplayText } from "../../../../../shared/productDetails";
@@ -1702,17 +1702,27 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
 	                            <td className="px-3 py-2 text-right text-slate-900 font-bold font-mono">{formatCurrency(e.totalAmount)}</td>
 	                            <td className="px-3 py-2 text-center">
 	                              <div className="inline-flex items-center gap-1.5 justify-center flex-nowrap">
-	                                {/* 1. Edit (only if not submitted/archived) */}
+	                                {/* 1. View Estimate */}
+	                                <button
+	                                  type="button"
+	                                  onClick={() => handleViewEstimateDetails(e, "estimate")}
+	                                  title="View Estimate"
+	                                  className="inline-flex h-7 w-7 items-center justify-center rounded border border-slate-200 bg-white text-slate-600 hover:bg-slate-100 hover:text-slate-900 transition shadow-xs cursor-pointer"
+	                                  aria-label="View Estimate"
+	                                >
+	                                  <Eye className="w-3.5 h-3.5" />
+	                                </button>
+
+	                                {/* 2. Edit Estimate */}
 	                                {e.status !== "archived" && e.status !== "submitted" && (
 	                                  <button
 	                                    type="button"
 	                                    onClick={() => handleEditEstimate(e)}
-	                                    title="Edit estimate"
-	                                    className="inline-flex h-7 items-center gap-1 rounded border border-slate-200 bg-white px-2 text-[10px] font-semibold text-slate-700 hover:bg-slate-100 transition shadow-xs cursor-pointer"
-	                                    aria-label="Edit estimate"
+	                                    title="Edit Estimate"
+	                                    className="inline-flex h-7 w-7 items-center justify-center rounded border border-slate-200 bg-white text-slate-600 hover:bg-slate-100 hover:text-slate-900 transition shadow-xs cursor-pointer"
+	                                    aria-label="Edit Estimate"
 	                                  >
-	                                    <Edit3 className="w-3.5 h-3.5" />
-	                                    Edit
+	                                    <Pencil className="w-3.5 h-3.5" />
 	                                  </button>
 	                                )}
 
