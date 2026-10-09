@@ -53,7 +53,8 @@ import { useInvoiceWorkflow } from "./hooks/useInvoiceWorkflow";
 import { useWccDcEditor } from "./hooks/useWccDcEditor";
 import { importFieldsMap } from "./utils/importFieldsMap";
 import { displayFormatLabel, isAblblFormat, normalizeDisplayName, normalizeFormatMode, normalizeGstinPan } from "../../../../shared/textFormat";
-import { getEstimateFormatProfile, isRetailSingleStoreFormat, normalizeFormatProfileCode } from "../../../../shared/estimateProfiles";
+import { getEstimateFormatProfile, isRetailSingleStoreFormat, isMultiStoreFormat, normalizeFormatProfileCode } from "../../../../shared/estimateProfiles";
+import { DuplicateEstimateStoresModal } from "./components/DuplicateEstimateStoresModal";
 import { Building2, Tag, MapPin, Package, FileText, Plus, CircleCheck as CheckCircle, Trash, ShoppingBag, Download, Upload, Eye, Check, X, FileSpreadsheet, Image as ImageIcon, FileUp, Printer, ChevronDown, ChevronRight, Scale, CircleAlert as AlertCircle, Clock, Briefcase, Database, Copy, Truck, Receipt, Clipboard, ClipboardPaste, FolderOpen } from "lucide-react";
 
 const MATERIAL_CODE_MASTER = [
@@ -361,6 +362,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
   // Estimate Form Billing Profile selector
   const [estBillingProfileId, setEstBillingProfileId] = useState("");
   const [clientBillingProfilesList, setClientBillingProfilesList] = useState<any[]>([]);
+  const [duplicateStoresModalEst, setDuplicateStoresModalEst] = useState<Estimate | null>(null);
 
   // Master Importer states
   const [impType, setImpType] = useState("clients");
@@ -2370,6 +2372,14 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
   };
 
   const handleDuplicateEstimate = async (est: Estimate) => {
+    const isStoreBasedRetail = isRetailSingleStoreFormat(est.formatProfileCode || est.clientFormat) ||
+      (Boolean(est.storeId) && !isAblblFormat(est.clientFormat) && !isMultiStoreFormat(est.formatProfileCode));
+
+    if (isStoreBasedRetail) {
+      setDuplicateStoresModalEst(est);
+      return;
+    }
+
     if (!window.confirm(`Duplicate estimate ${est.estimateNumber}? A new draft copy will be created.`)) return;
     try {
       const newEst = await duplicateEstimate(token, est);
@@ -4425,6 +4435,21 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
         }}
       />
       )}
+
+      {/* Duplicate Estimate for Multiple Stores Modal */}
+      <DuplicateEstimateStoresModal
+        isOpen={Boolean(duplicateStoresModalEst)}
+        onClose={() => setDuplicateStoresModalEst(null)}
+        estimate={duplicateStoresModalEst}
+        clients={clients}
+        stores={stores}
+        token={token}
+        clientBillingProfilesList={clientBillingProfilesList}
+        onSuccess={async () => {
+          await fetchData();
+        }}
+        showSuccess={showSuccess}
+      />
 
       {/* ======================================================== */}
       {/* 8. PO UPLOAD DIALOG OVERLAY */}

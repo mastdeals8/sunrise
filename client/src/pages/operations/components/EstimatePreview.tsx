@@ -1134,6 +1134,15 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
 	                      <Copy className="w-3.5 h-3.5" />
 	                      Copy Summary
 	                    </button>
+	                    <button
+	                      type="button"
+	                      onClick={() => handleDuplicateEstimate?.(selectedEstimate)}
+	                      className="inline-flex items-center gap-1.5 py-1 px-3 bg-white border border-slate-300 text-slate-700 text-xs font-bold rounded-lg hover:bg-slate-100 transition"
+	                      title="Duplicate this estimate"
+	                    >
+	                      <Copy className="w-3.5 h-3.5" />
+	                      Duplicate
+	                    </button>
 	                  </>
 	                )}
                 {selectedEstimate.status !== "archived" && selectedEstimate.status !== "submitted" ? (

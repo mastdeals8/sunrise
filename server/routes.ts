@@ -6284,8 +6284,98 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const originalItems = await db.select().from(estimateItems).where(eq(estimateItems.estimateId, id));
       const newNumber = await nextDocumentNumber("estimate");
       const { id: _id, createdAt: _c, updatedAt: _u, ...rest } = original as any;
+
+      let targetStore: any = null;
+      let targetStoreId = original.storeId;
+      if (req.body?.storeId) {
+        targetStoreId = parseInt(req.body.storeId, 10);
+        [targetStore] = await db.select().from(stores).where(eq(stores.id, targetStoreId));
+      }
+
+      let newTitle = req.body?.title || original.title;
+      let shippingTo = original.shippingTo;
+      let shippingAddressSnapshot = original.shippingAddressSnapshot;
+      if (targetStore) {
+        const storeAddr = (targetStore.address || "").trim() ||
+          [targetStore.location, targetStore.city, targetStore.state].filter(Boolean).join(", ").trim();
+        if (storeAddr) {
+          shippingTo = storeAddr;
+          shippingAddressSnapshot = storeAddr;
+        }
+        if (!req.body?.title && original.storeId) {
+          const [origStore] = await db.select().from(stores).where(eq(stores.id, original.storeId));
+          if (origStore?.name && newTitle.includes(origStore.name)) {
+            newTitle = newTitle.replace(origStore.name, targetStore.name);
+          } else if (origStore?.storeCode && newTitle.includes(origStore.storeCode)) {
+            newTitle = newTitle.replace(origStore.storeCode, targetStore.storeCode || "");
+          }
+        }
+      }
+
+      let billingProfileId = original.billingProfileId;
+      let billingTo = original.billingTo;
+      let billingLegalNameSnapshot = original.billingLegalNameSnapshot;
+      let billingGstinSnapshot = original.billingGstinSnapshot;
+      let billingStateSnapshot = original.billingStateSnapshot;
+      let billingStateCodeSnapshot = original.billingStateCodeSnapshot;
+      let billingAddressSnapshot = original.billingAddressSnapshot;
+      let gstin = original.gstin;
+      let pan = original.pan;
+      let stateCode = original.stateCode;
+
+      if (req.body?.billingProfileId) {
+        const bpId = parseInt(req.body.billingProfileId, 10);
+        const bp = await storage.getBillingProfile(bpId);
+        if (bp) {
+          billingProfileId = bp.id;
+          billingLegalNameSnapshot = bp.legalCompanyName;
+          billingGstinSnapshot = bp.gstin;
+          billingStateSnapshot = bp.state;
+          billingStateCodeSnapshot = bp.stateCode;
+          billingAddressSnapshot = bp.billingAddress;
+          billingTo = [bp.legalCompanyName ? `M/S : ${bp.legalCompanyName}` : "", bp.billingAddress || ""].filter(Boolean).join("\n") || bp.legalCompanyName;
+          gstin = bp.gstin;
+          pan = bp.pan || pan;
+          stateCode = bp.stateCode;
+        }
+      } else if (targetStore && (targetStore.state || targetStore.stateCode)) {
+        const targetState = (targetStore.state || "").trim().toLowerCase();
+        const targetStateCode = (targetStore.stateCode || "").trim().toLowerCase();
+        const allBps = await storage.getClientBillingProfiles(original.clientId);
+        const matchingBp = allBps.find((bp: any) =>
+          (targetState && bp.state && bp.state.toLowerCase() === targetState) ||
+          (targetStateCode && bp.stateCode && bp.stateCode.toLowerCase() === targetStateCode)
+        );
+        if (matchingBp) {
+          billingProfileId = matchingBp.id;
+          billingLegalNameSnapshot = matchingBp.legalCompanyName;
+          billingGstinSnapshot = matchingBp.gstin;
+          billingStateSnapshot = matchingBp.state;
+          billingStateCodeSnapshot = matchingBp.stateCode;
+          billingAddressSnapshot = matchingBp.billingAddress;
+          billingTo = [matchingBp.legalCompanyName ? `M/S : ${matchingBp.legalCompanyName}` : "", matchingBp.billingAddress || ""].filter(Boolean).join("\n") || matchingBp.legalCompanyName;
+          gstin = matchingBp.gstin;
+          pan = matchingBp.pan || pan;
+          stateCode = matchingBp.stateCode;
+        }
+      }
+
       const [newEst] = await db.insert(estimates).values({
         ...rest,
+        storeId: targetStoreId,
+        title: newTitle,
+        shippingTo,
+        shippingAddressSnapshot,
+        billingProfileId,
+        billingTo,
+        billingLegalNameSnapshot,
+        billingGstinSnapshot,
+        billingStateSnapshot,
+        billingStateCodeSnapshot,
+        billingAddressSnapshot,
+        gstin,
+        pan,
+        stateCode,
         estimateNumber: newNumber,
         estimateDate: new Date(),
         status: "draft",
@@ -6303,7 +6393,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }).returning();
       if (originalItems.length > 0) {
         await db.insert(estimateItems).values(
-          originalItems.map(({ id: _iid, estimateId: _eid, ...item }: any) => ({ ...item, estimateId: newEst.id }))
+          originalItems.map(({ id: _iid, estimateId: _eid, ...item }: any) => ({
+            ...item,
+            estimateId: newEst.id,
+            storeId: targetStoreId,
+            storeCode: targetStore?.storeCode ?? item.storeCode,
+          }))
         );
       }
       await backfillExecutionStores();

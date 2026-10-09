@@ -2,9 +2,9 @@ import React from "react";
 import { Pager, usePagedList } from "@/components/Pager";
 import { createPortal } from "react-dom";
 import { Link } from "wouter";
-import { Archive, Building2, Check, CheckCircle2, ChevronDown, ChevronRight, ClipboardPaste, Copy, CreditCard as Edit3, Eye, FilePlus2, FileSpreadsheet, FileText, FileUp, Filter, FolderOpen, MoreHorizontal, MoveDown, MoveUp, Pencil, Plus, Receipt, Redo2, Search, Trash, Undo2 } from "lucide-react";
+import { Archive, Building2, Check, CheckCircle2, CheckSquare, ChevronDown, ChevronRight, ClipboardPaste, Copy, CreditCard as Edit3, Download, Eye, FilePlus2, FileSpreadsheet, FileText, FileUp, Filter, FolderOpen, MoreHorizontal, MoveDown, MoveUp, Pencil, Plus, Printer, Receipt, Redo2, Search, Square, Trash, Undo2, X } from "lucide-react";
 import { displayFormatLabel, isAblblFormat, normalizeDisplayName, normalizeFormatMode, normalizeGstinPan } from "../../../../../shared/textFormat";
-import { getEstimateFormatProfile, isRetailSingleStoreFormat } from "../../../../../shared/estimateProfiles";
+import { getEstimateFormatProfile, isRetailSingleStoreFormat, isMultiStoreFormat } from "../../../../../shared/estimateProfiles";
 import { formatProductDetails, sameDisplayText } from "../../../../../shared/productDetails";
 import { formatCurrency } from "../utils/formatters";
 import ProductForm, { type ProductFormValue, emptyProductFormValue } from "./ProductForm";
@@ -14,6 +14,7 @@ import { isBoltMode } from "../../../lib/supabase";
 import { fetchEstimateItems, masterDataSave, openExecutionDocument, submitEstimate, unarchiveEstimate } from "../../../lib/api";
 import { exportEstimateToExcel } from "../utils/exportHelpers";
 import StoreWiseInvoiceModal from "./StoreWiseInvoiceModal";
+import { BulkEstimatePdfRunner } from "./BulkEstimatePdfRunner";
 
 // ─── Create Product Drawer ───────────────────────────────────────────────────
 // Renders as a fixed right-side panel (pointer-events passthrough backdrop so
@@ -897,6 +898,9 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
     estChallans: any[];
     isAblbl: boolean;
   } | null>(null);
+  const [selectedEstimateIds, setSelectedEstimateIds] = React.useState<Set<number>>(new Set());
+  const [bulkPdfRunnerMode, setBulkPdfRunnerMode] = React.useState<"zip" | "combined" | null>(null);
+  const headerCheckboxRef = React.useRef<HTMLInputElement>(null);
 
   React.useEffect(() => {
     if (!openInvoiceMenu && !openMoreMenu) return;
@@ -1046,6 +1050,51 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
     );
   }), [estimates, clients, estimateSearch, estimateStatusFilter]);
   const estListPager = usePagedList(estimateListFiltered, 25);
+
+  const allFilteredSelected = estimateListFiltered.length > 0 && estimateListFiltered.every((e: any) => selectedEstimateIds.has(e.id));
+  const someFilteredSelected = !allFilteredSelected && estimateListFiltered.some((e: any) => selectedEstimateIds.has(e.id));
+
+  React.useEffect(() => {
+    if (headerCheckboxRef.current) {
+      headerCheckboxRef.current.indeterminate = someFilteredSelected;
+    }
+  }, [someFilteredSelected]);
+
+  const toggleEstimateSelection = (id: number) => {
+    setSelectedEstimateIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const handleSelectAllFiltered = () => {
+    if (allFilteredSelected) {
+      setSelectedEstimateIds(prev => {
+        const next = new Set(prev);
+        estimateListFiltered.forEach((e: any) => next.delete(e.id));
+        return next;
+      });
+    } else {
+      setSelectedEstimateIds(prev => {
+        const next = new Set(prev);
+        estimateListFiltered.forEach((e: any) => next.add(e.id));
+        return next;
+      });
+    }
+  };
+
+  const handleClearSelection = () => {
+    setSelectedEstimateIds(new Set());
+  };
+
+  const selectedEstimatesInOrder = React.useMemo(() => {
+    const inFiltered = estimateListFiltered.filter((e: any) => selectedEstimateIds.has(e.id));
+    const filteredIds = new Set(inFiltered.map((e: any) => e.id));
+    const remaining = estimates.filter((e: any) => selectedEstimateIds.has(e.id) && !filteredIds.has(e.id));
+    return [...inFiltered, ...remaining];
+  }, [estimates, estimateListFiltered, selectedEstimateIds]);
 
   const handleMarkSubmitted = async (est: any) => {
     // 2. SUBMITTED BUSINESS RULE:
@@ -1573,12 +1622,69 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                 ))}
               </div>
 
+              {/* Compact Bulk Actions Toolbar */}
+              {selectedEstimateIds.size > 0 && (
+                <div className="bg-orange-50/90 border border-orange-200 rounded-xl px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 text-xs shadow-xs animate-in fade-in slide-in-from-top-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <CheckSquare className="w-4 h-4 text-orange-600 shrink-0" />
+                    <span className="font-bold text-slate-900">
+                      {selectedEstimateIds.size} estimate{selectedEstimateIds.size > 1 ? "s" : ""} selected
+                    </span>
+                    <span className="text-[11px] text-slate-500">
+                      (from {estimateListFiltered.length} filtered results)
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => setBulkPdfRunnerMode("zip")}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 font-semibold rounded-lg shadow-xs transition cursor-pointer"
+                      title="Export separate PDF per estimate packaged into a ZIP download"
+                    >
+                      <Download className="w-3.5 h-3.5 text-orange-600" />
+                      Export Individual PDFs
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setBulkPdfRunnerMode("combined")}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-orange-600 hover:bg-orange-700 text-white font-semibold rounded-lg shadow-xs transition cursor-pointer"
+                      title="Print or view a combined PDF containing selected estimates in register order"
+                    >
+                      <Printer className="w-3.5 h-3.5" />
+                      Print Combined PDF
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleClearSelection}
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 text-slate-500 hover:text-slate-800 hover:bg-orange-100/60 rounded-lg transition font-medium cursor-pointer"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                      Clear Selection
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* Estimate List Table */}
               <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
                 <div className="overflow-x-auto">
                   <table className="w-full text-left text-xs text-slate-700">
                     <thead className="bg-slate-50 text-slate-500 text-[10px] uppercase tracking-wider border-b border-slate-200 sticky top-0">
                       <tr>
+                        <th className="w-10 px-3 py-2 text-center">
+                          <input
+                            ref={headerCheckboxRef}
+                            type="checkbox"
+                            checked={allFilteredSelected}
+                            onChange={handleSelectAllFiltered}
+                            title={
+                              allFilteredSelected
+                                ? "Deselect all in current filtered results"
+                                : `Select all ${estimateListFiltered.length} estimates in current filtered results`
+                            }
+                            className="rounded border-slate-300 text-orange-600 focus:ring-orange-500 cursor-pointer w-3.5 h-3.5 align-middle"
+                          />
+                        </th>
                         <th className="px-3 py-2">Estimate No</th>
                         <th className="px-3 py-2">Title</th>
                         <th className="px-3 py-2">Client</th>
@@ -1632,6 +1738,15 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                         }
                         return (
 	                          <tr key={e.id} id={`est-${e.id}`} className="hover:bg-orange-50/30 transition">
+	                            <td className="w-10 px-3 py-2 text-center" onClick={(ev) => ev.stopPropagation()}>
+                                <input
+                                  type="checkbox"
+                                  checked={selectedEstimateIds.has(e.id)}
+                                  onChange={() => toggleEstimateSelection(e.id)}
+                                  aria-label={`Select estimate ${e.estimateNumber}`}
+                                  className="rounded border-slate-300 text-orange-600 focus:ring-orange-500 cursor-pointer w-3.5 h-3.5 align-middle"
+                                />
+                              </td>
 	                            <td className="px-3 py-2 font-mono text-orange-600 font-bold">
                               {/* Estimate Number → opens Estimate Summary preview (not Project) */}
                               <button
@@ -1820,7 +1935,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                       })}
                       {estimates.length === 0 && (
                         <tr>
-                          <td colSpan={11} className="text-center py-16 text-slate-400">
+                          <td colSpan={12} className="text-center py-16 text-slate-400">
                             <FileSpreadsheet className="w-10 h-10 mx-auto mb-3 opacity-20" />
                             <p className="text-sm font-semibold">No estimates yet</p>
                             <p className="text-xs mt-1">Click <strong className="text-orange-600">New Estimate</strong> above to create your first signage estimate.</p>
@@ -3984,6 +4099,19 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
               await fetchData?.();
             }}
             openInvoiceEditor={openInvoiceEditor}
+          />
+
+          <BulkEstimatePdfRunner
+            mode={bulkPdfRunnerMode}
+            onClose={() => setBulkPdfRunnerMode(null)}
+            selectedEstimates={selectedEstimatesInOrder}
+            stores={stores}
+            clients={clients}
+            products={products}
+            brands={brands}
+            sellerProfile={props.sellerProfile}
+            token={token}
+            showSuccess={showSuccess}
           />
 
           {/* Invoice Operations Floating Popover */}

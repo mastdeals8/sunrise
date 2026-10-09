@@ -1059,6 +1059,157 @@ export async function duplicateEstimate(
   return createEstimate(token, { estimate: cleanEstimatePayload, items: safeItems });
 }
 
+export async function duplicateEstimateForStore(
+  token: string | null,
+  est: any,
+  targetStore: any,
+  options?: {
+    origStore?: any;
+    billingProfiles?: any[];
+  }
+): Promise<any> {
+  const origStore = options?.origStore;
+  const billingProfiles = options?.billingProfiles || [];
+
+  // Determine new title: if original title contains original store name or code, replace it
+  let newTitle = est.title || "Estimate";
+  if (origStore?.name && newTitle.includes(origStore.name)) {
+    newTitle = newTitle.replace(origStore.name, targetStore.name);
+  } else if (origStore?.storeCode && newTitle.includes(origStore.storeCode)) {
+    newTitle = newTitle.replace(origStore.storeCode, targetStore.storeCode || "");
+  }
+
+  const targetStoreAddress = (targetStore.address || "").trim() ||
+    [targetStore.location, targetStore.city, targetStore.state].filter(Boolean).join(", ").trim();
+
+  // Find matching billing profile for target store state if possible
+  const matchingBp = (billingProfiles || []).find((bp: any) =>
+    (targetStore.state && bp.state && bp.state.toLowerCase() === targetStore.state.toLowerCase()) ||
+    (targetStore.stateCode && bp.stateCode && bp.stateCode.toLowerCase() === targetStore.stateCode.toLowerCase())
+  );
+
+  if (!isBoltMode) {
+    const res = await apiFetch(`/api/operations/estimates/${est.id}/duplicate`, token, {
+      method: "POST",
+      body: JSON.stringify({
+        storeId: targetStore.id,
+        title: newTitle,
+        shippingTo: targetStoreAddress || undefined,
+        billingProfileId: matchingBp?.id || undefined,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.message ?? `Failed to duplicate estimate for ${targetStore.name}`);
+    }
+    return res.json();
+  }
+
+  // Bolt mode: read original items and create fresh copy
+  const items = await fetchEstimateItems(token, est.id);
+
+  let billingProfileId = est.billingProfileId ? Number(est.billingProfileId) : null;
+  let billingTo = est.billingTo || null;
+  let billingLegalNameSnapshot = est.billingLegalNameSnapshot || null;
+  let billingGstinSnapshot = est.billingGstinSnapshot || null;
+  let billingStateSnapshot = est.billingStateSnapshot || null;
+  let billingStateCodeSnapshot = est.billingStateCodeSnapshot || null;
+  let billingAddressSnapshot = est.billingAddressSnapshot || null;
+  let gstin = est.gstin || null;
+  let pan = est.pan || null;
+  let stateCode = est.stateCode || null;
+
+  if (matchingBp) {
+    billingProfileId = matchingBp.id;
+    billingLegalNameSnapshot = matchingBp.legalCompanyName || null;
+    billingGstinSnapshot = matchingBp.gstin || null;
+    billingStateSnapshot = matchingBp.state || null;
+    billingStateCodeSnapshot = matchingBp.stateCode || null;
+    billingAddressSnapshot = matchingBp.billingAddress || null;
+    billingTo = [
+      matchingBp.legalCompanyName ? `M/S : ${matchingBp.legalCompanyName}` : "",
+      matchingBp.billingAddress || ""
+    ].filter(Boolean).join("\n") || matchingBp.legalCompanyName;
+    gstin = matchingBp.gstin || null;
+    pan = matchingBp.pan || est.pan || null;
+    stateCode = matchingBp.stateCode || null;
+  }
+
+  const cleanEstimatePayload: Record<string, unknown> = {
+    clientId: est.clientId,
+    brandId: targetStore.brandId || est.brandId,
+    storeId: targetStore.id,
+    title: newTitle,
+    description: est.description || null,
+    clientFormat: est.clientFormat || "RETAIL_SINGLE_STORE",
+    formatProfileCode: est.formatProfileCode || "RETAIL_SINGLE_STORE",
+    abfrlProjectType: null,
+    subject: est.subject || null,
+    billingTo,
+    shippingTo: targetStoreAddress || est.shippingTo || null,
+    gstin,
+    pan,
+    stateCode,
+    vendorCode: est.vendorCode || null,
+    gstType: est.gstType || "CGST+SGST",
+    packingPercent: est.packingPercent ?? 0,
+    implementationPercent: est.implementationPercent ?? 0,
+    transportAmount: est.transportAmount ?? 0,
+    storeGrouping: null,
+    billingProfileId,
+    billingLegalNameSnapshot,
+    billingGstinSnapshot,
+    billingStateSnapshot,
+    billingStateCodeSnapshot,
+    billingAddressSnapshot,
+    shippingAddressSnapshot: targetStoreAddress || est.shippingAddressSnapshot || null,
+    subtotal: est.subtotal ?? 0,
+    taxAmount: est.taxAmount ?? 0,
+    totalAmount: est.totalAmount ?? 0,
+    status: "draft",
+    estimateDate: new Date().toISOString(),
+  };
+
+  const cleanItems = (items || []).map((it: any, idx: number) => ({
+    productId: it.productId ? Number(it.productId) : null,
+    storeId: targetStore.id,
+    itemName: it.itemName || "",
+    description: it.description || null,
+    quantity: Number(it.quantity) || 1,
+    unit: it.unit || "pcs",
+    rate: Number(it.rate) || 0,
+    totalPrice: Number(it.totalPrice) || 0,
+    sl: Number(it.sl) || idx + 1,
+    isStandard: it.isStandard !== false,
+    hsn: it.hsn || null,
+    materialCode: it.materialCode || null,
+    materialCodeId: it.materialCodeId ? Number(it.materialCodeId) : null,
+    materialDescription: it.materialDescription || null,
+    width: it.width != null ? Number(it.width) : null,
+    height: it.height != null ? Number(it.height) : null,
+    totalSize: it.totalSize != null ? Number(it.totalSize) : null,
+    cgstPercent: Number(it.cgstPercent) || 0,
+    cgstAmount: Number(it.cgstAmount) || 0,
+    sgstPercent: Number(it.sgstPercent) || 0,
+    sgstAmount: Number(it.sgstAmount) || 0,
+    igstPercent: Number(it.igstPercent) || 0,
+    igstAmount: Number(it.igstAmount) || 0,
+    totalAmount: Number(it.totalAmount) || 0,
+    storeCode: targetStore.storeCode || null,
+    storeSortOrder: it.storeSortOrder != null ? Number(it.storeSortOrder) : null,
+    rowSortOrder: it.rowSortOrder != null ? Number(it.rowSortOrder) : null,
+    manualStoreName: null,
+    lineType: it.lineType || "product",
+    calculationType: it.calculationType || "fixed",
+    materialCodeSnapshot: it.materialCodeSnapshot || null,
+    productSnapshot: it.productSnapshot || null,
+  }));
+
+  const safeItems = cleanItems.length > 0 ? cleanItems : [{ sl: 1, itemName: "Item 1", quantity: 1, unit: "pcs", rate: 0, totalPrice: 0 }];
+
+  return createEstimate(token, { estimate: cleanEstimatePayload, items: safeItems });
+}
+
 export async function updateEstimate(
   token: string | null,
   id: number,
