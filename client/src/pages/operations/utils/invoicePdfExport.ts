@@ -1,86 +1,57 @@
-// Estimate PDF Export utilities
-// Uses the canonical EstimateDocument renderer, html2canvas, and pdf-lib
+// Invoice PDF Export utilities
+// Uses the canonical InvoiceDocument renderer, html2canvas, and pdf-lib
 // to generate individual A4 PDFs or combined print PDFs without altering
-// estimate data or numbering.
+// invoice data or numbering.
 
 import html2canvas from "html2canvas";
 import { PDFDocument } from "pdf-lib";
 import { zipSync } from "fflate";
+import { sanitizeFilenamePart } from "./estimatePdfExport";
 
 const A4_W = 595.28;
 const A4_H = 841.89;
-const PRINT_MARGIN = 22.68; // 8mm standard print margin
-const PRINTABLE_W = A4_W - PRINT_MARGIN * 2; // ~549.92 pt (~194mm)
-const PRINTABLE_H = A4_H - PRINT_MARGIN * 2; // ~796.53 pt (~281mm)
+const PRINT_MARGIN = 17.01; // ~6mm print margin matching InvoicePacket.tsx
+const PRINTABLE_W = A4_W - PRINT_MARGIN * 2; // ~561.26 pt
+const PRINTABLE_H = A4_H - PRINT_MARGIN * 2; // ~807.87 pt
 
 /**
- * Sanitize strings for cross-platform filesystem compatibility.
- * Replaces slashes with hyphens, cleans spacing around hyphens, and removes illegal characters.
+ * Format invoice PDF filename:
+ * Inv_InvoiceNo_StoreName.pdf
+ * Example: Inv_26-27_SM_165_Kharadi-R007.pdf
  */
-export function sanitizeFilenamePart(str: string): string {
-  return String(str || "")
-    .trim()
-    .replace(/[/\\?%*:|"<>]/g, "-")
-    .replace(/\s+/g, " ")
-    .replace(/\s*-\s*/g, "-")
-    .replace(/[^a-zA-Z0-9.-]/g, "_")
+export function getInvoicePdfFilename(inv: any, stores: any[] = []): string {
+  const rawInvNo = String(inv?.invoiceNumber || `INV-${inv?.id || "draft"}`).trim();
+  // Replace slashes with underscores for invoice numbers (e.g. 26-27/SM/165 -> 26-27_SM_165)
+  const cleanInvNo = rawInvNo
+    .replace(/[/]/g, "_")
+    .replace(/[\\?%*:|"<>]/g, "-")
+    .replace(/[^a-zA-Z0-9._-]/g, "_")
     .replace(/_+/g, "_")
-    .replace(/-+/g, "-")
-    .replace(/^[-_]+|[-_]+$/g, "");
-}
-
-export function sanitizeFilename(str: string): string {
-  return sanitizeFilenamePart(str);
-}
-
-/**
- * Build canonical estimate PDF filename:
- * - Single store: EstimateNo_StoreName.pdf (e.g. SM-E-26-27-248_Kharadi-R007.pdf)
- * - Multi store: EstimateNo_Multi-Store.pdf
- */
-export function getEstimatePdfFilename(est: any, stores: any[] = []): string {
-  const estNumberSanitized = sanitizeFilenamePart(est?.estimateNumber || `Estimate-${est?.id || "draft"}`);
-
-  // Check if estimate has multiple stores in storeGrouping or is marked multi-store format
-  const groupKeys = est?.storeGrouping && typeof est.storeGrouping === "object"
-    ? Object.keys(est.storeGrouping).filter(k => k && k !== "undefined" && k !== "null")
-    : [];
-
-  const isMultiStoreFormat = est?.formatProfileCode === "ABFRL_MULTI_STORE" ||
-    (typeof est?.formatProfileCode === "string" && est.formatProfileCode.includes("MULTI"));
-
-  if (groupKeys.length > 1 || (isMultiStoreFormat && !est?.storeId && groupKeys.length === 0)) {
-    return `${estNumberSanitized}_Multi-Store.pdf`;
-  }
+    .replace(/^_+|_+$/g, "");
 
   let storeName = "";
-  if (groupKeys.length === 1) {
-    const sid = groupKeys[0];
-    const s = stores.find((st: any) => String(st.id) === sid || String(st.storeCode) === sid);
-    storeName = s?.name || est.storeGrouping[sid]?.storeName || s?.storeCode || "";
-  } else if (est?.storeId) {
-    const s = stores.find((st: any) => st.id === est.storeId || String(st.id) === String(est.storeId));
-    storeName = s?.name || est?.storeName || est?.store_name || s?.storeCode || est?.storeCode || est?.store_code || "";
-  } else if (est?.storeName || est?.store_name) {
-    storeName = est?.storeName || est?.store_name;
-  } else if (est?.storeCode || est?.store_code) {
-    storeName = est?.storeCode || est?.store_code;
+  if (inv?.storeId) {
+    const s = stores.find((st: any) => st.id === Number(inv.storeId) || String(st.id) === String(inv.storeId));
+    storeName = s?.name || inv.storeName || inv.store_name || s?.storeCode || inv.storeCode || "";
+  } else if (inv?.packetSettings?.storeName) {
+    storeName = inv.packetSettings.storeName;
+  } else if (inv?.storeName || inv?.store_name) {
+    storeName = inv.storeName || inv.store_name;
+  } else if (inv?.storeCode || inv?.store_code) {
+    storeName = inv.storeCode || inv.store_code;
   }
 
   if (storeName) {
-    const sanitizedStore = sanitizeFilenamePart(storeName);
-    if (sanitizedStore) {
-      return `${estNumberSanitized}_${sanitizedStore}.pdf`;
+    const cleanStore = sanitizeFilenamePart(storeName);
+    if (cleanStore) {
+      return `Inv_${cleanInvNo}_${cleanStore}.pdf`;
     }
   }
 
-  return `${estNumberSanitized}.pdf`;
+  return `Inv_${cleanInvNo}.pdf`;
 }
 
-/**
- * Convert a base64 data URL to Uint8Array.
- */
-export function dataUrlToBytes(dataUrl: string): Uint8Array {
+function dataUrlToBytes(dataUrl: string): Uint8Array {
   const commaIdx = dataUrl.indexOf(",");
   const base64 = commaIdx >= 0 ? dataUrl.slice(commaIdx + 1) : dataUrl;
   const binary = atob(base64);
@@ -91,10 +62,7 @@ export function dataUrlToBytes(dataUrl: string): Uint8Array {
   return bytes;
 }
 
-/**
- * Wait for all images inside an element to finish loading.
- */
-export async function waitForImages(element: HTMLElement, timeoutMs = 1200): Promise<void> {
+export async function waitForImages(element: HTMLElement, timeoutMs = 1500): Promise<void> {
   const imgs = Array.from(element.querySelectorAll("img"));
   if (imgs.length === 0) return;
 
@@ -118,13 +86,13 @@ export async function waitForImages(element: HTMLElement, timeoutMs = 1200): Pro
 }
 
 /**
- * Renders an on-DOM EstimateDocument element into A4 pages on a PDFDocument.
+ * Renders an on-DOM InvoiceDocument element into A4 pages on a PDFDocument.
  * If pdfDoc is provided, appends pages to it. Otherwise creates a new PDFDocument.
  */
-export async function renderEstimateElementToPdf(
+export async function renderInvoiceElementToPdf(
   docEl: HTMLElement,
   pdfDoc?: PDFDocument,
-  docTitle = "Estimate",
+  docTitle = "Tax Invoice",
   targetFitPages?: number | null
 ): Promise<PDFDocument> {
   const pdf = pdfDoc || (await PDFDocument.create());
@@ -169,7 +137,7 @@ export async function renderEstimateElementToPdf(
     const docRect = docEl.getBoundingClientRect();
     const rowEls = Array.from(
       docEl.querySelectorAll(
-        "[data-pdf-row], .invoice-footer-block, .estimate-footer-block, .estimate-store-section"
+        "[data-pdf-row], .invoice-footer-block, [data-pdf-store-heading='true']"
       )
     );
     const scaleFactor = cH / (docRect.height || 1);
@@ -260,9 +228,9 @@ export async function renderEstimateElementToPdf(
     }
   }
 
-  // Set document metadata if this is a fresh document
   if (!pdfDoc) {
     pdf.setTitle(docTitle);
+    pdf.setSubject("Tax Invoice");
     pdf.setAuthor("Sunrise Media");
     pdf.setCreator("Sunrise Media ERP");
     pdf.setProducer("Sunrise Media ERP");
@@ -275,7 +243,7 @@ export async function renderEstimateElementToPdf(
 /**
  * Packages a dictionary or array of filenames and Uint8Array bytes into a ZIP Blob.
  */
-export function packagePdfsIntoZip(
+export function packageInvoicesIntoZip(
   files: Record<string, Uint8Array> | Array<{ filename: string; bytes: Uint8Array }>
 ): Blob {
   const fileMap: Record<string, Uint8Array> = {};
@@ -290,18 +258,4 @@ export function packagePdfsIntoZip(
   }
   const zipBytes = zipSync(fileMap, { level: 6 });
   return new Blob([zipBytes], { type: "application/zip" });
-}
-
-/**
- * Trigger browser file download for a Blob.
- */
-export function downloadFileBlob(blob: Blob, filename: string): void {
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  setTimeout(() => URL.revokeObjectURL(url), 2000);
 }

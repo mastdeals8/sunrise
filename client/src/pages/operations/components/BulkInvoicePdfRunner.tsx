@@ -11,50 +11,49 @@ import {
   ChevronLeft,
   ChevronRight,
 } from "lucide-react";
-import type { Estimate, Store, Client, Product, Brand } from "../types";
-import EstimateDocument from "../../../components/EstimateDocument";
-import { fetchEstimateItems } from "../../../lib/api";
+import InvoiceDocument from "../../../components/InvoiceDocument";
+import { fetchInvoiceById } from "../../../lib/api";
 import {
-  getEstimatePdfFilename,
-  renderEstimateElementToPdf,
-  packagePdfsIntoZip,
-  downloadFileBlob,
-} from "../utils/estimatePdfExport";
+  getInvoicePdfFilename,
+  renderInvoiceElementToPdf,
+  packageInvoicesIntoZip,
+} from "../utils/invoicePdfExport";
+import { downloadFileBlob } from "../utils/estimatePdfExport";
 import { PDFDocument } from "pdf-lib";
 
-interface BulkEstimatePdfRunnerProps {
+interface BulkInvoicePdfRunnerProps {
   mode: "preview" | "zip" | "combined" | null;
   onClose: () => void;
-  selectedEstimates: Estimate[];
-  stores: Store[];
-  clients: Client[];
-  products?: Product[];
-  brands?: Brand[];
+  selectedInvoices: any[];
+  estimates: any[];
+  stores: any[];
+  clients: any[];
+  products?: any[];
   sellerProfile?: any;
-  token: string | null;
+  token?: string | null;
   showSuccess?: (msg: string) => void;
 }
 
-export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
+export const BulkInvoicePdfRunner: React.FC<BulkInvoicePdfRunnerProps> = ({
   mode,
   onClose,
-  selectedEstimates,
+  selectedInvoices,
+  estimates,
   stores,
   clients,
   products = [],
-  brands = [],
   sellerProfile = {},
   token,
   showSuccess,
 }) => {
-  // Page Setup Controls (consistent with EstimatePreview)
+  // Page Setup Controls
   const [scale, setScale] = useState<number>(100);
   const [targetFitPages, setTargetFitPages] = useState<number | null>(null);
   const [density, setDensity] = useState<"normal" | "compact">("normal");
 
   // Preview navigation
   const [previewIdx, setPreviewIdx] = useState<number>(0);
-  const [previewItems, setPreviewItems] = useState<any[]>([]);
+  const [fullInvoiceData, setFullInvoiceData] = useState<any | null>(null);
   const [previewLoading, setPreviewLoading] = useState<boolean>(false);
 
   // Bulk Generation Execution State
@@ -62,47 +61,49 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
   const [processMode, setProcessMode] = useState<"zip" | "combined" | null>(null);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [statusText, setStatusText] = useState("");
-  const [failures, setFailures] = useState<Array<{ estimate: Estimate; error: string }>>([]);
+  const [failures, setFailures] = useState<Array<{ invoice: any; error: string }>>([]);
   const [isDone, setIsDone] = useState(false);
   const [successCount, setSuccessCount] = useState(0);
   const [combinedPdfBlobUrl, setCombinedPdfBlobUrl] = useState<string | null>(null);
 
   // Off-screen rendering host data
   const [currentRenderData, setCurrentRenderData] = useState<{
-    estimate: Estimate;
-    items: any[];
+    invoice: any;
+    estimate: any;
+    client: any;
   } | null>(null);
 
   const cancelledRef = useRef(false);
   const hostRef = useRef<HTMLDivElement>(null);
 
-  // If opened directly with zip or combined mode from toolbar, trigger that mode
+  // Load detailed invoice data for current preview item if needed
   useEffect(() => {
-    if (mode === "zip" || mode === "combined") {
-      setProcessMode(mode);
-    }
-  }, [mode]);
-
-  // Load items for the currently previewed estimate
-  useEffect(() => {
-    if (!mode || selectedEstimates.length === 0) return;
-    const currentEst = selectedEstimates[previewIdx] || selectedEstimates[0];
-    if (!currentEst) return;
+    if (!mode || selectedInvoices.length === 0) return;
+    const curInv = selectedInvoices[previewIdx] || selectedInvoices[0];
+    if (!curInv) return;
 
     let cancelled = false;
     setPreviewLoading(true);
 
-    fetchEstimateItems(token, currentEst.id)
-      .then((items) => {
+    // If invoice already has complete line_items, reuse it; otherwise fetch
+    if (Array.isArray(curInv.lineItems || curInv.line_items) && (curInv.lineItems || curInv.line_items).length > 0) {
+      setFullInvoiceData(curInv);
+      setPreviewLoading(false);
+      return;
+    }
+
+    fetchInvoiceById(token || null, curInv.id)
+      .then((invRes: any) => {
         if (!cancelled) {
-          setPreviewItems(items);
+          const invData = invRes?.invoice || invRes || curInv;
+          setFullInvoiceData(invData);
           setPreviewLoading(false);
         }
       })
-      .catch((err) => {
-        console.error("Failed to load estimate items for preview:", err);
+      .catch((err: any) => {
+        console.warn("Could not fetch complete invoice details, using summary:", err);
         if (!cancelled) {
-          setPreviewItems([]);
+          setFullInvoiceData(curInv);
           setPreviewLoading(false);
         }
       });
@@ -110,11 +111,11 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [previewIdx, selectedEstimates, token, mode]);
+  }, [previewIdx, selectedInvoices, token, mode]);
 
-  // Execute bulk export (either individual ZIP or combined PDF)
+  // Execute bulk export
   const handleStartBulkExport = async (exportMode: "zip" | "combined") => {
-    if (selectedEstimates.length === 0) return;
+    if (selectedInvoices.length === 0) return;
 
     cancelledRef.current = false;
     setIsProcessing(true);
@@ -125,14 +126,14 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
     setCombinedPdfBlobUrl(null);
     setCurrentIndex(0);
 
-    const total = selectedEstimates.length;
-    const failedList: Array<{ estimate: Estimate; error: string }> = [];
+    const total = selectedInvoices.length;
+    const failedList: Array<{ invoice: any; error: string }> = [];
     const zipFiles: Record<string, Uint8Array> = {};
     let combinedPdfDoc: PDFDocument | null = null;
 
     if (exportMode === "combined") {
       combinedPdfDoc = await PDFDocument.create();
-      combinedPdfDoc.setTitle("Combined Estimates");
+      combinedPdfDoc.setTitle("Combined Invoices");
       combinedPdfDoc.setAuthor("Sunrise Media");
       combinedPdfDoc.setCreator("Sunrise Media ERP");
       combinedPdfDoc.setProducer("Sunrise Media ERP");
@@ -142,50 +143,54 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
     for (let i = 0; i < total; i++) {
       if (cancelledRef.current) break;
 
-      const est = selectedEstimates[i];
+      const rawInv = selectedInvoices[i];
       setCurrentIndex(i + 1);
-      setStatusText(`Loading items for ${est.estimateNumber || `Estimate #${est.id}`} (${i + 1} of ${total})...`);
+      setStatusText(`Loading details for ${rawInv.invoiceNumber || `Invoice #${rawInv.id}`} (${i + 1} of ${total})...`);
 
-      let items: any[] = [];
+      let inv = rawInv;
       try {
-        items = await fetchEstimateItems(token, est.id);
-      } catch (fetchErr: any) {
-        console.error(`Failed to fetch items for estimate ${est.estimateNumber}:`, fetchErr);
-        failedList.push({
-          estimate: est,
-          error: fetchErr.message || "Failed to load estimate items",
-        });
-        continue;
+        if (!Array.isArray(rawInv.lineItems || rawInv.line_items) || (rawInv.lineItems || rawInv.line_items).length === 0) {
+          const fetched = await fetchInvoiceById(token || null, rawInv.id);
+          inv = fetched?.invoice || fetched || rawInv;
+        }
+      } catch (fErr: any) {
+        console.warn(`Could not load full invoice ${rawInv.invoiceNumber}, using cached row:`, fErr);
       }
+
+      const linkedEst = estimates.find((e: any) => e.id === inv.estimateId);
+      const linkedClient = clients.find((c: any) => c.id === (inv.clientId || linkedEst?.clientId));
 
       if (cancelledRef.current) break;
 
-      // Mount the estimate into the off-screen host
-      setStatusText(`Rendering estimate ${est.estimateNumber} (${i + 1} of ${total})...`);
-      setCurrentRenderData({ estimate: est, items });
+      // Mount into off-screen container
+      setStatusText(`Rendering invoice ${inv.invoiceNumber} (${i + 1} of ${total})...`);
+      setCurrentRenderData({
+        invoice: inv,
+        estimate: linkedEst,
+        client: linkedClient,
+      });
 
-      // Allow React a frame to commit the DOM
+      // Allow React a frame to commit DOM
       await new Promise((resolve) => setTimeout(resolve, 150));
 
       if (cancelledRef.current) break;
 
       try {
-        const docEl = hostRef.current?.querySelector(".estimate-print") as HTMLElement | null;
+        const docEl = hostRef.current?.querySelector(".invoice-print") as HTMLElement | null;
         if (!docEl) {
-          throw new Error("Estimate document element failed to render in container");
+          throw new Error("Invoice document element failed to render in container");
         }
 
         if (exportMode === "zip") {
-          const singlePdf = await renderEstimateElementToPdf(
+          const singlePdf = await renderInvoiceElementToPdf(
             docEl,
             undefined,
-            est.estimateNumber || "Estimate",
+            inv.invoiceNumber || "Tax Invoice",
             targetFitPages
           );
           const pdfBytes = await singlePdf.save();
-          const filename = getEstimatePdfFilename(est, stores);
+          const filename = getInvoicePdfFilename(inv, stores);
 
-          // Handle collision safely if duplicates exist
           let uniqueFilename = filename;
           let counter = 2;
           while (zipFiles[uniqueFilename]) {
@@ -195,23 +200,22 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
 
           zipFiles[uniqueFilename] = pdfBytes;
         } else if (exportMode === "combined" && combinedPdfDoc) {
-          await renderEstimateElementToPdf(
+          await renderInvoiceElementToPdf(
             docEl,
             combinedPdfDoc,
-            "Combined Estimates",
+            "Combined Invoices",
             targetFitPages
           );
         }
       } catch (renderErr: any) {
-        console.error(`Failed to render estimate ${est.estimateNumber}:`, renderErr);
+        console.error(`Failed to render invoice ${inv.invoiceNumber}:`, renderErr);
         failedList.push({
-          estimate: est,
+          invoice: inv,
           error: renderErr.message || "PDF canvas rendering failed",
         });
       }
     }
 
-    // Clean up off-screen render state
     setCurrentRenderData(null);
 
     if (cancelledRef.current) {
@@ -229,10 +233,10 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
       if (Object.keys(zipFiles).length > 0) {
         setStatusText("Packaging PDFs into ZIP archive...");
         try {
-          const zipBlob = packagePdfsIntoZip(zipFiles);
-          downloadFileBlob(zipBlob, `Estimates_Export_${new Date().toISOString().slice(0, 10)}.zip`);
+          const zipBlob = packageInvoicesIntoZip(zipFiles);
+          downloadFileBlob(zipBlob, `Invoices_Export_${new Date().toISOString().slice(0, 10)}.zip`);
           if (showSuccess) {
-            showSuccess(`Successfully exported ${Object.keys(zipFiles).length} estimate PDF(s).`);
+            showSuccess(`Successfully exported ${Object.keys(zipFiles).length} invoice PDF(s).`);
           }
         } catch (zipErr: any) {
           console.error("ZIP creation failed:", zipErr);
@@ -247,7 +251,6 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
           const blobUrl = URL.createObjectURL(blob);
           setCombinedPdfBlobUrl(blobUrl);
 
-          // Auto-open print preview via iframe
           const iframe = document.createElement("iframe");
           iframe.style.position = "fixed";
           iframe.style.top = "-10000px";
@@ -271,7 +274,7 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
           }, 120000);
 
           if (showSuccess) {
-            showSuccess(`Successfully compiled combined PDF for ${completedCount} estimate(s).`);
+            showSuccess(`Successfully compiled combined PDF for ${completedCount} invoice(s).`);
           }
         } catch (combErr: any) {
           console.error("Combined PDF failed:", combErr);
@@ -282,10 +285,10 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
   };
 
   const handlePrintCurrent = () => {
-    const cur = selectedEstimates[previewIdx];
+    const cur = fullInvoiceData || selectedInvoices[previewIdx];
     if (!cur) return;
     const oldTitle = document.title;
-    const filename = getEstimatePdfFilename(cur, stores).replace(/\.pdf$/i, "");
+    const filename = getInvoicePdfFilename(cur, stores).replace(/\.pdf$/i, "");
     document.title = filename;
     window.print();
     window.setTimeout(() => {
@@ -293,32 +296,27 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
     }, 1000);
   };
 
-  const handleFitToPages = (targetPages: number) => {
-    setTargetFitPages(targetPages);
-    const totalItems = previewItems.length || 20;
-    const idealScale = Math.min(100, Math.max(50, Math.round(((targetPages * 22) / totalItems) * 100)));
-    setScale(idealScale);
-  };
-
   if (!mode) return null;
 
-  const currentEst = selectedEstimates[previewIdx] || selectedEstimates[0];
+  const currentInv = fullInvoiceData || selectedInvoices[previewIdx] || selectedInvoices[0];
+  const linkedEst = estimates.find((e: any) => e.id === currentInv?.estimateId);
+  const linkedClient = clients.find((c: any) => c.id === (currentInv?.clientId || linkedEst?.clientId));
   const scaleRatio = scale / 100;
   const currentStore = stores.find(
-    (s) => s.id === currentEst?.storeId || String(s.id) === String(currentEst?.storeId)
+    (s) => s.id === currentInv?.storeId || String(s.id) === String(currentInv?.storeId)
   );
 
   return (
     <>
-      {/* Hidden off-screen container for canonical EstimateDocument rendering with print styles applied */}
+      {/* Hidden off-screen container for canonical InvoiceDocument rendering */}
       <div
         ref={hostRef}
-        className={`estimate-print-canvas estimate-print-mode-${density}`}
+        className={`invoice-print-canvas invoice-print-mode-${density}`}
         style={{
           position: "fixed",
           left: 0,
           top: 0,
-          width: "733px", // 194mm printable width at 96 DPI
+          width: "740px",
           zIndex: -9999,
           pointerEvents: "none",
           background: "#ffffff",
@@ -328,15 +326,14 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
         aria-hidden="true"
       >
         {currentRenderData && (
-          <EstimateDocument
+          <InvoiceDocument
+            invoice={currentRenderData.invoice}
             estimate={currentRenderData.estimate}
-            items={currentRenderData.items}
-            stores={stores}
-            clients={clients}
-            products={products}
-            brands={brands}
+            client={currentRenderData.client}
             sellerProfile={sellerProfile}
             assetToken={token}
+            products={products}
+            stores={stores}
           />
         )}
       </div>
@@ -352,10 +349,10 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
               </div>
               <div>
                 <h2 className="text-base font-bold text-slate-800">
-                  Bulk Estimate Print &amp; PDF Export
+                  Bulk Invoice Print &amp; PDF Export
                 </h2>
                 <p className="text-xs text-slate-500">
-                  {selectedEstimates.length} estimate{selectedEstimates.length !== 1 ? "s" : ""} selected for bulk processing
+                  {selectedInvoices.length} invoice{selectedInvoices.length !== 1 ? "s" : ""} selected for bulk processing
                 </p>
               </div>
             </div>
@@ -382,37 +379,37 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
                 onClick={() => setPreviewIdx((p) => Math.max(0, p - 1))}
                 disabled={previewIdx === 0 || isProcessing}
                 className="p-1 rounded bg-white border border-slate-200 hover:bg-slate-100 disabled:opacity-40 transition"
-                title="Previous estimate"
+                title="Previous invoice"
               >
                 <ChevronLeft className="w-4 h-4 text-slate-700" />
               </button>
 
               <span className="text-xs font-semibold text-slate-700 px-1">
-                {previewIdx + 1} of {selectedEstimates.length}
-                {currentEst?.estimateNumber && (
-                  <span className="font-mono text-orange-600 ml-1.5 font-bold">
-                    {currentEst.estimateNumber}
+                {previewIdx + 1} of {selectedInvoices.length}
+                {currentInv?.invoiceNumber && (
+                  <span className="font-mono text-blue-700 ml-1.5 font-bold">
+                    {currentInv.invoiceNumber}
                   </span>
                 )}
-                {currentStore?.name && (
+                {(currentInv?.storeName || currentStore?.name) && (
                   <span className="text-slate-500 text-xs ml-1">
-                    ({currentStore.name})
+                    ({currentInv?.storeName || currentStore?.name})
                   </span>
                 )}
               </span>
 
               <button
                 type="button"
-                onClick={() => setPreviewIdx((p) => Math.min(selectedEstimates.length - 1, p + 1))}
-                disabled={previewIdx >= selectedEstimates.length - 1 || isProcessing}
+                onClick={() => setPreviewIdx((p) => Math.min(selectedInvoices.length - 1, p + 1))}
+                disabled={previewIdx >= selectedInvoices.length - 1 || isProcessing}
                 className="p-1 rounded bg-white border border-slate-200 hover:bg-slate-100 disabled:opacity-40 transition"
-                title="Next estimate"
+                title="Next invoice"
               >
                 <ChevronRight className="w-4 h-4 text-slate-700" />
               </button>
             </div>
 
-            {/* Page Setup Presets (Scale, Fit, Density) */}
+            {/* Page Setup Presets */}
             <div className="flex items-center gap-2 flex-wrap">
               <div className="flex items-center gap-1 font-bold text-slate-600 text-xs">
                 <SlidersHorizontal className="w-3.5 h-3.5 text-orange-600" />
@@ -439,43 +436,6 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
                     {s}%
                   </button>
                 ))}
-              </div>
-
-              {/* Quick Fit */}
-              <div className="flex items-center gap-1">
-                <button
-                  type="button"
-                  onClick={() => handleFitToPages(1)}
-                  className={`px-2 py-0.5 rounded border text-[10.5px] font-bold transition shadow-xs ${
-                    targetFitPages === 1
-                      ? "bg-orange-600 text-white border-orange-600"
-                      : "bg-white border-slate-200 text-slate-700 hover:bg-orange-50"
-                  }`}
-                >
-                  Fit 1 Page
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleFitToPages(2)}
-                  className={`px-2 py-0.5 rounded border text-[10.5px] font-bold transition shadow-xs ${
-                    targetFitPages === 2
-                      ? "bg-orange-600 text-white border-orange-600"
-                      : "bg-white border-slate-200 text-slate-700 hover:bg-orange-50"
-                  }`}
-                >
-                  Fit 2 Pages
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleFitToPages(3)}
-                  className={`px-2 py-0.5 rounded border text-[10.5px] font-bold transition shadow-xs ${
-                    targetFitPages === 3
-                      ? "bg-orange-600 text-white border-orange-600"
-                      : "bg-white border-slate-200 text-slate-700 hover:bg-orange-50"
-                  }`}
-                >
-                  Fit 3 Pages
-                </button>
               </div>
 
               {/* Density */}
@@ -509,7 +469,7 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
                 onClick={handlePrintCurrent}
                 disabled={previewLoading || isProcessing}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-bold rounded-lg transition disabled:opacity-50"
-                title="Print current previewed estimate"
+                title="Print current previewed invoice"
               >
                 <Printer className="w-3.5 h-3.5" />
                 <span>Print ({scale}%)</span>
@@ -531,7 +491,7 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
                 onClick={() => handleStartBulkExport("combined")}
                 disabled={isProcessing}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold rounded-lg shadow-xs transition disabled:opacity-50"
-                title="Combine all selected estimates into one PDF document"
+                title="Combine all selected invoices into one PDF document"
               >
                 <FileText className="w-3.5 h-3.5" />
                 <span>Print Combined PDF</span>
@@ -554,7 +514,7 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
                   {isProcessing
                     ? statusText
                     : isDone
-                    ? `Completed: ${successCount} of ${selectedEstimates.length} estimate PDF(s) generated successfully.`
+                    ? `Completed: ${successCount} of ${selectedInvoices.length} invoice PDF(s) generated successfully.`
                     : ""}
                 </span>
                 {failures.length > 0 && (
@@ -589,7 +549,7 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
                   </a>
                   <a
                     href={combinedPdfBlobUrl}
-                    download={`Combined_Estimates_${new Date().toISOString().slice(0, 10)}.pdf`}
+                    download={`Combined_Invoices_${new Date().toISOString().slice(0, 10)}.pdf`}
                     className="px-2.5 py-1 bg-orange-600 text-white rounded font-bold hover:bg-orange-700 transition"
                   >
                     Download Combined PDF
@@ -602,35 +562,34 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
           {/* Document Preview Viewport */}
           <div className="flex-1 overflow-auto bg-slate-200/80 p-6 flex justify-center">
             {previewLoading ? (
-              <div className="w-full max-w-[733px] bg-white rounded-lg shadow-md p-16 text-center text-slate-400">
+              <div className="w-full max-w-[740px] bg-white rounded-lg shadow-md p-16 text-center text-slate-400">
                 <Loader2 className="w-8 h-8 animate-spin mx-auto mb-3 text-orange-500" />
-                <p className="text-sm font-semibold">Loading estimate items...</p>
+                <p className="text-sm font-semibold">Loading invoice details...</p>
               </div>
-            ) : currentEst ? (
+            ) : currentInv ? (
               <div
-                className={`bg-white shadow-xl border border-slate-300 rounded-sm estimate-print-mode-${density}`}
+                className={`bg-white shadow-xl border border-slate-300 rounded-sm invoice-print-mode-${density}`}
                 style={{
-                  width: "733px", // 194mm A4 printable width
-                  minHeight: "1036px", // 274mm height proportion
+                  width: "740px",
+                  minHeight: "1040px",
                   padding: "0",
                   transformOrigin: "top center",
                   zoom: scaleRatio,
                 }}
               >
-                <EstimateDocument
-                  estimate={currentEst}
-                  items={previewItems}
-                  stores={stores}
-                  clients={clients}
-                  products={products}
-                  brands={brands}
+                <InvoiceDocument
+                  invoice={currentInv}
+                  estimate={linkedEst}
+                  client={linkedClient}
                   sellerProfile={sellerProfile}
                   assetToken={token}
+                  products={products}
+                  stores={stores}
                 />
               </div>
             ) : (
               <div className="text-center py-20 text-slate-400">
-                No estimate selected.
+                No invoice selected.
               </div>
             )}
           </div>
@@ -640,4 +599,4 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
   );
 };
 
-export default BulkEstimatePdfRunner;
+export default BulkInvoicePdfRunner;

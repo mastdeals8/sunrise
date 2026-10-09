@@ -218,10 +218,21 @@ export const StoreWiseInvoiceModal: React.FC<StoreWiseInvoiceModalProps> = ({
       setGenerationResults([...updatedResults]);
 
       try {
+        const clientObj = clients.find((c: any) => c.id === (estimate?.clientId || estimate?.client_id));
+        const resolvedPartyName = (
+          estimate?.billingLegalNameSnapshot ||
+          clientObj?.name ||
+          estimate?.clientName ||
+          estimate?.title ||
+          "Customer"
+        ).trim();
+
         const payload = {
           invoiceNumber: invNumber,
           estimateId: estimate.id,
           clientId: estimate.clientId || estimate.client_id,
+          partyName: resolvedPartyName,
+          party_name: resolvedPartyName,
           storeId: store.storeId,
           storeCode: store.storeCode,
           storeName: store.storeName,

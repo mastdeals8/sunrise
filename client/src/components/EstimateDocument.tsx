@@ -697,7 +697,22 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
         boxSizing: "border-box",
       }}
     >
-      <h1 className="estimate-print-title">ESTIMATE</h1>
+      <h1
+        className="estimate-print-title"
+        style={{
+          display: "block",
+          margin: "0 0 10px",
+          padding: 0,
+          textAlign: "center",
+          fontFamily: "Arial, Helvetica, sans-serif",
+          fontSize: "15px",
+          lineHeight: 1.1,
+          fontWeight: 700,
+          letterSpacing: "0.4px",
+        }}
+      >
+        ESTIMATE
+      </h1>
       {renderDocumentHeader()}
       <table
         className="estimate-table"

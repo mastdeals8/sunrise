@@ -1906,9 +1906,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/finance/invoices", authenticateToken, requireRole(["admin", "accounts", "manager"]), async (req: AuthRequest, res: Response) => {
     try {
+      const body = { ...req.body };
+      if (!body.partyName || String(body.partyName).trim() === "Customer") {
+        const estId = body.estimateId || body.estimate_id;
+        const cid = body.clientId || body.client_id;
+        if (estId) {
+          const [est] = await db.select().from(estimates).where(eq(estimates.id, Number(estId)));
+          if (est) {
+            body.partyName = est.billingLegalNameSnapshot || est.title || "Customer";
+            if (!body.clientId && est.clientId) body.clientId = est.clientId;
+          }
+        }
+        if ((!body.partyName || body.partyName === "Customer") && (cid || body.clientId)) {
+          const [cl] = await db.select().from(clients).where(eq(clients.id, Number(cid || body.clientId)));
+          if (cl?.name) body.partyName = cl.name;
+        }
+      }
+
       // Drizzle timestamp columns -> z.date() (no coercion). See server/utils/dateFields.ts.
       const parsed = insertInvoiceSchema.safeParse(
-        preprocessDateFields(req.body, ["date", "dueDate"]),
+        preprocessDateFields(body, ["date", "dueDate"]),
       );
       if (!parsed.success) {
         return res.status(400).json({ message: "Invalid invoice data", errors: parsed.error.errors });

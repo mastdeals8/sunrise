@@ -1,8 +1,9 @@
 import React, { useMemo, useState } from "react";
 import { Pager, usePagedList } from "@/components/Pager";
 import { Link } from "wouter";
-import { FileText, Plus, Eye, X, Search, Pencil, Trash2, Ban, Printer, Receipt, Download } from "lucide-react";
+import { FileText, Plus, Eye, X, Search, Pencil, Trash2, Ban, Printer, Receipt, Download, CheckSquare } from "lucide-react";
 import type { Client, DeliveryChallan, Estimate } from "../types";
+import BulkInvoicePdfRunner from "./BulkInvoicePdfRunner";
 
 interface Invoice {
   id: number;
@@ -25,6 +26,10 @@ interface Invoice {
   createdAt: string;
   poNumber?: string | null;
   poReference?: string | null;
+  storeId?: number | null;
+  storeCode?: string | null;
+  storeName?: string | null;
+  lineItems?: any[];
 }
 
 interface LedgerSummary {
@@ -52,6 +57,9 @@ interface InvoiceLedgerPanelProps {
   estimates: Estimate[];
   challans: DeliveryChallan[];
   clients: Client[];
+  stores?: any[];
+  products?: any[];
+  sellerProfile?: any;
   ledgerSummary: LedgerSummary[];
   clientStatement: ClientStatementItem[];
   activeLedgerClientId: number | null;
@@ -67,6 +75,7 @@ interface InvoiceLedgerPanelProps {
   fetchClientStatement: (clientId: number) => void;
   formatCurrency: (n: number) => string;
   token?: string | null;
+  showSuccess?: (msg: string) => void;
 }
 
 const InvoiceLedgerPanel: React.FC<InvoiceLedgerPanelProps> = ({
@@ -74,6 +83,9 @@ const InvoiceLedgerPanel: React.FC<InvoiceLedgerPanelProps> = ({
   estimates,
   challans,
   clients,
+  stores = [],
+  products = [],
+  sellerProfile = {},
   ledgerSummary,
   clientStatement,
   activeLedgerClientId,
@@ -89,9 +101,15 @@ const InvoiceLedgerPanel: React.FC<InvoiceLedgerPanelProps> = ({
   fetchClientStatement,
   formatCurrency,
   token,
+  showSuccess,
 }) => {
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState<string>("all");
+
+  // Bulk Invoice selection & PDF Export state
+  const [selectedInvoiceIds, setSelectedInvoiceIds] = useState<Set<number>>(new Set());
+  const [bulkInvoicePdfMode, setBulkInvoicePdfMode] = useState<"preview" | "zip" | "combined" | null>(null);
+  const headerCheckboxRef = React.useRef<HTMLInputElement>(null);
 
   // ----- BUILDER TAB: one row per estimate/PO, containing all its DC/WCCs -----
   const dcRows = useMemo(() => {
@@ -116,14 +134,58 @@ const InvoiceLedgerPanel: React.FC<InvoiceLedgerPanelProps> = ({
         } else if (inv.status !== filterStatus) return false;
       }
       if (q) {
-        return (inv.invoiceNumber || "").toLowerCase().includes(q)
+        const est = estimates.find(e => e.id === inv.estimateId);
+        const dc = challans.find(d => d.id === inv.deliveryChallanId);
+        const client = clients.find(c => c.id === (inv.clientId || est?.clientId));
+        const clientName = (inv.partyName && inv.partyName !== "Customer"
+          ? inv.partyName
+          : (est?.billingLegalNameSnapshot || client?.name || inv.partyName || "")).toLowerCase();
+        return (
+          (inv.invoiceNumber || "").toLowerCase().includes(q)
+          || clientName.includes(q)
           || (inv.partyName || "").toLowerCase().includes(q)
-          || (inv.poNumber || "").toLowerCase().includes(q);
+          || (inv.poNumber || "").toLowerCase().includes(q)
+          || (inv.storeName || "").toLowerCase().includes(q)
+          || (inv.storeCode || "").toLowerCase().includes(q)
+          || (est?.estimateNumber || "").toLowerCase().includes(q)
+          || (dc?.dcNumber || "").toLowerCase().includes(q)
+        );
       }
       return true;
     });
-  }, [invoices, search, filterStatus]);
+  }, [invoices, search, filterStatus, estimates, challans, clients]);
+
   const invLedgerPager = usePagedList(filteredInvoices, 25);
+
+  // Computed selected invoices in register order
+  const selectedInvoicesInOrder = useMemo(() => {
+    return filteredInvoices.filter(i => selectedInvoiceIds.has(i.id));
+  }, [filteredInvoices, selectedInvoiceIds]);
+
+  const allFilteredSelected = filteredInvoices.length > 0 && filteredInvoices.every(i => selectedInvoiceIds.has(i.id));
+  const someFilteredSelected = filteredInvoices.some(i => selectedInvoiceIds.has(i.id)) && !allFilteredSelected;
+
+  React.useEffect(() => {
+    if (headerCheckboxRef.current) {
+      headerCheckboxRef.current.indeterminate = someFilteredSelected;
+    }
+  }, [someFilteredSelected]);
+
+  const handleToggleAllFiltered = () => {
+    if (allFilteredSelected) {
+      setSelectedInvoiceIds(prev => {
+        const next = new Set(prev);
+        filteredInvoices.forEach(i => next.delete(i.id));
+        return next;
+      });
+    } else {
+      setSelectedInvoiceIds(prev => {
+        const next = new Set(prev);
+        filteredInvoices.forEach(i => next.add(i.id));
+        return next;
+      });
+    }
+  };
 
   const exportCsv = () => {
     const rows = [
@@ -131,10 +193,14 @@ const InvoiceLedgerPanel: React.FC<InvoiceLedgerPanelProps> = ({
       ...filteredInvoices.map(inv => {
         const est = estimates.find(e => e.id === inv.estimateId);
         const dc = challans.find(d => d.id === inv.deliveryChallanId);
+        const client = clients.find(c => c.id === (inv.clientId || est?.clientId));
+        const party = (inv.partyName && inv.partyName !== "Customer")
+          ? inv.partyName
+          : (est?.billingLegalNameSnapshot || client?.name || inv.partyName || "");
         const balance = inv.balanceAmount ?? inv.totalAmount - (inv.paidAmount || 0);
         return [
           inv.invoiceNumber, inv.date?.slice(0, 10) || "", inv.dueDate?.slice(0, 10) || "",
-          inv.partyName, est?.estimateNumber || "", dc?.dcNumber || "", inv.poNumber || "",
+          party, est?.estimateNumber || "", dc?.dcNumber || "", inv.poNumber || "",
           inv.status, inv.totalAmount, inv.paidAmount || 0, balance,
         ].map(v => `"${String(v).replace(/"/g, '""')}"`).join(",");
       })
@@ -271,6 +337,58 @@ const InvoiceLedgerPanel: React.FC<InvoiceLedgerPanelProps> = ({
             <span className="text-xs text-slate-500">{filteredInvoices.length} invoices</span>
           </div>
 
+          {/* Compact Bulk Actions Toolbar */}
+          {selectedInvoiceIds.size > 0 && (
+            <div className="bg-orange-50/90 border border-orange-200 rounded-xl px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 text-xs shadow-xs animate-in fade-in slide-in-from-top-1">
+              <div className="flex items-center gap-2 flex-wrap">
+                <CheckSquare className="w-4 h-4 text-orange-600 shrink-0" />
+                <span className="font-bold text-slate-900">
+                  {selectedInvoiceIds.size} invoice{selectedInvoiceIds.size > 1 ? "s" : ""} selected
+                </span>
+                <span className="text-[11px] text-slate-500">
+                  (from {filteredInvoices.length} filtered results)
+                </span>
+              </div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => setBulkInvoicePdfMode("preview")}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-orange-600 hover:bg-orange-700 text-white font-semibold rounded-lg shadow-xs transition cursor-pointer"
+                  title="Open Print & Export preview and page setup options"
+                >
+                  <Printer className="w-3.5 h-3.5" />
+                  Print / Export Invoices
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setBulkInvoicePdfMode("zip")}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 font-semibold rounded-lg shadow-xs transition cursor-pointer"
+                  title="Export separate PDF per invoice packaged into a ZIP download"
+                >
+                  <Download className="w-3.5 h-3.5 text-orange-600" />
+                  Export Individual PDFs
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setBulkInvoicePdfMode("combined")}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 font-semibold rounded-lg shadow-xs transition cursor-pointer"
+                  title="Print or view a combined PDF containing selected invoices in register order"
+                >
+                  <FileText className="w-3.5 h-3.5 text-slate-600" />
+                  Print Combined PDF
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedInvoiceIds(new Set())}
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 text-slate-500 hover:text-slate-800 hover:bg-orange-100/60 rounded-lg transition font-medium cursor-pointer"
+                >
+                  <X className="w-3.5 h-3.5" />
+                  Clear Selection
+                </button>
+              </div>
+            </div>
+          )}
+
           {filteredInvoices.length === 0 ? (
             <div className="text-center py-12 text-slate-400">
               <FileText className="w-10 h-10 mx-auto mb-3 opacity-30" />
@@ -281,6 +399,16 @@ const InvoiceLedgerPanel: React.FC<InvoiceLedgerPanelProps> = ({
               <table className="w-full text-xs">
                 <thead className="bg-slate-50 text-[10px] text-slate-500 uppercase font-bold border-b border-slate-200">
                   <tr>
+                    <th className="px-3 py-2 text-center w-8">
+                      <input
+                        ref={headerCheckboxRef}
+                        type="checkbox"
+                        checked={allFilteredSelected}
+                        onChange={handleToggleAllFiltered}
+                        className="rounded border-slate-300 text-orange-600 focus:ring-orange-500 cursor-pointer"
+                        title={allFilteredSelected ? "Deselect all filtered invoices" : "Select all filtered invoices"}
+                      />
+                    </th>
                     <th className="px-3 py-2 text-left">Invoice No.</th>
                     <th className="px-3 py-2 text-left">Date</th>
                     <th className="px-3 py-2 text-left">Client</th>
@@ -298,17 +426,45 @@ const InvoiceLedgerPanel: React.FC<InvoiceLedgerPanelProps> = ({
                   {invLedgerPager.slice.map(inv => {
                     const est = estimates.find(e => e.id === inv.estimateId);
                     const dc = challans.find(d => d.id === inv.deliveryChallanId);
+                    const client = clients.find(c => c.id === (inv.clientId || est?.clientId));
+                    const displayClientName = (inv.partyName && inv.partyName !== "Customer")
+                      ? inv.partyName
+                      : (est?.billingLegalNameSnapshot || client?.name || inv.partyName || "—");
                     const balance = inv.balanceAmount ?? inv.totalAmount - (inv.paidAmount || 0);
                     const isOverdue = !["paid", "cancelled"].includes(inv.status) && inv.dueDate && new Date(inv.dueDate) < new Date();
                     const displayStatus = isOverdue && !["partial", "draft"].includes(inv.status) ? "overdue" : inv.status;
+                    const isRowSelected = selectedInvoiceIds.has(inv.id);
                     return (
-                      <tr key={inv.id} className={`hover:bg-slate-50/60 cursor-pointer ${isOverdue ? "bg-red-50/20" : ""} ${inv.status === "cancelled" ? "opacity-50" : ""}`}
+                      <tr key={inv.id} className={`hover:bg-slate-50/60 cursor-pointer ${isRowSelected ? "bg-orange-50/40" : ""} ${isOverdue ? "bg-red-50/20" : ""} ${inv.status === "cancelled" ? "opacity-50" : ""}`}
                           onClick={() => openInvoiceEditor({ invoiceId: inv.id })}>
+                        <td className="px-3 py-2 text-center" onClick={(e) => e.stopPropagation()}>
+                          <input
+                            type="checkbox"
+                            checked={isRowSelected}
+                            onChange={(e) => {
+                              setSelectedInvoiceIds(prev => {
+                                const next = new Set(prev);
+                                if (e.target.checked) next.add(inv.id);
+                                else next.delete(inv.id);
+                                return next;
+                              });
+                            }}
+                            className="rounded border-slate-300 text-orange-600 focus:ring-orange-500 cursor-pointer"
+                          />
+                        </td>
                         <td className="px-3 py-2 font-mono font-bold text-blue-700">
                           <button onClick={(e) => { e.stopPropagation(); openInvoiceEditor({ invoiceId: inv.id }); }} className="hover:underline text-left">{inv.invoiceNumber}</button>
                         </td>
                         <td className="px-3 py-2 text-slate-600">{inv.date ? new Date(inv.date).toLocaleDateString("en-GB") : "—"}</td>
-                        <td className="px-3 py-2 text-slate-700">{inv.partyName}</td>
+                        <td className="px-3 py-2 text-slate-700">
+                          <div className="font-semibold">{displayClientName}</div>
+                          {(inv.storeName || (inv as any).store_name) && (
+                            <div className="text-[10px] text-slate-400 font-normal">
+                              {inv.storeName || (inv as any).store_name}
+                              {(inv.storeCode || (inv as any).store_code) ? ` (${inv.storeCode || (inv as any).store_code})` : ""}
+                            </div>
+                          )}
+                        </td>
                         <td className="px-3 py-2 font-mono text-xs">
                           {est ? <button onClick={(e) => { e.stopPropagation(); window.location.href = `/estimates#est-${est.id}`; }} className="text-orange-600 hover:underline">{est.estimateNumber}</button> : <span className="text-slate-300">—</span>}
                         </td>
@@ -340,6 +496,19 @@ const InvoiceLedgerPanel: React.FC<InvoiceLedgerPanelProps> = ({
               <Pager page={invLedgerPager.page} pageSize={invLedgerPager.pageSize} total={invLedgerPager.total} onPageChange={invLedgerPager.setPage} />
             </div>
           )}
+
+          <BulkInvoicePdfRunner
+            mode={bulkInvoicePdfMode}
+            onClose={() => setBulkInvoicePdfMode(null)}
+            selectedInvoices={selectedInvoicesInOrder}
+            estimates={estimates}
+            stores={stores}
+            clients={clients}
+            products={products}
+            sellerProfile={sellerProfile}
+            token={token}
+            showSuccess={showSuccess}
+          />
         </div>
       )}
 

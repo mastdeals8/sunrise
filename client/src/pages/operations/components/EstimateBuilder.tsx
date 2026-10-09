@@ -899,7 +899,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
     isAblbl: boolean;
   } | null>(null);
   const [selectedEstimateIds, setSelectedEstimateIds] = React.useState<Set<number>>(new Set());
-  const [bulkPdfRunnerMode, setBulkPdfRunnerMode] = React.useState<"zip" | "combined" | null>(null);
+  const [bulkPdfRunnerMode, setBulkPdfRunnerMode] = React.useState<"preview" | "zip" | "combined" | null>(null);
   const headerCheckboxRef = React.useRef<HTMLInputElement>(null);
 
   React.useEffect(() => {
@@ -1637,6 +1637,15 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                   <div className="flex items-center gap-2 flex-wrap">
                     <button
                       type="button"
+                      onClick={() => setBulkPdfRunnerMode("preview")}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-orange-600 hover:bg-orange-700 text-white font-semibold rounded-lg shadow-xs transition cursor-pointer"
+                      title="Open Print & Export preview and page setup options"
+                    >
+                      <Printer className="w-3.5 h-3.5" />
+                      Print / Export PDFs
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => setBulkPdfRunnerMode("zip")}
                       className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 font-semibold rounded-lg shadow-xs transition cursor-pointer"
                       title="Export separate PDF per estimate packaged into a ZIP download"
@@ -1647,10 +1656,10 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                     <button
                       type="button"
                       onClick={() => setBulkPdfRunnerMode("combined")}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-orange-600 hover:bg-orange-700 text-white font-semibold rounded-lg shadow-xs transition cursor-pointer"
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 font-semibold rounded-lg shadow-xs transition cursor-pointer"
                       title="Print or view a combined PDF containing selected estimates in register order"
                     >
-                      <Printer className="w-3.5 h-3.5" />
+                      <FileText className="w-3.5 h-3.5 text-slate-600" />
                       Print Combined PDF
                     </button>
                     <button

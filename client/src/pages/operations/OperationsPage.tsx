@@ -4326,6 +4326,9 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
           estimates={estimates}
           challans={challans}
           clients={clients}
+          stores={stores}
+          products={products}
+          sellerProfile={sellerProfile}
           ledgerSummary={ledgerSummary}
           clientStatement={clientStatement}
           activeLedgerClientId={activeLedgerClientId}
@@ -4341,6 +4344,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
           fetchClientStatement={fetchClientStatement}
           formatCurrency={formatCurrency}
           token={token}
+          showSuccess={showSuccess}
         />
       )}
 
