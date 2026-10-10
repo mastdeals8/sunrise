@@ -872,12 +872,81 @@ export async function fetchInvoiceForEstimate(token: string | null, estimateId: 
 
 // ─── Customer Rate Cards ──────────────────────────────────────────────────────
 
-export async function fetchCustomerRateCards(token: string | null) {
+export async function fetchCustomerRateCards(token: string | null, clientId?: number) {
   if (!isBoltMode) {
-    const res = await apiFetch("/api/customer-rate-cards", token);
+    const url = clientId ? `/api/customer-rate-cards?clientId=${clientId}` : "/api/customer-rate-cards";
+    const res = await apiFetch(url, token);
     return res.ok ? res.json() : [];
   }
-  return sbSelect("customer_rate_cards", (q) => q.select("*").order("name"));
+  return sbSelect("customer_rate_cards", (q) => {
+    let query = q.select("*");
+    if (clientId) query = query.eq("client_id", clientId);
+    return query.order("name");
+  });
+}
+
+export async function fetchRateCard(token: string | null, cardId: number) {
+  if (!isBoltMode) {
+    const res = await apiFetch(`/api/customer-rate-cards/${cardId}`, token);
+    return res.ok ? res.json() : null;
+  }
+  return sbSelect("customer_rate_cards", (q) => q.select("*").eq("id", cardId).single());
+}
+
+export async function fetchRateCardItems(token: string | null, cardId: number) {
+  if (!isBoltMode) {
+    const res = await apiFetch(`/api/customer-rate-cards/${cardId}/items`, token);
+    return res.ok ? res.json() : [];
+  }
+  return sbSelect("customer_rate_items", (q) => q.select("*").eq("rate_card_id", cardId));
+}
+
+export async function createRateCard(token: string | null, card: any) {
+  const res = await apiFetch("/api/customer-rate-cards", token, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(card),
+  });
+  if (!res.ok) throw new Error((await res.json()).message || "Failed to create rate card");
+  return res.json();
+}
+
+export async function updateRateCard(token: string | null, cardId: number, card: any) {
+  const res = await apiFetch(`/api/customer-rate-cards/${cardId}`, token, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(card),
+  });
+  if (!res.ok) throw new Error((await res.json()).message || "Failed to update rate card");
+  return res.json();
+}
+
+export async function deleteRateCard(token: string | null, cardId: number) {
+  const res = await apiFetch(`/api/customer-rate-cards/${cardId}`, token, {
+    method: "DELETE",
+  });
+  if (!res.ok) throw new Error((await res.json()).message || "Failed to delete rate card");
+  return res.json();
+}
+
+export async function importProductsToRateCard(token: string | null, cardId: number) {
+  // Bolt: rate cards use Express API
+  const res = await apiFetch(`/api/customer-rate-cards/${cardId}/import-products`, token, {
+    method: "POST",
+  });
+  if (!res.ok) throw new Error((await res.json()).message || "Failed to import products to rate card");
+  return res.json();
+}
+
+export async function batchUpdateRateCardItems(token: string | null, cardId: number, items: any[]) {
+  // Bolt: rate cards use Express API
+  const res = await apiFetch(`/api/customer-rate-cards/${cardId}/batch-items`, token, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ items }),
+  });
+  if (!res.ok) throw new Error((await res.json()).message || "Failed to update rate card items");
+  return res.json();
 }
 
 // ─── Storage uploads ─────────────────────────────────────────────────────────

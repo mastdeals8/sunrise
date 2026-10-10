@@ -13,7 +13,7 @@ import { audit, diffForAudit } from "./audit";
 import { deriveNotifications, refreshNotificationsThrottled } from "./notifications";
 import { dispatchDelivery, buildDeliveryMessage, discoverChats, getBotToken } from "./telegram";
 import { auditLogs, notifications } from "@shared/schema";
-import { desc, isNull, and as andOp } from "drizzle-orm";
+import { desc, asc, isNull, and as andOp } from "drizzle-orm";
 import path from "path";
 import fs from "fs";
 import { strToU8, unzipSync, zipSync } from "fflate";
@@ -5820,8 +5820,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/customer-rate-cards", authenticateToken, async (req: AuthRequest, res: Response) => {
     try {
-      const cards = await db.select().from(customerRateCards);
+      const cId = req.companyId || 1;
+      const clientId = req.query.clientId ? Number(req.query.clientId) : undefined;
+      const conds = [eq(customerRateCards.companyId, cId)];
+      if (clientId) conds.push(eq(customerRateCards.clientId, clientId));
+      const cards = await db.select().from(customerRateCards).where(and(...conds)).orderBy(desc(customerRateCards.createdAt));
       res.json(cards);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.get("/api/customer-rate-cards/:id", authenticateToken, async (req: AuthRequest, res: Response) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      const cId = req.companyId || 1;
+      const card = await db.select().from(customerRateCards).where(and(eq(customerRateCards.id, id), eq(customerRateCards.companyId, cId))).limit(1);
+      if (!card[0]) return res.status(404).json({ message: "Rate card not found" });
+      res.json(card[0]);
     } catch (err: any) {
       res.status(500).json({ message: err.message });
     }
@@ -5830,7 +5846,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/customer-rate-cards/:id/items", authenticateToken, async (req: AuthRequest, res: Response) => {
     try {
       const id = parseInt(req.params.id, 10);
-      const items = await db.select().from(customerRateItems).where(eq(customerRateItems.rateCardId, id));
+      const items = await db
+        .select({
+          id: customerRateItems.id,
+          rateCardId: customerRateItems.rateCardId,
+          productId: customerRateItems.productId,
+          materialCodeId: customerRateItems.materialCodeId,
+          itemName: customerRateItems.itemName,
+          description: customerRateItems.description,
+          hsn: customerRateItems.hsn,
+          uom: customerRateItems.uom,
+          calculationType: customerRateItems.calculationType,
+          rate: customerRateItems.rate,
+          gstPercent: customerRateItems.gstPercent,
+          isStandard: customerRateItems.isStandard,
+          isActive: customerRateItems.isActive,
+          createdAt: customerRateItems.createdAt,
+          productName: products.name,
+          productMaterialCode: products.materialCode,
+          productUnit: products.unit,
+          productStandardRate: products.rate,
+          productIsActive: products.isActive,
+        })
+        .from(customerRateItems)
+        .leftJoin(products, eq(customerRateItems.productId, products.id))
+        .where(eq(customerRateItems.rateCardId, id))
+        .orderBy(asc(products.name), asc(customerRateItems.itemName));
       res.json(items);
     } catch (err: any) {
       res.status(500).json({ message: err.message });
@@ -5862,10 +5903,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "clientId is required" });
       }
 
-      // Pull all active cards for this client; rank in JS (cheap; rate-card
-      // tables are expected to be small).
+      const cId = req.companyId || 1;
+      // Pull all active cards for this client in the active company; rank in JS
       const cards = await db.select().from(customerRateCards)
-        .where(eq(customerRateCards.clientId, clientId));
+        .where(and(eq(customerRateCards.clientId, clientId), eq(customerRateCards.companyId, cId)));
 
       const eligible = cards.filter(c => {
         if (!c.isActive) return false;
@@ -5905,7 +5946,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           ((productId !== null && it.productId === productId) ||
            (materialCodeId !== null && it.materialCodeId === materialCodeId))
         );
-        if (match) {
+        if (match && Number(match.rate) > 0) {
           return res.json({
             rateCardId: card.id,
             productId: match.productId,
@@ -6076,11 +6117,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Customer Rate Card — full CRUD
   // ==========================================
 
-  app.post("/api/customer-rate-cards", authenticateToken, requireRole(["admin", "manager", "accounts"]), async (req: AuthRequest, res: Response) => {
+  app.post("/api/customer-rate-cards", authenticateToken, requireRole(["admin", "manager", "operations", "accounts"]), async (req: AuthRequest, res: Response) => {
     try {
       const { effectiveFrom, effectiveTo, ...rest } = req.body;
+      const cId = req.companyId || 1;
       const created = await db.insert(customerRateCards).values({
         ...rest,
+        companyId: cId,
         effectiveFrom: effectiveFrom ? new Date(effectiveFrom) : null,
         effectiveTo: effectiveTo ? new Date(effectiveTo) : null,
       }).returning();
@@ -6088,28 +6131,135 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
-  app.patch("/api/customer-rate-cards/:id", authenticateToken, requireRole(["admin", "manager", "accounts"]), async (req: AuthRequest, res: Response) => {
+  app.patch("/api/customer-rate-cards/:id", authenticateToken, requireRole(["admin", "manager", "operations", "accounts"]), async (req: AuthRequest, res: Response) => {
     try {
       const id = parseInt(req.params.id, 10);
+      const cId = req.companyId || 1;
       const { effectiveFrom, effectiveTo, ...rest } = req.body;
       const updates: any = { ...rest };
       if (effectiveFrom !== undefined) updates.effectiveFrom = effectiveFrom ? new Date(effectiveFrom) : null;
       if (effectiveTo !== undefined) updates.effectiveTo = effectiveTo ? new Date(effectiveTo) : null;
-      const updated = await db.update(customerRateCards).set(updates).where(eq(customerRateCards.id, id)).returning();
+      const updated = await db.update(customerRateCards).set(updates).where(and(eq(customerRateCards.id, id), eq(customerRateCards.companyId, cId))).returning();
       if (!updated[0]) return res.status(404).json({ message: "Rate card not found" });
       res.json(updated[0]);
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
-  app.delete("/api/customer-rate-cards/:id", authenticateToken, requireRole(["admin", "manager"]), async (req: AuthRequest, res: Response) => {
+  app.delete("/api/customer-rate-cards/:id", authenticateToken, requireRole(["admin", "manager", "operations"]), async (req: AuthRequest, res: Response) => {
     try {
       const id = parseInt(req.params.id, 10);
-      await db.delete(customerRateCards).where(eq(customerRateCards.id, id));
+      const cId = req.companyId || 1;
+      await db.delete(customerRateCards).where(and(eq(customerRateCards.id, id), eq(customerRateCards.companyId, cId)));
       res.json({ success: true });
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
-  app.post("/api/customer-rate-cards/:id/items", authenticateToken, requireRole(["admin", "manager", "accounts"]), async (req: AuthRequest, res: Response) => {
+  // Import All Products from Product Master into a Rate Card
+  app.post("/api/customer-rate-cards/:id/import-products", authenticateToken, requireRole(["admin", "manager", "operations", "accounts"]), async (req: AuthRequest, res: Response) => {
+    try {
+      const rateCardId = parseInt(req.params.id, 10);
+      const cId = req.companyId || 1;
+      const card = await db.select().from(customerRateCards).where(and(eq(customerRateCards.id, rateCardId), eq(customerRateCards.companyId, cId))).limit(1);
+      if (!card[0]) {
+        return res.status(404).json({ message: "Rate card not found" });
+      }
+
+      // 1. Fetch all products belonging to this company (active products)
+      const allProducts = await db.select().from(products).where(and(eq(products.companyId, cId), eq(products.isActive, true)));
+
+      // 2. Fetch all existing items for this rate card
+      const existingItems = await db.select().from(customerRateItems).where(eq(customerRateItems.rateCardId, rateCardId));
+      const existingProductIds = new Set(existingItems.filter(it => it.productId != null).map(it => it.productId));
+
+      let importedCount = 0;
+      const toInsert: any[] = [];
+
+      for (const prod of allProducts) {
+        if (!existingProductIds.has(prod.id)) {
+          toInsert.push({
+            rateCardId,
+            productId: prod.id,
+            materialCodeId: prod.materialCodeId || null,
+            itemName: prod.name,
+            description: prod.description || null,
+            hsn: prod.hsnSac || null,
+            uom: prod.unit || "pcs",
+            calculationType: prod.calculationType || "fixed",
+            rate: 0, // Unpriced by default for newly imported products
+            gstPercent: prod.gstPercent || 18,
+            isStandard: prod.isStandard ?? true,
+            isActive: true,
+          });
+        }
+      }
+
+      if (toInsert.length > 0) {
+        await db.insert(customerRateItems).values(toInsert).onConflictDoNothing();
+        importedCount = toInsert.length;
+      }
+
+      res.json({
+        success: true,
+        importedCount,
+        existingCount: existingProductIds.size,
+        totalCount: existingProductIds.size + importedCount,
+        message: `Imported ${importedCount} new products. ${existingProductIds.size} already present.`,
+      });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // Batch update rates and status for rate card items
+  app.put("/api/customer-rate-cards/:id/batch-items", authenticateToken, requireRole(["admin", "manager", "operations", "accounts"]), async (req: AuthRequest, res: Response) => {
+    try {
+      const rateCardId = parseInt(req.params.id, 10);
+      const cId = req.companyId || 1;
+      const card = await db.select().from(customerRateCards).where(and(eq(customerRateCards.id, rateCardId), eq(customerRateCards.companyId, cId))).limit(1);
+      if (!card[0]) {
+        return res.status(404).json({ message: "Rate card not found" });
+      }
+
+      const { items } = req.body;
+      if (!Array.isArray(items)) {
+        return res.status(400).json({ message: "items array is required" });
+      }
+
+      for (const it of items) {
+        if (it.rate !== undefined && it.rate !== null && it.rate !== "") {
+          const num = Number(it.rate);
+          if (isNaN(num) || num < 0) {
+            return res.status(400).json({ message: `Invalid rate value: "${it.rate}". Rates must be positive numbers.` });
+          }
+        }
+      }
+
+      let updatedCount = 0;
+      for (const it of items) {
+        const updates: any = {};
+        if (it.rate !== undefined && it.rate !== null && it.rate !== "") {
+          updates.rate = Number(it.rate);
+        } else if (it.rate === "" || it.rate === null) {
+          updates.rate = 0;
+        }
+        if (it.isActive !== undefined) updates.isActive = Boolean(it.isActive);
+
+        if (it.id) {
+          await db.update(customerRateItems).set(updates).where(and(eq(customerRateItems.id, it.id), eq(customerRateItems.rateCardId, rateCardId)));
+          updatedCount++;
+        } else if (it.productId) {
+          await db.update(customerRateItems).set(updates).where(and(eq(customerRateItems.productId, it.productId), eq(customerRateItems.rateCardId, rateCardId)));
+          updatedCount++;
+        }
+      }
+
+      res.json({ success: true, updatedCount });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.post("/api/customer-rate-cards/:id/items", authenticateToken, requireRole(["admin", "manager", "operations", "accounts"]), async (req: AuthRequest, res: Response) => {
     try {
       const rateCardId = parseInt(req.params.id, 10);
       const created = await db.insert(customerRateItems).values({ ...req.body, rateCardId }).returning();
@@ -6117,7 +6267,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
-  app.patch("/api/customer-rate-cards/:cardId/items/:itemId", authenticateToken, requireRole(["admin", "manager", "accounts"]), async (req: AuthRequest, res: Response) => {
+  app.patch("/api/customer-rate-cards/:cardId/items/:itemId", authenticateToken, requireRole(["admin", "manager", "operations", "accounts"]), async (req: AuthRequest, res: Response) => {
     try {
       const itemId = parseInt(req.params.itemId, 10);
       const updated = await db.update(customerRateItems).set(req.body).where(eq(customerRateItems.id, itemId)).returning();
@@ -6126,7 +6276,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
-  app.delete("/api/customer-rate-cards/:cardId/items/:itemId", authenticateToken, requireRole(["admin", "manager"]), async (req: AuthRequest, res: Response) => {
+  app.delete("/api/customer-rate-cards/:cardId/items/:itemId", authenticateToken, requireRole(["admin", "manager", "operations"]), async (req: AuthRequest, res: Response) => {
     try {
       const itemId = parseInt(req.params.itemId, 10);
       await db.delete(customerRateItems).where(eq(customerRateItems.id, itemId));

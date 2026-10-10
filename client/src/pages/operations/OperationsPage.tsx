@@ -47,7 +47,7 @@ import ProjectWorkspace from "./components/ProjectWorkspace";
 import WccDcEditor from "./components/WccDcEditor";
 import { useOperationsData, type Invoice } from "./hooks/useOperationsData";
 import { isBoltMode, supabase } from "../../lib/supabase";
-import { createEstimate, updateEstimate, duplicateEstimate, createDeliveryChallan, updateDeliveryChallan, fetchEstimateItems, fetchDeliveryChallansForEstimate, fetchBillingProfiles as apiFetchBillingProfiles, fetchCompanySettings, createInvoice, createPayment, fetchClientLedger, masterDataSave, uploadToStorage, registerExecutionDocument, deleteExecutionDocument, deleteWccPhotoArtifacts, hydrateDeliveryChallanPhotos, normalizeWccPhotos } from "../../lib/api";
+import { createEstimate, updateEstimate, duplicateEstimate, createDeliveryChallan, updateDeliveryChallan, fetchEstimateItems, fetchDeliveryChallansForEstimate, fetchBillingProfiles as apiFetchBillingProfiles, fetchCompanySettings, createInvoice, createPayment, fetchClientLedger, masterDataSave, uploadToStorage, registerExecutionDocument, deleteExecutionDocument, deleteWccPhotoArtifacts, hydrateDeliveryChallanPhotos, normalizeWccPhotos, apiFetch } from "../../lib/api";
 import { useEstimateBuilder } from "./hooks/useEstimateBuilder";
 import { useInvoiceWorkflow } from "./hooks/useInvoiceWorkflow";
 import { useWccDcEditor } from "./hooks/useWccDcEditor";
@@ -1174,9 +1174,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
       if (isAblblFormat(estFormat)) {
         params.set("projectType", estAbfrlProjectType);
       }
-      const r = await fetch(`/api/customer-rate-cards/resolve?${params.toString()}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const r = await apiFetch(`/api/customer-rate-cards/resolve?${params.toString()}`, token);
       if (!r.ok) return;
       const data = await r.json();
       if (!data) return;

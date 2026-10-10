@@ -1,9 +1,62 @@
-import React, { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useState, useMemo, useRef } from "react";
 import { useAuth } from "../contexts/AuthContext";
 import {
-  Plus, Pencil, Trash2, Archive, Copy, Download, Upload, Eye, X, Save,
-  FileSpreadsheet, Sparkles, ArrowRight, Database, Building2, Tag, Layers,
+  fetchClients,
+  fetchBrands,
+  fetchProducts,
+  fetchMaterialCodes,
+  fetchCustomerRateCards,
+  fetchRateCardItems,
+  createRateCard,
+  updateRateCard,
+  deleteRateCard,
+  importProductsToRateCard,
+  batchUpdateRateCardItems,
+  apiFetch,
+} from "../lib/api";
+import {
+  Download,
+  Upload,
+  Save,
+  Search,
+  Plus,
+  RefreshCw,
+  FileSpreadsheet,
+  CheckCircle2,
+  AlertCircle,
+  HelpCircle,
+  Layers,
+  ArrowRight,
+  Database,
+  Building2,
+  Trash2,
+  Eye,
+  Filter,
 } from "lucide-react";
+
+interface Client {
+  id: number;
+  name: string;
+}
+
+interface Brand {
+  id: number;
+  name: string;
+}
+
+interface Product {
+  id: number;
+  name: string;
+  rate: number;
+  unit: string;
+  materialCode?: string | null;
+  isActive: boolean;
+}
+
+interface MaterialCode {
+  id: number;
+  code: string;
+}
 
 interface RateCard {
   id: number;
@@ -17,6 +70,7 @@ interface RateCard {
   notes: string | null;
   createdAt: string;
 }
+
 interface RateItem {
   id: number;
   rateCardId: number;
@@ -31,673 +85,1084 @@ interface RateItem {
   gstPercent: number;
   isStandard: boolean;
   isActive: boolean;
-}
-interface Client { id: number; name: string }
-interface Brand { id: number; name: string }
-interface Product { id: number; name: string; rate: number; unit: string }
-interface MaterialCode { id: number; code: string; description: string | null; uom: string; gstPercent: number; hsn: string | null }
-
-interface ResolvedRate {
-  rateCardId: number;
-  productId: number | null;
-  materialCodeId: number | null;
-  rate: number;
-  gstPercent: number;
-  uom: string;
-  source: string;
+  // joined from products
+  productName?: string;
+  productMaterialCode?: string;
+  productBrandId?: number | null;
+  productUnit?: string;
+  productStandardRate?: number;
+  productIsActive?: boolean;
 }
 
-const PROJECT_TYPES = ["", "normal", "letter_signage", "SELEX", "CAPEX", "rollout", "custom"];
+interface StagedExcelRow {
+  productId: number;
+  productName: string;
+  oldRate: number;
+  newRate: number;
+  isActive: boolean;
+  status: "updated" | "unchanged" | "skipped" | "failed";
+  reason?: string;
+}
 
 export default function CustomerRateCards() {
   const { token } = useAuth();
-  const auth = useMemo(() => ({ headers: { Authorization: `Bearer ${token}` } }), [token]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const [rateCards, setRateCards] = useState<RateCard[]>([]);
+  // Master lists
   const [clients, setClients] = useState<Client[]>([]);
   const [brands, setBrands] = useState<Brand[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [materialCodes, setMaterialCodes] = useState<MaterialCode[]>([]);
-  const [showArchived, setShowArchived] = useState(false);
 
-  // Active card detail
+  // Selection states
+  const [selectedClientId, setSelectedClientId] = useState<number | "">("");
+  const [clientRateCards, setClientRateCards] = useState<RateCard[]>([]);
   const [activeCardId, setActiveCardId] = useState<number | null>(null);
-  const [activeItems, setActiveItems] = useState<RateItem[]>([]);
-  const [loadingItems, setLoadingItems] = useState(false);
 
-  // Create/edit card dialog
-  const [showCardDialog, setShowCardDialog] = useState(false);
-  const [editingCard, setEditingCard] = useState<Partial<RateCard> | null>(null);
+  // Active Rate Card fields
+  const [cardName, setCardName] = useState("");
+  const [cardBrandId, setCardBrandId] = useState<number | null>(null);
 
-  // Create/edit item dialog
-  const [showItemDialog, setShowItemDialog] = useState(false);
-  const [editingItem, setEditingItem] = useState<Partial<RateItem> | null>(null);
+  // Table items & edits
+  const [items, setItems] = useState<RateItem[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [importingProducts, setImportingProducts] = useState(false);
 
-  // Resolver widget
+  // Filtering & Search
+  const [searchQuery, setSearchQuery] = useState("");
+  const [filterBrandId, setFilterBrandId] = useState<string>("");
+  const [showUnpricedOnly, setShowUnpricedOnly] = useState(false);
+
+  // Status message
+  const [statusMessage, setStatusMessage] = useState<{
+    type: "success" | "error" | "info";
+    text: string;
+  } | null>(null);
+
+  // Excel Import Preview Modal
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importSummary, setImportSummary] = useState<{
+    total: number;
+    updated: number;
+    unchanged: number;
+    failed: number;
+    stagedRows: StagedExcelRow[];
+  } | null>(null);
+
+  // Rate Resolver Quick-Check
   const [showResolver, setShowResolver] = useState(false);
-  const [rClientId, setRClientId] = useState("");
-  const [rBrandId, setRBrandId] = useState("");
-  const [rProductId, setRProductId] = useState("");
-  const [rMaterialCodeId, setRMaterialCodeId] = useState("");
-  const [rProjectType, setRProjectType] = useState("");
-  const [resolved, setResolved] = useState<ResolvedRate | null | undefined>(undefined);
+  const [rProductId, setRProductId] = useState<string>("");
+  const [resolvedResult, setResolvedResult] = useState<any>(null);
   const [resolving, setResolving] = useState(false);
 
-  // Filter
-  const [filterClientId, setFilterClientId] = useState("");
-  const [filterBrandId, setFilterBrandId] = useState("");
-  const [filterProjectType, setFilterProjectType] = useState("");
-
-  const reload = async () => {
-    if (!token) return;
-    const [c1, c2, c3, c4, c5] = await Promise.all([
-      fetch("/api/customer-rate-cards", auth),
-      fetch("/api/operations/clients", auth),
-      fetch("/api/operations/brands", auth),
-      fetch("/api/operations/products", auth),
-      fetch("/api/operations/material-codes", auth),
-    ]);
-    setRateCards(c1.ok ? await c1.json() : []);
-    setClients(c2.ok ? await c2.json() : []);
-    setBrands(c3.ok ? await c3.json() : []);
-    setProducts(c4.ok ? await c4.json() : []);
-    setMaterialCodes(c5.ok ? await c5.json() : []);
-  };
-
-  useEffect(() => { reload(); /* eslint-disable-next-line */ }, [token]);
-
-  // Honour ?clientId=N / ?brandId=N / ?projectType=X query params so external
-  // pages (e.g. the Clients register's "Rate cards" deep link) can land on a
-  // pre-filtered view.
+  // 1. Initial Load of Master Data
   useEffect(() => {
-    const p = new URLSearchParams(window.location.search);
-    if (p.get("clientId")) setFilterClientId(p.get("clientId")!);
-    if (p.get("brandId")) setFilterBrandId(p.get("brandId")!);
-    if (p.get("projectType")) setFilterProjectType(p.get("projectType")!);
-  }, []);
+    if (!token) return;
+    const loadMasters = async () => {
+      try {
+        const [cls, brs, prods, mcs] = await Promise.all([
+          fetchClients(token).catch(() => []),
+          fetchBrands(token).catch(() => []),
+          fetchProducts(token).catch(() => []),
+          fetchMaterialCodes(token).catch(() => []),
+        ]);
+        setClients(cls || []);
+        setBrands(brs || []);
+        setProducts(prods || []);
+        setMaterialCodes(mcs || []);
 
-  const loadItems = async (cardId: number) => {
-    setActiveCardId(cardId);
-    setLoadingItems(true);
-    try {
-      const r = await fetch(`/api/customer-rate-cards/${cardId}/items`, auth);
-      setActiveItems(r.ok ? await r.json() : []);
-    } finally {
-      setLoadingItems(false);
-    }
-  };
-
-  const filteredCards = rateCards.filter(rc => {
-    if (!showArchived && !rc.isActive) return false;
-    if (filterClientId && String(rc.clientId) !== filterClientId) return false;
-    if (filterBrandId && String(rc.brandId ?? "") !== filterBrandId) return false;
-    if (filterProjectType && (rc.projectType ?? "") !== filterProjectType) return false;
-    return true;
-  });
-
-  const clientName = (id: number | null) => id ? (clients.find(c => c.id === id)?.name ?? `#${id}`) : "—";
-  const brandName = (id: number | null) => id ? (brands.find(b => b.id === id)?.name ?? `#${id}`) : "Any brand";
-  const productName = (id: number | null) => id ? (products.find(p => p.id === id)?.name ?? `#${id}`) : "—";
-  const materialCodeText = (id: number | null) => id ? (materialCodes.find(m => m.id === id)?.code ?? `#${id}`) : "—";
-
-  const openNewCard = () => {
-    setEditingCard({
-      name: "",
-      clientId: clients[0]?.id,
-      brandId: null,
-      projectType: "",
-      effectiveFrom: "",
-      effectiveTo: "",
-      isActive: true,
-      notes: "",
-    });
-    setShowCardDialog(true);
-  };
-
-  const openEditCard = (rc: RateCard) => {
-    setEditingCard({
-      ...rc,
-      effectiveFrom: rc.effectiveFrom ? new Date(rc.effectiveFrom).toISOString().slice(0, 10) : "",
-      effectiveTo: rc.effectiveTo ? new Date(rc.effectiveTo).toISOString().slice(0, 10) : "",
-    });
-    setShowCardDialog(true);
-  };
-
-  const saveCard = async () => {
-    if (!editingCard) return;
-    const payload: any = {
-      name: editingCard.name || null,
-      clientId: editingCard.clientId,
-      brandId: editingCard.brandId || null,
-      projectType: editingCard.projectType || null,
-      effectiveFrom: editingCard.effectiveFrom || null,
-      effectiveTo: editingCard.effectiveTo || null,
-      isActive: editingCard.isActive ?? true,
-      notes: editingCard.notes || null,
+        // Deep-link query parameters (?clientId=X)
+        const params = new URLSearchParams(window.location.search);
+        const urlClientId = params.get("clientId");
+        if (urlClientId) {
+          setSelectedClientId(Number(urlClientId));
+        } else if (cls && cls.length > 0) {
+          setSelectedClientId(cls[0].id);
+        }
+      } catch (err: any) {
+        console.error("Failed to load master data:", err);
+      }
     };
-    const url = editingCard.id ? `/api/customer-rate-cards/${editingCard.id}` : `/api/customer-rate-cards`;
-    const method = editingCard.id ? "PATCH" : "POST";
-    const r = await fetch(url, {
-      method,
-      headers: { ...auth.headers, "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    if (r.ok) {
-      setShowCardDialog(false);
-      setEditingCard(null);
-      await reload();
-    } else {
-      alert("Save failed: " + (await r.text()));
+    loadMasters();
+  }, [token]);
+
+  // 2. Load Rate Cards when Client changes
+  useEffect(() => {
+    if (!token || !selectedClientId) {
+      setClientRateCards([]);
+      setActiveCardId(null);
+      setItems([]);
+      return;
+    }
+
+    const loadClientCards = async () => {
+      setLoading(true);
+      try {
+        const cards: RateCard[] = await fetchCustomerRateCards(token, Number(selectedClientId));
+        setClientRateCards(cards);
+
+        if (cards.length > 0) {
+          // Open the active or first card
+          const targetCard = cards.find(c => c.isActive) || cards[0];
+          setActiveCardId(targetCard.id);
+          setCardName(targetCard.name || `${selectedClientName} Rate Card`);
+          setCardBrandId(targetCard.brandId);
+        } else {
+          setActiveCardId(null);
+          setCardName(`${selectedClientName} Rate Card`);
+          setCardBrandId(null);
+          setItems([]);
+        }
+      } catch (err: any) {
+        console.error("Failed to load client rate cards:", err);
+      } finally {
+        setLoading(false);
+      }
+    };
+    loadClientCards();
+  }, [token, selectedClientId]);
+
+  // 3. Load Items when Active Rate Card changes
+  const reloadCardItems = async (cardId: number) => {
+    if (!token) return;
+    setLoading(true);
+    try {
+      const cardItems: RateItem[] = await fetchRateCardItems(token, cardId);
+      setItems(cardItems || []);
+    } catch (err: any) {
+      console.error("Failed to load rate card items:", err);
+    } finally {
+      setLoading(false);
     }
   };
 
-  const archiveCard = async (rc: RateCard) => {
-    if (!confirm(`Archive rate card "${rc.name || `#${rc.id}`}"? It will hide from active lists.`)) return;
-    await fetch(`/api/customer-rate-cards/${rc.id}`, {
-      method: "PATCH",
-      headers: { ...auth.headers, "Content-Type": "application/json" },
-      body: JSON.stringify({ isActive: false }),
-    });
-    await reload();
-  };
-  const restoreCard = async (rc: RateCard) => {
-    await fetch(`/api/customer-rate-cards/${rc.id}`, {
-      method: "PATCH",
-      headers: { ...auth.headers, "Content-Type": "application/json" },
-      body: JSON.stringify({ isActive: true }),
-    });
-    await reload();
-  };
-  const duplicateCard = async (rc: RateCard) => {
-    const r1 = await fetch("/api/customer-rate-cards", {
-      method: "POST",
-      headers: { ...auth.headers, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name: (rc.name || "Rate card") + " (copy)",
-        clientId: rc.clientId,
-        brandId: rc.brandId,
-        projectType: rc.projectType,
-        effectiveFrom: null,
-        effectiveTo: null,
+  useEffect(() => {
+    if (activeCardId) {
+      reloadCardItems(activeCardId);
+      const activeCard = clientRateCards.find(c => c.id === activeCardId);
+      if (activeCard) {
+        setCardName(activeCard.name || "");
+        setCardBrandId(activeCard.brandId);
+      }
+    } else {
+      setItems([]);
+    }
+  }, [activeCardId]);
+
+  const selectedClient = clients.find(c => c.id === Number(selectedClientId));
+  const selectedClientName = selectedClient ? selectedClient.name : "";
+
+  // 4. Create New Rate Card
+  const handleCreateRateCard = async () => {
+    if (!token || !selectedClientId) return;
+    setSaving(true);
+    try {
+      const name = cardName.trim() || `${selectedClientName} Rate Card`;
+      const created = await createRateCard(token, {
+        clientId: Number(selectedClientId),
+        name,
+        brandId: cardBrandId || null,
         isActive: true,
-        notes: rc.notes,
-      }),
-    });
-    if (!r1.ok) return alert("Duplicate failed.");
-    const created = await r1.json();
-    // Copy items
-    const itemsRes = await fetch(`/api/customer-rate-cards/${rc.id}/items`, auth);
-    if (itemsRes.ok) {
-      const its: RateItem[] = await itemsRes.json();
-      for (const it of its) {
-        await fetch(`/api/customer-rate-cards/${created.id}/items`, {
-          method: "POST",
-          headers: { ...auth.headers, "Content-Type": "application/json" },
-          body: JSON.stringify({
-            productId: it.productId,
-            materialCodeId: it.materialCodeId,
-            itemName: it.itemName,
-            description: it.description,
-            hsn: it.hsn,
-            uom: it.uom,
-            calculationType: it.calculationType,
-            rate: it.rate,
-            gstPercent: it.gstPercent,
-            isStandard: it.isStandard,
-            isActive: it.isActive,
-          }),
+      });
+
+      // Reload client cards and auto-import all products
+      const updatedCards: RateCard[] = await fetchCustomerRateCards(token, Number(selectedClientId));
+      setClientRateCards(updatedCards);
+      setActiveCardId(created.id);
+      setCardName(created.name || name);
+
+      // Auto import products
+      const impRes = await importProductsToRateCard(token, created.id);
+      await reloadCardItems(created.id);
+
+      setStatusMessage({
+        type: "success",
+        text: `Rate Card "${name}" created! ${impRes.message || ""}`,
+      });
+    } catch (err: any) {
+      setStatusMessage({ type: "error", text: err.message || "Failed to create rate card" });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // 5. Import All Products Action
+  const handleImportAllProducts = async () => {
+    if (!token) return;
+    if (!activeCardId) {
+      // If no card yet, create one first
+      await handleCreateRateCard();
+      return;
+    }
+
+    setImportingProducts(true);
+    setStatusMessage(null);
+    try {
+      const res = await importProductsToRateCard(token, activeCardId);
+      await reloadCardItems(activeCardId);
+      setStatusMessage({
+        type: "success",
+        text: res.message || `Imported ${res.importedCount} new products (${res.existingCount} already present).`,
+      });
+    } catch (err: any) {
+      setStatusMessage({
+        type: "error",
+        text: err.message || "Failed to import products from master catalog.",
+      });
+    } finally {
+      setImportingProducts(false);
+    }
+  };
+
+  // 6. Inline Rate Edit Handlers
+  const handleRateChange = (itemId: number, newRateStr: string) => {
+    const parsed = newRateStr === "" ? 0 : parseFloat(newRateStr);
+    setItems(prev =>
+      prev.map(it => (it.id === itemId ? { ...it, rate: isNaN(parsed) ? 0 : parsed } : it))
+    );
+  };
+
+  const handleActiveToggle = (itemId: number, checked: boolean) => {
+    setItems(prev =>
+      prev.map(it => (it.id === itemId ? { ...it, isActive: checked } : it))
+    );
+  };
+
+  // 7. Save Rate Card & Items
+  const handleSaveRateCard = async () => {
+    if (!token) return;
+    if (!activeCardId) {
+      await handleCreateRateCard();
+      return;
+    }
+
+    setSaving(true);
+    setStatusMessage(null);
+    try {
+      // 1. Update Card Details (name, brand)
+      if (cardName.trim()) {
+        await updateRateCard(token, activeCardId, {
+          name: cardName.trim(),
+          brandId: cardBrandId || null,
         });
       }
-    }
-    await reload();
-    loadItems(created.id);
-  };
 
-  const deleteItem = async (it: RateItem) => {
-    if (!activeCardId) return;
-    if (!confirm(`Delete item from rate card?`)) return;
-    await fetch(`/api/customer-rate-cards/${activeCardId}/items/${it.id}`, { method: "DELETE", headers: auth.headers });
-    await loadItems(activeCardId);
-  };
-  const openNewItem = () => {
-    setEditingItem({
-      productId: null,
-      materialCodeId: null,
-      itemName: "",
-      description: "",
-      hsn: "",
-      uom: "nos",
-      calculationType: "fixed",
-      rate: 0,
-      gstPercent: 18,
-      isStandard: true,
-      isActive: true,
-    });
-    setShowItemDialog(true);
-  };
-  const openEditItem = (it: RateItem) => {
-    setEditingItem({ ...it });
-    setShowItemDialog(true);
-  };
-  const saveItem = async () => {
-    if (!editingItem || !activeCardId) return;
-    const url = editingItem.id
-      ? `/api/customer-rate-cards/${activeCardId}/items/${editingItem.id}`
-      : `/api/customer-rate-cards/${activeCardId}/items`;
-    const method = editingItem.id ? "PATCH" : "POST";
-    const r = await fetch(url, {
-      method,
-      headers: { ...auth.headers, "Content-Type": "application/json" },
-      body: JSON.stringify(editingItem),
-    });
-    if (r.ok) {
-      setShowItemDialog(false);
-      setEditingItem(null);
-      loadItems(activeCardId);
-    } else {
-      alert("Save failed: " + (await r.text()));
+      // 2. Batch Update Items
+      const batchPayload = items.map(it => ({
+        id: it.id,
+        rate: Number(it.rate) || 0,
+        isActive: it.isActive,
+      }));
+
+      await batchUpdateRateCardItems(token, activeCardId, batchPayload);
+
+      setStatusMessage({
+        type: "success",
+        text: `Rate Card "${cardName}" saved successfully with ${items.length} items!`,
+      });
+    } catch (err: any) {
+      setStatusMessage({ type: "error", text: err.message || "Failed to save rate card" });
+    } finally {
+      setSaving(false);
     }
   };
 
-  const resolve = async () => {
-    if (!rClientId) return;
-    setResolving(true);
-    setResolved(undefined);
+  // 8. Export to Excel Workflow
+  const handleExportExcel = async () => {
+    if (!activeCardId || items.length === 0) {
+      alert("Please open or import products into a Rate Card before exporting.");
+      return;
+    }
+
     try {
-      const params = new URLSearchParams({ clientId: rClientId });
-      if (rBrandId) params.set("brandId", rBrandId);
-      if (rProductId) params.set("productId", rProductId);
-      if (rMaterialCodeId) params.set("materialCodeId", rMaterialCodeId);
-      if (rProjectType) params.set("projectType", rProjectType);
-      const r = await fetch(`/api/customer-rate-cards/resolve?${params.toString()}`, { headers: auth.headers });
-      setResolved(r.ok ? await r.json() : null);
-    } catch { setResolved(null); }
-    finally { setResolving(false); }
+      const XLSX = (await import("xlsx-js-style")).default || (await import("xlsx-js-style"));
+
+      const cardBrand = brands.find(b => b.id === cardBrandId);
+      const cardBrandName = cardBrand ? cardBrand.name : "All Brands";
+
+      const exportRows = items.map(it => {
+        const prod = products.find(p => p.id === it.productId);
+        return {
+          "Client Name": selectedClientName,
+          "Rate Card Name": cardName || `Rate Card #${activeCardId}`,
+          "Product ID": it.productId ?? "",
+          "Product Name": it.productName || it.itemName || prod?.name || "",
+          "Material Code": it.productMaterialCode || it.hsn || prod?.materialCode || "—",
+          "Brand": cardBrandName,
+          "Unit": it.uom || it.productUnit || prod?.unit || "pcs",
+          "Rate": Number(it.rate) > 0 ? Number(it.rate) : "",
+          "Active": it.isActive ? "YES" : "NO",
+        };
+      });
+
+      const worksheet = XLSX.utils.json_to_sheet(exportRows);
+
+      // Auto-size columns
+      worksheet["!cols"] = [
+        { wch: 22 }, // Client Name
+        { wch: 26 }, // Rate Card Name
+        { wch: 12 }, // Product ID
+        { wch: 32 }, // Product Name
+        { wch: 18 }, // Material Code
+        { wch: 18 }, // Brand
+        { wch: 10 }, // Unit
+        { wch: 14 }, // Rate
+        { wch: 10 }, // Active
+      ];
+
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, "Rate Card");
+
+      const cleanFileName = `RateCard_${selectedClientName.replace(/[^a-zA-Z0-9_-]/g, "_")}_${cardName.replace(/[^a-zA-Z0-9_-]/g, "_")}.xlsx`;
+      XLSX.writeFile(workbook, cleanFileName);
+    } catch (err: any) {
+      console.error("Export failed:", err);
+      alert("Failed to export Excel file: " + err.message);
+    }
   };
 
-  const activeCard = activeCardId ? rateCards.find(rc => rc.id === activeCardId) : null;
+  // 9. Import Updated Excel Workflow
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const XLSX = (await import("xlsx-js-style")).default || (await import("xlsx-js-style"));
+      const buffer = await file.arrayBuffer();
+      const workbook = XLSX.read(buffer, { type: "array" });
+      const firstSheetName = workbook.SheetNames[0];
+      const worksheet = workbook.Sheets[firstSheetName];
+      const rawRows: any[] = XLSX.utils.sheet_to_json(worksheet);
+
+      if (!rawRows || rawRows.length === 0) {
+        alert("The uploaded workbook contains no data rows.");
+        return;
+      }
+
+      // Map existing items by productId
+      const currentItemsMap = new Map<number, RateItem>();
+      items.forEach(it => {
+        if (it.productId) currentItemsMap.set(it.productId, it);
+      });
+
+      let updatedCount = 0;
+      let unchangedCount = 0;
+      let failedCount = 0;
+      const staged: StagedExcelRow[] = [];
+
+      for (const row of rawRows) {
+        // Find product ID column flexibly
+        const rawPid = row["Product ID"] ?? row["ProductID"] ?? row["product_id"] ?? row["Product Id"];
+        const pid = Number(rawPid);
+
+        const rawRate = row["Rate"] ?? row["rate"] ?? row["Price"] ?? row["price"];
+        const rawActive = row["Active"] ?? row["active"];
+
+        if (!pid || isNaN(pid)) {
+          failedCount++;
+          staged.push({
+            productId: 0,
+            productName: String(row["Product Name"] || "Unknown"),
+            oldRate: 0,
+            newRate: 0,
+            isActive: false,
+            status: "failed",
+            reason: "Missing or invalid Product ID in row.",
+          });
+          continue;
+        }
+
+        const existingItem = currentItemsMap.get(pid);
+        if (!existingItem) {
+          failedCount++;
+          staged.push({
+            productId: pid,
+            productName: String(row["Product Name"] || `Product #${pid}`),
+            oldRate: 0,
+            newRate: 0,
+            isActive: false,
+            status: "failed",
+            reason: `Product ID #${pid} does not exist in this Rate Card. Click "Import All Products" first.`,
+          });
+          continue;
+        }
+
+        const parsedRate = rawRate === "" || rawRate === undefined || rawRate === null ? 0 : Number(rawRate);
+        if (isNaN(parsedRate) || parsedRate < 0) {
+          failedCount++;
+          staged.push({
+            productId: pid,
+            productName: existingItem.productName || existingItem.itemName || `Product #${pid}`,
+            oldRate: existingItem.rate,
+            newRate: 0,
+            isActive: existingItem.isActive,
+            status: "failed",
+            reason: `Invalid rate value "${rawRate}". Rates cannot be negative or text.`,
+          });
+          continue;
+        }
+
+        const parsedActive =
+          rawActive === undefined || rawActive === null
+            ? existingItem.isActive
+            : String(rawActive).trim().toUpperCase() === "YES" || String(rawActive).trim() === "1" || String(rawActive).trim().toUpperCase() === "TRUE";
+
+        const hasChanged = parsedRate !== existingItem.rate || parsedActive !== existingItem.isActive;
+
+        if (hasChanged) {
+          updatedCount++;
+          staged.push({
+            productId: pid,
+            productName: existingItem.productName || existingItem.itemName || `Product #${pid}`,
+            oldRate: existingItem.rate,
+            newRate: parsedRate,
+            isActive: parsedActive,
+            status: "updated",
+          });
+        } else {
+          unchangedCount++;
+          staged.push({
+            productId: pid,
+            productName: existingItem.productName || existingItem.itemName || `Product #${pid}`,
+            oldRate: existingItem.rate,
+            newRate: parsedRate,
+            isActive: parsedActive,
+            status: "unchanged",
+          });
+        }
+      }
+
+      setImportSummary({
+        total: rawRows.length,
+        updated: updatedCount,
+        unchanged: unchangedCount,
+        failed: failedCount,
+        stagedRows: staged,
+      });
+      setShowImportModal(true);
+    } catch (err: any) {
+      alert("Error reading Excel file: " + err.message);
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  // 10. Commit Excel Import Updates
+  const handleConfirmImport = async () => {
+    if (!token || !activeCardId || !importSummary) return;
+    setSaving(true);
+    try {
+      const updatesToApply = importSummary.stagedRows.filter(r => r.status === "updated");
+
+      const batch = updatesToApply.map(r => ({
+        productId: r.productId,
+        rate: r.newRate,
+        isActive: r.isActive,
+      }));
+
+      if (batch.length > 0) {
+        await batchUpdateRateCardItems(token, activeCardId, batch);
+      }
+
+      await reloadCardItems(activeCardId);
+      setShowImportModal(false);
+      setImportSummary(null);
+      setStatusMessage({
+        type: "success",
+        text: `Excel rates applied successfully! Updated ${updatesToApply.length} products.`,
+      });
+    } catch (err: any) {
+      alert("Failed to apply imported rates: " + err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // 11. Rate Resolver Quick-Check
+  const handleTestResolve = async () => {
+    if (!token || !selectedClientId || !rProductId) return;
+    setResolving(true);
+    setResolvedResult(null);
+    try {
+      const params = new URLSearchParams({
+        clientId: String(selectedClientId),
+        productId: String(rProductId),
+      });
+      if (cardBrandId) params.set("brandId", String(cardBrandId));
+      const res = await apiFetch(`/api/customer-rate-cards/resolve?${params.toString()}`, token);
+      if (res.ok) {
+        const data = await res.json();
+        setResolvedResult(data || "NO_MATCH");
+      } else {
+        setResolvedResult("ERROR");
+      }
+    } catch {
+      setResolvedResult("ERROR");
+    } finally {
+      setResolving(false);
+    }
+  };
+
+  // 12. Filtered Table Rows
+  const filteredItems = useMemo(() => {
+    return items.filter(it => {
+      // Unpriced filter
+      if (showUnpricedOnly && Number(it.rate) > 0) return false;
+
+      // Brand filter
+      if (filterBrandId) {
+        if (String(cardBrandId || "") !== filterBrandId) return false;
+      }
+
+      // Search query filter
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase();
+        const pName = (it.productName || it.itemName || "").toLowerCase();
+        const mCode = (it.productMaterialCode || it.hsn || "").toLowerCase();
+        const brandName = (brands.find(b => b.id === cardBrandId)?.name || "").toLowerCase();
+        return pName.includes(q) || mCode.includes(q) || brandName.includes(q);
+      }
+
+      return true;
+    });
+  }, [items, showUnpricedOnly, filterBrandId, searchQuery, products, brands]);
+
+  const pricedCount = items.filter(it => Number(it.rate) > 0).length;
+  const unpricedCount = items.length - pricedCount;
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-end justify-between gap-3">
+    <div className="space-y-4 max-w-7xl mx-auto">
+      {/* Hidden File Input for Excel Import */}
+      <input
+        type="file"
+        ref={fileInputRef}
+        onChange={handleFileSelect}
+        accept=".xlsx, .xls"
+        className="hidden"
+      />
+
+      {/* Top Banner / Breadcrumb */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 bg-white p-4 rounded-lg border border-slate-200 shadow-sm">
         <div>
-          <h1 className="text-xl font-bold text-slate-900 flex items-center gap-2">
-            <Database className="w-5 h-5 text-orange-600" /> Customer Rate Cards
-          </h1>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Per-client, per-brand, per-project rate sheets. Auto-fills the rate column on estimates.
+          <div className="flex items-center gap-2">
+            <Database className="w-5 h-5 text-orange-600" />
+            <h1 className="text-xl font-bold text-slate-900">Customer Rate Cards</h1>
+          </div>
+          <p className="text-xs text-slate-500 mt-1">
+            Simple customer price list. Rates auto-populate into Estimate Builder for the selected client.
           </p>
         </div>
+
+        {/* Quick Diagnostic / Resolver Toggle */}
         <div className="flex items-center gap-2">
-          <a
-            href="/api/templates/CUSTOMER_RATE_CARDS_TEMPLATE"
-            className="flex items-center gap-1 px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-md"
-            title="Download header template"
-          >
-            <FileSpreadsheet className="w-3.5 h-3.5" /> Card Template
-          </a>
-          <a
-            href="/api/templates/CUSTOMER_RATE_CARD_ITEMS_TEMPLATE"
-            className="flex items-center gap-1 px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-md"
-          >
-            <FileSpreadsheet className="w-3.5 h-3.5" /> Items Template
-          </a>
           <button
             onClick={() => setShowResolver(s => !s)}
-            className="flex items-center gap-1 px-2.5 py-1.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold rounded-md"
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-md transition-colors"
           >
-            <Sparkles className="w-3.5 h-3.5 text-orange-600" /> Resolver
-          </button>
-          <button
-            onClick={openNewCard}
-            disabled={!clients.length}
-            className="flex items-center gap-1 px-3 py-1.5 bg-orange-600 hover:bg-orange-500 disabled:opacity-30 text-white text-xs font-bold rounded-md"
-          >
-            <Plus className="w-3.5 h-3.5" /> New Rate Card
+            <HelpCircle className="w-3.5 h-3.5 text-orange-600" />
+            {showResolver ? "Hide Rate Tester" : "Test Estimate Lookup"}
           </button>
         </div>
       </div>
 
-      {showResolver && (
-        <div className="bg-white border border-slate-200 rounded-md p-3">
-          <div className="grid grid-cols-1 md:grid-cols-6 gap-2 items-end text-xs">
-            <Field label="Client">
-              <select value={rClientId} onChange={e => setRClientId(e.target.value)} className="input-compact">
-                <option value="">— Pick client —</option>
-                {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </select>
-            </Field>
-            <Field label="Brand">
-              <select value={rBrandId} onChange={e => setRBrandId(e.target.value)} className="input-compact">
-                <option value="">Any</option>
-                {brands.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
-              </select>
-            </Field>
-            <Field label="Product">
-              <select value={rProductId} onChange={e => setRProductId(e.target.value)} className="input-compact">
-                <option value="">Any</option>
-                {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-              </select>
-            </Field>
-            <Field label="Material code">
-              <select value={rMaterialCodeId} onChange={e => setRMaterialCodeId(e.target.value)} className="input-compact">
-                <option value="">Any</option>
-                {materialCodes.map(m => <option key={m.id} value={m.id}>{m.code}</option>)}
-              </select>
-            </Field>
-            <Field label="Project type">
-              <select value={rProjectType} onChange={e => setRProjectType(e.target.value)} className="input-compact">
-                {PROJECT_TYPES.map(t => <option key={t} value={t}>{t || "Any"}</option>)}
-              </select>
-            </Field>
-            <button onClick={resolve} disabled={!rClientId || resolving} className="flex items-center justify-center gap-1 px-3 py-1.5 bg-orange-600 hover:bg-orange-500 disabled:opacity-30 text-white text-xs font-bold rounded-md">
-              <ArrowRight className="w-3.5 h-3.5" /> Resolve
-            </button>
+      {/* Status Alert Banner */}
+      {statusMessage && (
+        <div
+          className={`p-3 rounded-md text-xs font-medium flex items-center justify-between gap-2 shadow-sm ${
+            statusMessage.type === "success"
+              ? "bg-emerald-50 text-emerald-800 border border-emerald-200"
+              : statusMessage.type === "error"
+              ? "bg-red-50 text-red-800 border border-red-200"
+              : "bg-blue-50 text-blue-800 border border-blue-200"
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            {statusMessage.type === "success" ? (
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            ) : (
+              <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+            )}
+            <span>{statusMessage.text}</span>
           </div>
-          {resolved === null && (
-            <p className="text-xs text-slate-500 mt-2">No matching rate card — caller would fall back to product default.</p>
-          )}
-          {resolved && (
-            <div className="mt-2 p-2.5 bg-emerald-50 border border-emerald-100 rounded text-xs flex flex-wrap items-center gap-x-6 gap-y-1">
-              <span><b>Matched card:</b> #{resolved.rateCardId}</span>
-              <span><b>Rate:</b> ₹{Number(resolved.rate).toLocaleString()} / {resolved.uom}</span>
-              <span><b>GST:</b> {resolved.gstPercent}%</span>
-              <span className="text-[10px] text-slate-500">source = <span className="font-mono">{resolved.source}</span></span>
-            </div>
-          )}
+          <button
+            onClick={() => setStatusMessage(null)}
+            className="text-slate-400 hover:text-slate-600 font-bold px-1"
+          >
+            ×
+          </button>
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* Card list */}
-        <div className="bg-white border border-slate-200 rounded-md overflow-hidden">
-          <div className="px-3 py-2 border-b border-slate-200 bg-slate-50 flex items-center gap-2 text-xs">
-            <span className="font-bold text-slate-700">Rate Cards ({filteredCards.length})</span>
-            <select value={filterClientId} onChange={e => setFilterClientId(e.target.value)} className="input-compact ml-auto">
-              <option value="">All clients</option>
-              {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
-            <select value={filterBrandId} onChange={e => setFilterBrandId(e.target.value)} className="input-compact">
-              <option value="">All brands</option>
-              {brands.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
-            </select>
-            <select value={filterProjectType} onChange={e => setFilterProjectType(e.target.value)} className="input-compact">
-              {PROJECT_TYPES.map(t => <option key={t} value={t}>{t || "All types"}</option>)}
-            </select>
-            <label className="flex items-center gap-1 cursor-pointer select-none text-slate-600 ml-1">
-              <input type="checkbox" checked={showArchived} onChange={e => setShowArchived(e.target.checked)} /> Archived
-            </label>
+      {/* Rate Tester Collapsible Widget */}
+      {showResolver && (
+        <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-xs space-y-2">
+          <div className="font-semibold text-slate-800 flex items-center gap-1.5">
+            <HelpCircle className="w-4 h-4 text-orange-600" />
+            Estimate Rate Resolution Tester
           </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead className="bg-slate-50 sticky top-0">
-                <tr className="text-left text-slate-500 uppercase text-[10px] font-bold">
-                  <th className="px-2 py-1.5">Name</th>
-                  <th className="px-2 py-1.5">Client</th>
-                  <th className="px-2 py-1.5">Brand</th>
-                  <th className="px-2 py-1.5">Type</th>
-                  <th className="px-2 py-1.5">Active</th>
-                  <th className="px-2 py-1.5 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {filteredCards.length === 0 && (
-                  <tr><td colSpan={6} className="px-3 py-4 text-center text-slate-400 italic">No rate cards. Click "New Rate Card" to begin.</td></tr>
-                )}
-                {filteredCards.map(rc => (
-                  <tr
-                    key={rc.id}
-                    onClick={() => loadItems(rc.id)}
-                    className={`cursor-pointer hover:bg-orange-50/50 ${activeCardId === rc.id ? "bg-orange-50 border-l-2 border-orange-500" : ""}`}
-                  >
-                    <td className="px-2 py-1.5 font-semibold text-slate-800">{rc.name || `Rate Card #${rc.id}`}</td>
-                    <td className="px-2 py-1.5 text-slate-600">{clientName(rc.clientId)}</td>
-                    <td className="px-2 py-1.5 text-slate-600">{brandName(rc.brandId)}</td>
-                    <td className="px-2 py-1.5"><span className="px-1.5 py-0.5 bg-slate-100 rounded text-[10px] font-bold uppercase">{rc.projectType || "any"}</span></td>
-                    <td className="px-2 py-1.5">{rc.isActive ? <span className="text-emerald-700 text-[10px] font-bold">YES</span> : <span className="text-slate-400 text-[10px] font-bold">ARCHIVED</span>}</td>
-                    <td className="px-2 py-1.5">
-                      <div className="flex justify-end gap-1" onClick={e => e.stopPropagation()}>
-                        <button title="View" onClick={() => loadItems(rc.id)} className="p-1 hover:bg-slate-100 rounded"><Eye className="w-3.5 h-3.5 text-slate-500" /></button>
-                        <button title="Edit" onClick={() => openEditCard(rc)} className="p-1 hover:bg-slate-100 rounded"><Pencil className="w-3.5 h-3.5 text-blue-600" /></button>
-                        <button title="Duplicate" onClick={() => duplicateCard(rc)} className="p-1 hover:bg-slate-100 rounded"><Copy className="w-3.5 h-3.5 text-slate-500" /></button>
-                        {rc.isActive ? (
-                          <button title="Archive" onClick={() => archiveCard(rc)} className="p-1 hover:bg-slate-100 rounded"><Archive className="w-3.5 h-3.5 text-amber-600" /></button>
-                        ) : (
-                          <button title="Restore" onClick={() => restoreCard(rc)} className="p-1 hover:bg-slate-100 rounded"><Archive className="w-3.5 h-3.5 text-emerald-600 rotate-180" /></button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
+          <p className="text-[11px] text-slate-500">
+            Simulates the exact price query made by Estimate Builder when selecting this client and product.
+          </p>
+          <div className="flex flex-wrap items-center gap-3 pt-1">
+            <div className="w-48">
+              <span className="text-[10px] text-slate-400 block mb-0.5">Client</span>
+              <div className="font-bold text-slate-700 truncate">{selectedClientName || "None selected"}</div>
+            </div>
+            <div className="w-64">
+              <span className="text-[10px] text-slate-400 block mb-0.5">Product</span>
+              <select
+                value={rProductId}
+                onChange={e => setRProductId(e.target.value)}
+                className="w-full text-xs border border-slate-300 rounded px-2 py-1 bg-white"
+              >
+                <option value="">— Pick a product —</option>
+                {products.map(p => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
                 ))}
-              </tbody>
-            </table>
+              </select>
+            </div>
+            <button
+              onClick={handleTestResolve}
+              disabled={!selectedClientId || !rProductId || resolving}
+              className="mt-3 px-3 py-1 bg-orange-600 hover:bg-orange-500 disabled:opacity-40 text-white rounded text-xs font-bold"
+            >
+              {resolving ? "Checking…" : "Test Lookup"}
+            </button>
+            {resolvedResult === "NO_MATCH" && (
+              <span className="mt-3 text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded text-[11px]">
+                No client-specific rate found (Estimate Builder uses catalog default rate).
+              </span>
+            )}
+            {resolvedResult && resolvedResult !== "NO_MATCH" && resolvedResult !== "ERROR" && (
+              <span className="mt-3 text-emerald-800 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded text-[11px] font-semibold">
+                Match Found: ₹{resolvedResult.rate} / {resolvedResult.uom} (Rate Card #{resolvedResult.rateCardId})
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Main Control Toolbar */}
+      <div className="bg-white border border-slate-200 rounded-lg p-4 shadow-sm space-y-4">
+        {/* Top Controls: Client, Brand, Card Name, Action Buttons */}
+        <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
+          {/* Client Selector (Required) */}
+          <div className="md:col-span-3">
+            <label className="block text-xs font-bold text-slate-700 mb-1">
+              Select Client <span className="text-red-500">*</span>
+            </label>
+            <select
+              value={selectedClientId}
+              onChange={e => setSelectedClientId(e.target.value ? Number(e.target.value) : "")}
+              className="w-full text-xs font-semibold border border-slate-300 rounded-md px-2.5 py-1.5 bg-white text-slate-800 focus:outline-none focus:ring-2 focus:ring-orange-500"
+            >
+              <option value="">— Choose a Client —</option>
+              {clients.map(c => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Rate Card Selector / Name */}
+          <div className="md:col-span-3">
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-xs font-bold text-slate-700">Rate Card Name</label>
+              {clientRateCards.length > 1 && (
+                <select
+                  value={activeCardId || ""}
+                  onChange={e => setActiveCardId(Number(e.target.value))}
+                  className="text-[10px] text-orange-600 bg-orange-50 border border-orange-200 rounded px-1"
+                >
+                  {clientRateCards.map(c => (
+                    <option key={c.id} value={c.id}>
+                      Switch Card #{c.id}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+            <input
+              type="text"
+              value={cardName}
+              onChange={e => setCardName(e.target.value)}
+              placeholder="e.g. Sunrise Media Standard Rate Card"
+              className="w-full text-xs border border-slate-300 rounded-md px-2.5 py-1.5 text-slate-800 focus:outline-none focus:ring-2 focus:ring-orange-500"
+            />
+          </div>
+
+          {/* Brand Dropdown (Optional) */}
+          <div className="md:col-span-2">
+            <label className="block text-xs font-medium text-slate-600 mb-1">Brand (Optional)</label>
+            <select
+              value={cardBrandId || ""}
+              onChange={e => setCardBrandId(e.target.value ? Number(e.target.value) : null)}
+              className="w-full text-xs border border-slate-300 rounded-md px-2.5 py-1.5 bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-orange-500"
+            >
+              <option value="">All Brands</option>
+              {brands.map(b => (
+                <option key={b.id} value={b.id}>
+                  {b.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Action Buttons: Import All Products & Save Rate Card */}
+          <div className="md:col-span-4 flex items-center justify-end gap-2">
+            <button
+              onClick={handleImportAllProducts}
+              disabled={!selectedClientId || importingProducts}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-orange-600 hover:bg-orange-500 disabled:opacity-40 text-white rounded-md text-xs font-bold shadow-sm transition-all"
+              title="Pull all products from Master Catalog into this rate card"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${importingProducts ? "animate-spin" : ""}`} />
+              {importingProducts ? "Importing…" : "Import All Products"}
+            </button>
+
+            <button
+              onClick={handleSaveRateCard}
+              disabled={!selectedClientId || saving}
+              className="flex items-center gap-1.5 px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white rounded-md text-xs font-bold shadow-sm transition-all"
+            >
+              <Save className="w-3.5 h-3.5" />
+              {saving ? "Saving…" : "Save Rate Card"}
+            </button>
           </div>
         </div>
 
-        {/* Active card items */}
-        <div className="bg-white border border-slate-200 rounded-md overflow-hidden">
-          <div className="px-3 py-2 border-b border-slate-200 bg-slate-50 flex items-center gap-2 text-xs">
-            {activeCard ? (
-              <>
-                <Layers className="w-3.5 h-3.5 text-orange-600" />
-                <span className="font-bold text-slate-700">
-                  {activeCard.name || `Rate Card #${activeCard.id}`} — {clientName(activeCard.clientId)} / {brandName(activeCard.brandId)} / {activeCard.projectType || "any"}
-                </span>
-                <button onClick={openNewItem} className="ml-auto flex items-center gap-1 px-2 py-1 bg-orange-600 hover:bg-orange-500 text-white rounded text-[10px] font-bold">
-                  <Plus className="w-3 h-3" /> Add Item
-                </button>
-              </>
-            ) : (
-              <span className="text-slate-400">Pick a rate card on the left to view items.</span>
-            )}
+        {/* Secondary Bar: Excel Import / Export + Table Search & Filters */}
+        <div className="pt-3 border-t border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-3">
+          {/* Excel Controls */}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleExportExcel}
+              disabled={!activeCardId || items.length === 0}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 disabled:opacity-40 text-slate-700 text-xs font-semibold rounded-md border border-slate-200 transition-colors"
+              title="Download rate card as Excel to edit offline"
+            >
+              <Download className="w-3.5 h-3.5 text-emerald-700" />
+              Export Excel
+            </button>
+
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={!activeCardId || items.length === 0}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 disabled:opacity-40 text-slate-700 text-xs font-semibold rounded-md border border-slate-200 transition-colors"
+              title="Upload edited Excel workbook to update rates in bulk"
+            >
+              <Upload className="w-3.5 h-3.5 text-blue-700" />
+              Import Updated Excel
+            </button>
           </div>
+
+          {/* Table Filters & Stats */}
+          <div className="flex flex-wrap items-center gap-3">
+            {/* Search Input */}
+            <div className="relative w-48">
+              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2" />
+              <input
+                type="text"
+                placeholder="Search products…"
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                className="w-full text-xs pl-8 pr-2.5 py-1 border border-slate-300 rounded-md focus:outline-none focus:ring-1 focus:ring-orange-500"
+              />
+            </div>
+
+            {/* Unpriced filter */}
+            <label className="flex items-center gap-1.5 text-xs text-slate-600 select-none cursor-pointer">
+              <input
+                type="checkbox"
+                checked={showUnpricedOnly}
+                onChange={e => setShowUnpricedOnly(e.target.checked)}
+                className="rounded text-orange-600 focus:ring-orange-500"
+              />
+              Show Unpriced Only
+            </label>
+
+            {/* Counter Badges */}
+            <div className="flex items-center gap-1.5 text-[11px] font-semibold">
+              <span className="px-2 py-0.5 bg-slate-100 text-slate-600 rounded-full">
+                Total: {items.length}
+              </span>
+              <span className="px-2 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-full">
+                Priced: {pricedCount}
+              </span>
+              {unpricedCount > 0 && (
+                <span className="px-2 py-0.5 bg-amber-50 text-amber-700 border border-amber-200 rounded-full">
+                  Unpriced: {unpricedCount}
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Main Table Container */}
+      <div className="bg-white border border-slate-200 rounded-lg shadow-sm overflow-hidden">
+        {loading ? (
+          <div className="p-8 text-center text-xs text-slate-400">
+            <RefreshCw className="w-5 h-5 animate-spin mx-auto mb-2 text-orange-500" />
+            Loading rate card products…
+          </div>
+        ) : !selectedClientId ? (
+          <div className="p-12 text-center text-slate-400">
+            <Building2 className="w-10 h-10 mx-auto mb-2 text-slate-300" />
+            <p className="text-sm font-semibold text-slate-600">Please select a Client above</p>
+            <p className="text-xs text-slate-400 mt-1">
+              Choose a client from the dropdown to load or create their Rate Card.
+            </p>
+          </div>
+        ) : items.length === 0 ? (
+          <div className="p-12 text-center text-slate-500">
+            <FileSpreadsheet className="w-10 h-10 mx-auto mb-2 text-orange-400" />
+            <p className="text-sm font-bold text-slate-700">No Products in this Rate Card yet</p>
+            <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto">
+              Click <b>"Import All Products"</b> above to instantly populate this client's rate card with all active products from the Master Catalog.
+            </p>
+            <button
+              onClick={handleImportAllProducts}
+              disabled={importingProducts}
+              className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 bg-orange-600 hover:bg-orange-500 text-white rounded-md text-xs font-bold shadow transition-all"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${importingProducts ? "animate-spin" : ""}`} />
+              Import All Products Now
+            </button>
+          </div>
+        ) : filteredItems.length === 0 ? (
+          <div className="p-8 text-center text-xs text-slate-400">
+            No products match your search or filter criteria.
+          </div>
+        ) : (
           <div className="overflow-x-auto">
-            {!activeCardId ? (
-              <p className="px-3 py-6 text-xs text-slate-400 italic text-center">No card selected.</p>
-            ) : loadingItems ? (
-              <p className="px-3 py-6 text-xs text-slate-400">Loading…</p>
-            ) : activeItems.length === 0 ? (
-              <p className="px-3 py-6 text-xs text-slate-400 italic text-center">No items yet — click "Add Item".</p>
-            ) : (
-              <table className="w-full text-xs">
-                <thead className="bg-slate-50 sticky top-0">
-                  <tr className="text-left text-slate-500 uppercase text-[10px] font-bold">
-                    <th className="px-2 py-1.5">Item / Product</th>
-                    <th className="px-2 py-1.5">Mat Code</th>
-                    <th className="px-2 py-1.5">HSN</th>
-                    <th className="px-2 py-1.5">UOM</th>
-                    <th className="px-2 py-1.5 text-right">Rate</th>
-                    <th className="px-2 py-1.5 text-right">GST</th>
-                    <th className="px-2 py-1.5 text-right">Actions</th>
+            <table className="w-full text-xs">
+              <thead className="bg-slate-50 border-b border-slate-200">
+                <tr className="text-slate-500 uppercase text-[10px] font-bold text-left tracking-wider">
+                  <th className="px-3 py-2.5 w-12 text-center">#</th>
+                  <th className="px-3 py-2.5">Product Name</th>
+                  <th className="px-3 py-2.5">Material Code</th>
+                  <th className="px-3 py-2.5">Brand</th>
+                  <th className="px-3 py-2.5">Unit</th>
+                  <th className="px-3 py-2.5 text-right">Catalog Default</th>
+                  <th className="px-3 py-2.5 w-44 text-right">Client Rate (₹)</th>
+                  <th className="px-3 py-2.5 w-20 text-center">Active</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {filteredItems.map((it, idx) => {
+                  const prod = products.find(p => p.id === it.productId);
+                  const cardBrand = brands.find(b => b.id === cardBrandId);
+                  const isPriced = Number(it.rate) > 0;
+
+                  return (
+                    <tr
+                      key={it.id}
+                      className={`hover:bg-slate-50/80 transition-colors ${
+                        !it.isActive ? "opacity-50 bg-slate-50/40" : ""
+                      }`}
+                    >
+                      <td className="px-3 py-2 text-center text-slate-400 text-[11px] font-mono">
+                        {idx + 1}
+                      </td>
+
+                      {/* Product Name */}
+                      <td className="px-3 py-2">
+                        <div className="font-semibold text-slate-800">
+                          {it.productName || it.itemName || prod?.name}
+                        </div>
+                        {it.description && (
+                          <div className="text-[10px] text-slate-400 truncate max-w-xs">
+                            {it.description}
+                          </div>
+                        )}
+                      </td>
+
+                      {/* Material Code */}
+                      <td className="px-3 py-2 font-mono text-[11px]">
+                        {it.productMaterialCode || it.hsn || prod?.materialCode ? (
+                          <span className="px-1.5 py-0.5 bg-orange-50 text-orange-800 rounded font-bold">
+                            {it.productMaterialCode || it.hsn || prod?.materialCode}
+                          </span>
+                        ) : (
+                          <span className="text-slate-300">—</span>
+                        )}
+                      </td>
+
+                      {/* Brand */}
+                      <td className="px-3 py-2 text-slate-600">
+                        {cardBrand ? (
+                          <span className="px-1.5 py-0.5 bg-slate-100 text-slate-700 rounded text-[10px] font-semibold">
+                            {cardBrand.name}
+                          </span>
+                        ) : (
+                          <span className="text-slate-400 text-[10px]">All Brands</span>
+                        )}
+                      </td>
+
+                      {/* Unit */}
+                      <td className="px-3 py-2 text-slate-600 font-medium">
+                        {it.uom || it.productUnit || prod?.unit || "pcs"}
+                      </td>
+
+                      {/* Catalog Default */}
+                      <td className="px-3 py-2 text-right text-slate-400 text-[11px]">
+                        ₹{Number(it.productStandardRate || prod?.rate || 0).toLocaleString()}
+                      </td>
+
+                      {/* Inline Editable Rate */}
+                      <td className="px-3 py-2 text-right">
+                        <div className="flex items-center justify-end gap-1">
+                          <span className="text-slate-400 text-xs">₹</span>
+                          <input
+                            type="number"
+                            min="0"
+                            step="any"
+                            value={it.rate === 0 ? "" : it.rate}
+                            onChange={e => handleRateChange(it.id, e.target.value)}
+                            placeholder="0.00"
+                            className={`w-32 text-right text-xs px-2 py-1 border rounded font-mono transition-colors focus:outline-none focus:ring-1 focus:ring-orange-500 ${
+                              isPriced
+                                ? "border-emerald-300 bg-emerald-50/40 text-emerald-900 font-bold"
+                                : "border-slate-300 bg-white text-slate-400"
+                            }`}
+                          />
+                        </div>
+                      </td>
+
+                      {/* Active Toggle */}
+                      <td className="px-3 py-2 text-center">
+                        <input
+                          type="checkbox"
+                          checked={it.isActive}
+                          onChange={e => handleActiveToggle(it.id, e.target.checked)}
+                          className="rounded text-orange-600 focus:ring-orange-500 cursor-pointer h-4 w-4"
+                          title={it.isActive ? "Rate is active for lookup" : "Rate is disabled"}
+                        />
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Excel Import Preview Modal */}
+      {showImportModal && importSummary && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-lg shadow-xl border border-slate-200 max-w-2xl w-full p-5 space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <FileSpreadsheet className="w-5 h-5 text-emerald-600" />
+                <h3 className="text-sm font-bold text-slate-800">
+                  Import Excel Rates — Preview & Validation
+                </h3>
+              </div>
+              <button
+                onClick={() => setShowImportModal(false)}
+                className="text-slate-400 hover:text-slate-600 font-bold text-lg px-2"
+              >
+                ×
+              </button>
+            </div>
+
+            {/* Validation Summary Badges */}
+            <div className="grid grid-cols-4 gap-2 text-center text-xs">
+              <div className="p-2.5 bg-slate-50 border border-slate-200 rounded">
+                <div className="text-slate-400 text-[10px] uppercase font-bold">Total Rows</div>
+                <div className="text-base font-bold text-slate-800">{importSummary.total}</div>
+              </div>
+              <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded">
+                <div className="text-emerald-700 text-[10px] uppercase font-bold">To Update</div>
+                <div className="text-base font-bold text-emerald-800">{importSummary.updated}</div>
+              </div>
+              <div className="p-2.5 bg-slate-50 border border-slate-200 rounded">
+                <div className="text-slate-400 text-[10px] uppercase font-bold">Unchanged</div>
+                <div className="text-base font-bold text-slate-600">{importSummary.unchanged}</div>
+              </div>
+              <div className="p-2.5 bg-red-50 border border-red-200 rounded">
+                <div className="text-red-700 text-[10px] uppercase font-bold">Errors / Skipped</div>
+                <div className="text-base font-bold text-red-800">{importSummary.failed}</div>
+              </div>
+            </div>
+
+            {/* Staged Updates Table */}
+            <div className="max-h-60 overflow-y-auto border border-slate-200 rounded text-xs divide-y divide-slate-100">
+              <table className="w-full text-left">
+                <thead className="bg-slate-50 sticky top-0 text-[10px] font-bold text-slate-500 uppercase">
+                  <tr>
+                    <th className="px-3 py-1.5">Product</th>
+                    <th className="px-3 py-1.5 text-right">Current Rate</th>
+                    <th className="px-3 py-1.5 text-right">New Rate</th>
+                    <th className="px-3 py-1.5 text-center">Status</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {activeItems.map(it => (
-                    <tr key={it.id}>
-                      <td className="px-2 py-1.5 text-slate-800">
-                        <div className="font-semibold">{it.itemName || productName(it.productId)}</div>
-                        {it.description && <div className="text-[10px] text-slate-400 truncate max-w-[260px]">{it.description}</div>}
+                  {importSummary.stagedRows.map((r, i) => (
+                    <tr key={i} className="hover:bg-slate-50">
+                      <td className="px-3 py-1.5 font-medium text-slate-800">
+                        {r.productName}
+                        {r.reason && (
+                          <div className="text-[10px] text-red-600">{r.reason}</div>
+                        )}
                       </td>
-                      <td className="px-2 py-1.5 font-mono text-[10px] text-orange-700">{materialCodeText(it.materialCodeId)}</td>
-                      <td className="px-2 py-1.5 font-mono text-[10px] text-slate-500">{it.hsn || "—"}</td>
-                      <td className="px-2 py-1.5 text-slate-600">{it.uom}</td>
-                      <td className="px-2 py-1.5 text-right text-slate-800 font-semibold">₹{Number(it.rate).toLocaleString()}</td>
-                      <td className="px-2 py-1.5 text-right text-slate-600">{it.gstPercent}%</td>
-                      <td className="px-2 py-1.5">
-                        <div className="flex justify-end gap-1">
-                          <button title="Edit" onClick={() => openEditItem(it)} className="p-1 hover:bg-slate-100 rounded"><Pencil className="w-3 h-3 text-blue-600" /></button>
-                          <button title="Delete" onClick={() => deleteItem(it)} className="p-1 hover:bg-slate-100 rounded"><Trash2 className="w-3 h-3 text-red-500" /></button>
-                        </div>
+                      <td className="px-3 py-1.5 text-right text-slate-400">
+                        ₹{Number(r.oldRate).toLocaleString()}
+                      </td>
+                      <td className="px-3 py-1.5 text-right font-bold font-mono">
+                        {r.status === "failed" ? (
+                          <span className="text-red-500">—</span>
+                        ) : (
+                          <span className="text-emerald-700">₹{Number(r.newRate).toLocaleString()}</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-1.5 text-center">
+                        {r.status === "updated" ? (
+                          <span className="px-1.5 py-0.5 bg-emerald-100 text-emerald-800 rounded text-[10px] font-bold">
+                            UPDATE
+                          </span>
+                        ) : r.status === "unchanged" ? (
+                          <span className="px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded text-[10px]">
+                            NO CHANGE
+                          </span>
+                        ) : (
+                          <span className="px-1.5 py-0.5 bg-red-100 text-red-800 rounded text-[10px] font-bold">
+                            ERROR
+                          </span>
+                        )}
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-            )}
+            </div>
+
+            {/* Modal Actions */}
+            <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                onClick={() => setShowImportModal(false)}
+                className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-md"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmImport}
+                disabled={saving || importSummary.updated === 0}
+                className="flex items-center gap-1.5 px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white rounded-md text-xs font-bold shadow transition-all"
+              >
+                <Save className="w-3.5 h-3.5" />
+                {saving ? "Applying Updates…" : `Apply & Save ${importSummary.updated} Updates`}
+              </button>
+            </div>
           </div>
         </div>
-      </div>
-
-      {/* Card dialog */}
-      {showCardDialog && editingCard && (
-        <Modal onClose={() => { setShowCardDialog(false); setEditingCard(null); }}>
-          <h3 className="text-sm font-bold text-slate-800 mb-3">{editingCard.id ? "Edit Rate Card" : "New Rate Card"}</h3>
-          <div className="grid grid-cols-2 gap-3 text-xs">
-            <Field label="Card Name" full>
-              <input type="text" value={editingCard.name ?? ""} onChange={e => setEditingCard({ ...editingCard, name: e.target.value })} placeholder="e.g. Peter England CAPEX 2026" className="input-compact" />
-            </Field>
-            <Field label="Client *">
-              <select value={editingCard.clientId ?? ""} onChange={e => setEditingCard({ ...editingCard, clientId: Number(e.target.value) })} className="input-compact">
-                <option value="">— Select —</option>
-                {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </select>
-            </Field>
-            <Field label="Brand (optional)">
-              <select value={editingCard.brandId ?? ""} onChange={e => setEditingCard({ ...editingCard, brandId: e.target.value ? Number(e.target.value) : null })} className="input-compact">
-                <option value="">Any brand</option>
-                {brands.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
-              </select>
-            </Field>
-            <Field label="Project Type">
-              <select value={editingCard.projectType ?? ""} onChange={e => setEditingCard({ ...editingCard, projectType: e.target.value })} className="input-compact">
-                {PROJECT_TYPES.map(t => <option key={t} value={t}>{t || "Any"}</option>)}
-              </select>
-            </Field>
-            <Field label="Active?">
-              <select value={editingCard.isActive ? "1" : "0"} onChange={e => setEditingCard({ ...editingCard, isActive: e.target.value === "1" })} className="input-compact">
-                <option value="1">Active</option>
-                <option value="0">Archived</option>
-              </select>
-            </Field>
-            <Field label="Effective From">
-              <input type="date" value={editingCard.effectiveFrom as any ?? ""} onChange={e => setEditingCard({ ...editingCard, effectiveFrom: e.target.value })} className="input-compact" />
-            </Field>
-            <Field label="Effective To">
-              <input type="date" value={editingCard.effectiveTo as any ?? ""} onChange={e => setEditingCard({ ...editingCard, effectiveTo: e.target.value })} className="input-compact" />
-            </Field>
-            <Field label="Notes" full>
-              <textarea rows={2} value={editingCard.notes ?? ""} onChange={e => setEditingCard({ ...editingCard, notes: e.target.value })} className="input-compact" />
-            </Field>
-          </div>
-          <div className="flex justify-end gap-2 mt-3 pt-3 border-t border-slate-100">
-            <button onClick={() => { setShowCardDialog(false); setEditingCard(null); }} className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-md">Cancel</button>
-            <button onClick={saveCard} disabled={!editingCard.clientId} className="flex items-center gap-1 px-4 py-1.5 bg-orange-600 hover:bg-orange-500 disabled:opacity-30 text-white text-xs font-bold rounded-md">
-              <Save className="w-3.5 h-3.5" /> Save
-            </button>
-          </div>
-        </Modal>
-      )}
-
-      {/* Item dialog */}
-      {showItemDialog && editingItem && (
-        <Modal onClose={() => { setShowItemDialog(false); setEditingItem(null); }}>
-          <h3 className="text-sm font-bold text-slate-800 mb-3">{editingItem.id ? "Edit Rate Item" : "New Rate Item"}</h3>
-          <div className="grid grid-cols-2 gap-3 text-xs">
-            <Field label="Product" full>
-              <select
-                value={editingItem.productId ?? ""}
-                onChange={e => {
-                  const pid = e.target.value ? Number(e.target.value) : null;
-                  const p = products.find(pr => pr.id === pid);
-                  setEditingItem({
-                    ...editingItem,
-                    productId: pid,
-                    itemName: editingItem.itemName || p?.name || "",
-                    rate: editingItem.rate || (p?.rate ?? 0),
-                    uom: editingItem.uom || (p?.unit ?? "nos"),
-                  });
-                }}
-                className="input-compact"
-              >
-                <option value="">— None —</option>
-                {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-              </select>
-            </Field>
-            <Field label="Material Code">
-              <select
-                value={editingItem.materialCodeId ?? ""}
-                onChange={e => {
-                  const mid = e.target.value ? Number(e.target.value) : null;
-                  const m = materialCodes.find(mc => mc.id === mid);
-                  setEditingItem({
-                    ...editingItem,
-                    materialCodeId: mid,
-                    hsn: editingItem.hsn || m?.hsn || "",
-                    uom: editingItem.uom || (m?.uom ?? "nos"),
-                  });
-                }}
-                className="input-compact"
-              >
-                <option value="">— None —</option>
-                {materialCodes.map(m => <option key={m.id} value={m.id}>{m.code} — {m.description || ""}</option>)}
-              </select>
-            </Field>
-            <Field label="Item Display Name">
-              <input type="text" value={editingItem.itemName ?? ""} onChange={e => setEditingItem({ ...editingItem, itemName: e.target.value })} className="input-compact" />
-            </Field>
-            <Field label="HSN/SAC">
-              <input type="text" value={editingItem.hsn ?? ""} onChange={e => setEditingItem({ ...editingItem, hsn: e.target.value })} className="input-compact" />
-            </Field>
-            <Field label="UOM">
-              <input type="text" value={editingItem.uom ?? "nos"} onChange={e => setEditingItem({ ...editingItem, uom: e.target.value })} className="input-compact" />
-            </Field>
-            <Field label="Calculation Type">
-              <select value={editingItem.calculationType ?? "fixed"} onChange={e => setEditingItem({ ...editingItem, calculationType: e.target.value })} className="input-compact">
-                <option value="fixed">fixed</option>
-                <option value="sqft">sqft</option>
-                <option value="running_inch">running_inch</option>
-                <option value="percentage">percentage</option>
-                <option value="manual">manual</option>
-              </select>
-            </Field>
-            <Field label="Rate *">
-              <input type="number" step="0.01" value={editingItem.rate ?? 0} onChange={e => setEditingItem({ ...editingItem, rate: Number(e.target.value) })} className="input-compact" />
-            </Field>
-            <Field label="GST %">
-              <input type="number" step="0.01" value={editingItem.gstPercent ?? 18} onChange={e => setEditingItem({ ...editingItem, gstPercent: Number(e.target.value) })} className="input-compact" />
-            </Field>
-            <Field label="Standard?">
-              <select value={editingItem.isStandard ? "1" : "0"} onChange={e => setEditingItem({ ...editingItem, isStandard: e.target.value === "1" })} className="input-compact">
-                <option value="1">Standard</option>
-                <option value="0">Non-standard</option>
-              </select>
-            </Field>
-            <Field label="Active?">
-              <select value={editingItem.isActive ? "1" : "0"} onChange={e => setEditingItem({ ...editingItem, isActive: e.target.value === "1" })} className="input-compact">
-                <option value="1">Yes</option>
-                <option value="0">Archived</option>
-              </select>
-            </Field>
-            <Field label="Description / Specification" full>
-              <textarea rows={2} value={editingItem.description ?? ""} onChange={e => setEditingItem({ ...editingItem, description: e.target.value })} className="input-compact" />
-            </Field>
-          </div>
-          <div className="flex justify-end gap-2 mt-3 pt-3 border-t border-slate-100">
-            <button onClick={() => { setShowItemDialog(false); setEditingItem(null); }} className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-md">Cancel</button>
-            <button onClick={saveItem} className="flex items-center gap-1 px-4 py-1.5 bg-orange-600 hover:bg-orange-500 text-white text-xs font-bold rounded-md">
-              <Save className="w-3.5 h-3.5" /> Save
-            </button>
-          </div>
-        </Modal>
       )}
     </div>
   );
 }
-
-const Field: React.FC<{ label: string; children: React.ReactNode; full?: boolean }> = ({ label, children, full }) => (
-  <div className={full ? "col-span-2" : ""}>
-    <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wide mb-1">{label}</label>
-    {children}
-  </div>
-);
-
-const Modal: React.FC<{ onClose: () => void; children: React.ReactNode }> = ({ onClose, children }) => (
-  <div className="fixed inset-0 z-50 bg-slate-900/40 flex items-center justify-center p-4" onClick={onClose}>
-    <div className="bg-white rounded-md shadow-2xl border border-slate-200 max-w-2xl w-full max-h-[90vh] overflow-y-auto p-4" onClick={e => e.stopPropagation()}>
-      <button onClick={onClose} className="absolute right-3 top-3 p-1 hover:bg-slate-100 rounded">
-        <X className="w-4 h-4 text-slate-500" />
-      </button>
-      {children}
-    </div>
-  </div>
-);
