@@ -3,6 +3,7 @@ import { Switch, Route, Redirect, Link, useLocation } from "wouter";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import { GlobalDateProvider } from "./contexts/GlobalDateContext";
 import { NotificationBell } from "./components/NotificationBell";
+import { CompanySwitcher } from "./components/CompanySwitcher";
 import {
   LayoutDashboard,
   LogOut,
@@ -318,6 +319,9 @@ const AppContent: React.FC = () => {
             </button>
           </div>
         </div>
+
+        {/* Company Workspace Switcher */}
+        <CompanySwitcher />
 
         {/* Navigation */}
         <nav className="flex-1 px-2 py-2 overflow-y-auto">

@@ -603,8 +603,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
   // the document AND to auto-derive CGST+SGST vs IGST whenever the billing
   // state code changes. Failing silently is fine — defaults stay.
   useEffect(() => {
-    if (!token) return;
-    (isBoltMode ? fetchCompanySettings(token) : fetch("/api/company-settings", { headers: { Authorization: `Bearer ${token}` } }).then(r => r.ok ? r.json() : null))
+    fetchCompanySettings(token)
       .then(j => {
         if (!j) return;
         setSellerProfile(j);

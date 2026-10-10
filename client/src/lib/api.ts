@@ -79,16 +79,31 @@ export function notAvailableInBolt(action: string): never {
   );
 }
 
+export function getActiveCompanyId(): number {
+  if (typeof window === "undefined") return 1;
+  const saved = localStorage.getItem("sunrise_active_company_id");
+  const parsed = saved ? parseInt(saved, 10) : 1;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+}
+
+export function setActiveCompanyId(id: number): void {
+  if (typeof window !== "undefined") {
+    localStorage.setItem("sunrise_active_company_id", String(id));
+  }
+}
+
 /** Authenticated fetch to Express backend (full mode only). */
 export async function apiFetch(
   path: string,
   token: string | null,
   options: RequestInit = {}
 ): Promise<Response> {
+  const companyId = getActiveCompanyId();
   return fetch(path, {
     ...options,
     headers: {
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      "X-Company-Id": String(companyId),
       ...(options.body && !(options.body instanceof FormData)
         ? { "Content-Type": "application/json" }
         : {}),
@@ -606,10 +621,45 @@ export async function fetchNotifications(token: string | null) {
 
 // ─── Company Settings ─────────────────────────────────────────────────────────
 
-export async function fetchCompanySettings(token: string | null) {
+export async function fetchCompanySettings(token: string | null, companyId?: number) {
+  const cId = companyId || getActiveCompanyId();
   if (!isBoltMode) {
-    const res = await apiFetch("/api/company-settings", token);
+    const res = await apiFetch("/api/company-settings", token, {
+      headers: { "X-Company-Id": String(cId) },
+    });
     return res.ok ? res.json() : null;
+  }
+  // Bolt mode: query companies table directly for cId
+  const { data: comp } = await supabase.from("companies").select("*").eq("id", cId).single();
+  if (comp) {
+    return {
+      name: comp.display_name || comp.trade_name || comp.name || "Company Workspace",
+      gstin: comp.gstin || "",
+      pan: comp.pan || "",
+      state: comp.state || "",
+      stateCode: comp.state_code || "",
+      address: comp.address || "",
+      mobile: comp.mobile || "",
+      email: comp.email || "",
+      bankName: comp.bank_name || "",
+      bankAccountNumber: comp.bank_account_number || "",
+      bankIfsc: comp.bank_ifsc || "",
+      bankBranch: comp.bank_branch || "",
+      defaultGstPercent: String(comp.default_gst_percent ?? "18"),
+      defaultPacking: String(comp.default_packing_percent ?? "4"),
+      defaultImplementation: String(comp.default_implementation_percent ?? "7"),
+      defaultLocalTransport: String(comp.default_local_transport ?? "1000"),
+      defaultOutstationTransportRate: String(comp.default_outstation_transport_rate ?? "18"),
+      defaultEstimatePrefix: comp.estimate_prefix || "EST",
+      defaultInvoicePrefix: comp.invoice_prefix || "INV",
+      defaultDcPrefix: comp.dc_prefix || "DC",
+      logoPath: comp.logo_path || "",
+      signatureStampPath: comp.signature_stamp_path || "",
+      terms: comp.terms_and_conditions || "",
+      documentHeader: comp.doc_header_text || "",
+      documentFooter: comp.doc_footer_text || "",
+      companyId: comp.id,
+    };
   }
   const rows = await sbSelect<any>("app_settings", (q) =>
     q.select("key, value")
@@ -646,6 +696,96 @@ export async function fetchCompanySettings(token: string | null) {
     }
   }
   return out;
+}
+
+// ─── Multi-Company Workspaces API ─────────────────────────────────────────────
+
+export async function fetchCompanies(token: string | null) {
+  if (isBoltMode) {
+    return sbSelect<any>("companies");
+  }
+  const res = await apiFetch("/api/companies", token);
+  return res.ok ? res.json() : [];
+}
+
+export async function fetchCompany(token: string | null, companyId: number) {
+  if (isBoltMode) {
+    const { data } = await supabase.from("companies").select("*").eq("id", companyId).single();
+    return toCamel(data);
+  }
+  const res = await apiFetch(`/api/companies/${companyId}`, token);
+  return res.ok ? res.json() : null;
+}
+
+export async function updateCompanyDetails(token: string | null, companyId: number, data: any) {
+  if (isBoltMode) {
+    const { data: updated, error } = await supabase.from("companies").update(data).eq("id", companyId).select().single();
+    if (error) throw error;
+    return toCamel(updated);
+  }
+  const res = await apiFetch(`/api/companies/${companyId}`, token, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ message: "Failed to update company" }));
+    throw new Error(err.message);
+  }
+  return res.json();
+}
+
+export async function createCompanyWorkspace(token: string | null, data: any) {
+  if (isBoltMode) {
+    const { data: created, error } = await supabase.from("companies").insert(data).select().single();
+    if (error) throw error;
+    return toCamel(created);
+  }
+  const res = await apiFetch("/api/companies", token, {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ message: "Failed to create company workspace" }));
+    throw new Error(err.message);
+  }
+  return res.json();
+}
+
+export async function fetchCompanyUsers(token: string | null, companyId: number) {
+  if (isBoltMode) {
+    return sbSelect<any>("company_users", (q) => q.select("*, users(*)").eq("company_id", companyId));
+  }
+  const res = await apiFetch(`/api/companies/${companyId}/users`, token);
+  return res.ok ? res.json() : [];
+}
+
+export async function addCompanyUser(token: string | null, companyId: number, data: { userId: number; role: string; isDefault?: boolean }) {
+  if (isBoltMode) {
+    const { data: created, error } = await supabase.from("company_users").insert({ ...data, company_id: companyId }).select().single();
+    if (error) throw error;
+    return toCamel(created);
+  }
+  const res = await apiFetch(`/api/companies/${companyId}/users`, token, {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ message: "Failed to add user to company" }));
+    throw new Error(err.message);
+  }
+  return res.json();
+}
+
+export async function removeCompanyUser(token: string | null, companyId: number, userId: number) {
+  if (isBoltMode) {
+    const { error } = await supabase.from("company_users").delete().eq("company_id", companyId).eq("user_id", userId);
+    if (error) throw error;
+    return true;
+  }
+  const res = await apiFetch(`/api/companies/${companyId}/users/${userId}`, token, {
+    method: "DELETE",
+  });
+  return res.ok;
 }
 
 // ─── Client Ledger Statement ──────────────────────────────────────────────────

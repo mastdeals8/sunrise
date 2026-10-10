@@ -3,6 +3,46 @@ import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
 // ==========================================
+// 0. Multi-Company & Tenancy
+// ==========================================
+export const companies = pgTable("companies", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull(),
+  legalName: text("legal_name"),
+  tradeName: text("trade_name"),
+  displayName: text("display_name"),
+  address: text("address"),
+  email: text("email"),
+  mobile: text("mobile"),
+  gstin: text("gstin"),
+  pan: text("pan"),
+  state: text("state"),
+  stateCode: text("state_code"),
+  logoPath: text("logo_path"),
+  signatureStampPath: text("signature_stamp_path"),
+  bankName: text("bank_name"),
+  bankAccountNumber: text("bank_account_number"),
+  bankIfsc: text("bank_ifsc"),
+  bankBranch: text("bank_branch"),
+  termsAndConditions: text("terms_and_conditions"),
+  defaultGstPercent: real("default_gst_percent").default(18),
+  defaultImplementationPercent: real("default_implementation_percent").default(20),
+  defaultPackingPercent: real("default_packing_percent").default(12),
+  defaultLocalTransport: real("default_local_transport").default(1000),
+  defaultOutstationTransportRate: real("default_outstation_transport_rate").default(10),
+  estimatePrefix: text("estimate_prefix").default("SM/E"),
+  invoicePrefix: text("invoice_prefix").default("SM"),
+  dcPrefix: text("dc_prefix").default("SM/DC"),
+  numberingConfig: jsonb("numbering_config").default({}),
+  docHeaderText: text("doc_header_text"),
+  docFooterText: text("doc_footer_text"),
+  settings: jsonb("settings").default({}),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// ==========================================
 // 1. Staff & User Management (Furnili Pattern)
 // ==========================================
 export const users = pgTable("users", {
@@ -13,6 +53,7 @@ export const users = pgTable("users", {
   name: text("name").notNull(),
   role: text("role").notNull().default("staff"), // admin, manager, staff, accounts, sales
   phone: text("phone"),
+  authUserId: text("auth_user_id"), // linked Supabase auth.users UUID
   telegramChatId: text("telegram_chat_id"), // Phase 5A: ERP→Telegram bot delivery
   // Staff fields
   employeeId: text("employee_id").unique(),
@@ -34,11 +75,21 @@ export const users = pgTable("users", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+export const companyUsers = pgTable("company_users", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").references(() => users.id, { onDelete: "cascade" }).notNull(),
+  companyId: integer("company_id").references(() => companies.id, { onDelete: "cascade" }).notNull(),
+  role: text("role").notNull().default("company_user"), // super_admin, company_admin, company_user
+  isDefault: boolean("is_default").notNull().default(false),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
 // ==========================================
 // 2. Attendance & Payroll (Furnili Pattern)
 // ==========================================
 export const attendance = pgTable("attendance", {
   id: serial("id").primaryKey(),
+  companyId: integer("company_id").notNull().default(1),
   userId: integer("user_id").references(() => users.id).notNull(),
   date: timestamp("date").notNull(),
   checkInTime: timestamp("check_in_time"),
@@ -58,6 +109,7 @@ export const attendance = pgTable("attendance", {
 // ==========================================
 export const tasks = pgTable("tasks", {
   id: serial("id").primaryKey(),
+  companyId: integer("company_id").notNull().default(1),
   title: text("title").notNull(),
   description: text("description"),
   status: text("status").notNull().default("pending"), // pending, in_progress, completed, cancelled
@@ -77,6 +129,7 @@ export const tasks = pgTable("tasks", {
 // ==========================================
 export const pettyCashExpenses = pgTable("petty_cash_expenses", {
   id: serial("id").primaryKey(),
+  companyId: integer("company_id").notNull().default(1),
   category: text("category").notNull(), // food, transport, office_supplies, utilities, other
   amount: real("amount").notNull(),
   vendor: text("vendor"),
@@ -96,6 +149,7 @@ export const pettyCashExpenses = pgTable("petty_cash_expenses", {
 // ==========================================
 export const uploads = pgTable("uploads", {
   id: serial("id").primaryKey(),
+  companyId: integer("company_id").notNull().default(1),
   fileName: text("file_name").notNull(),
   filePath: text("file_path").notNull(),
   fileSize: integer("file_size").default(0),
@@ -110,6 +164,7 @@ export const uploads = pgTable("uploads", {
 // ==========================================
 export const chartOfAccounts = pgTable("chart_of_accounts", {
   id: serial("id").primaryKey(),
+  companyId: integer("company_id").notNull().default(1),
   code: text("code").notNull().unique(), // e.g., "111000" for cash, "411000" for revenue
   name: text("name").notNull(),
   accountType: text("account_type").notNull(), // asset, liability, equity, revenue, expense
@@ -124,6 +179,7 @@ export const chartOfAccounts = pgTable("chart_of_accounts", {
 // ==========================================
 export const invoices = pgTable("invoices", {
   id: serial("id").primaryKey(),
+  companyId: integer("company_id").notNull().default(1),
   invoiceNumber: text("invoice_number").notNull().unique(), // e.g. INV/2026/001
   type: text("type").notNull(), // sales, purchase
   partyName: text("party_name").notNull(), // client or vendor name
@@ -185,6 +241,7 @@ export const invoices = pgTable("invoices", {
 // ==========================================
 export const journalEntries = pgTable("journal_entries", {
   id: serial("id").primaryKey(),
+  companyId: integer("company_id").notNull().default(1),
   entryNumber: text("entry_number").notNull().unique(), // e.g. JV/2026/001
   entryDate: timestamp("entry_date").notNull(),
   sourceModule: text("source_module"), // invoices, petty_cash, manual
@@ -210,6 +267,7 @@ export const journalEntryLines = pgTable("journal_entry_lines", {
 // ==========================================
 export const payments = pgTable("payments", {
   id: serial("id").primaryKey(),
+  companyId: integer("company_id").notNull().default(1),
   voucherNumber: text("voucher_number").notNull().unique(), // e.g., PV/2026/001, RV/2026/001
   type: text("type").notNull(), // receipt (customer payment), payment (supplier expense)
   partyName: text("party_name").notNull(),
@@ -251,6 +309,7 @@ export const estimateFormatProfiles = pgTable("estimate_format_profiles", {
 // ==========================================
 export const clients = pgTable("clients", {
   id: serial("id").primaryKey(),
+  companyId: integer("company_id").notNull().default(1),
   name: text("name").notNull().unique(),
   email: text("email"),
   mobile: text("mobile"),
@@ -301,6 +360,7 @@ export const clientBillingProfiles = pgTable("client_billing_profiles", {
 // ==========================================
 export const brands = pgTable("brands", {
   id: serial("id").primaryKey(),
+  companyId: integer("company_id").notNull().default(1),
   name: text("name").notNull().unique(),
   parentClientId: integer("parent_client_id").references(() => clients.id, { onDelete: 'set null' }),
   parentBrand: text("parent_brand"),
@@ -313,6 +373,7 @@ export const brands = pgTable("brands", {
 // ==========================================
 export const stores = pgTable("stores", {
   id: serial("id").primaryKey(),
+  companyId: integer("company_id").notNull().default(1),
   name: text("name").notNull(),
   clientId: integer("client_id").references(() => clients.id, { onDelete: 'cascade' }).notNull(),
   brandId: integer("brand_id").references(() => brands.id, { onDelete: 'cascade' }).notNull(),
@@ -337,6 +398,7 @@ export const stores = pgTable("stores", {
 // ==========================================
 export const products = pgTable("products", {
   id: serial("id").primaryKey(),
+  companyId: integer("company_id").notNull().default(1),
   name: text("name").notNull().unique(),
   category: text("category"),
   unit: text("unit").notNull().default("pcs"), // UOM: sqft / running_inch / nos / job / km / percentage / manual
@@ -360,6 +422,7 @@ export const products = pgTable("products", {
 // ==========================================
 export const estimates = pgTable("estimates", {
   id: serial("id").primaryKey(),
+  companyId: integer("company_id").notNull().default(1),
   estimateNumber: text("estimate_number").notNull().unique(),
   // estimateDate: explicit document date the user picks. Defaults to today on
   // create. Used in preview/PDF/Excel as the "Estimate Date" header.
@@ -422,6 +485,7 @@ export const estimates = pgTable("estimates", {
 // ==========================================
 export const estimateItems = pgTable("estimate_items", {
   id: serial("id").primaryKey(),
+  companyId: integer("company_id").notNull().default(1),
   estimateId: integer("estimate_id").references(() => estimates.id).notNull(),
   productId: integer("product_id").references(() => products.id),
   itemName: text("item_name").notNull(),
@@ -468,6 +532,7 @@ export const estimateItems = pgTable("estimate_items", {
 // ==========================================
 export const deliveryChallans = pgTable("delivery_challans", {
   id: serial("id").primaryKey(),
+  companyId: integer("company_id").notNull().default(1),
   dcNumber: text("dc_number").notNull().unique(),
   estimateId: integer("estimate_id").references(() => estimates.id).notNull(),
   deliveryDate: timestamp("delivery_date").defaultNow(),
@@ -492,6 +557,7 @@ export const deliveryChallans = pgTable("delivery_challans", {
 // migration; this table gives documents one queryable ownership layer.
 export const executionDocuments = pgTable("execution_documents", {
   id: serial("id").primaryKey(),
+  companyId: integer("company_id").notNull().default(1),
   estimateId: integer("estimate_id").references(() => estimates.id, { onDelete: "cascade" }).notNull(),
   deliveryChallanId: integer("delivery_challan_id").references(() => deliveryChallans.id, { onDelete: "set null" }),
   storeCode: text("store_code"),
@@ -564,6 +630,7 @@ export const fieldAccessLinks = pgTable("field_access_links", {
 // ==========================================
 export const materialCodes = pgTable("material_codes", {
   id: serial("id").primaryKey(),
+  companyId: integer("company_id").notNull().default(1),
   clientId: integer("client_id").references(() => clients.id, { onDelete: 'cascade' }).notNull(),
   brandId: integer("brand_id").references(() => brands.id, { onDelete: 'cascade' }), // Nullable: brand-specific codes have brandId, common operational codes (OT_*) have NULL
   code: text("code").notNull(),
@@ -598,6 +665,7 @@ export const appSettings = pgTable("app_settings", {
 // ==========================================
 export const customerRateCards = pgTable("customer_rate_cards", {
   id: serial("id").primaryKey(),
+  companyId: integer("company_id").notNull().default(1),
   name: text("name"), // Friendly name e.g. "Peter England CAPEX 2026"
   clientId: integer("client_id").references(() => clients.id, { onDelete: "cascade" }).notNull(),
   brandId: integer("brand_id").references(() => brands.id, { onDelete: "set null" }),
@@ -642,6 +710,7 @@ export const projectStoreStatus = pgTable("project_store_status", {
 // ==========================================
 export const staffAdvances = pgTable("staff_advances", {
   id: serial("id").primaryKey(),
+  companyId: integer("company_id").notNull().default(1),
   userId: integer("user_id").references(() => users.id).notNull(),
   amount: real("amount").notNull(),
   date: timestamp("date").notNull().defaultNow(),
@@ -657,6 +726,7 @@ export const staffAdvances = pgTable("staff_advances", {
 // ==========================================
 export const payroll = pgTable("payroll", {
   id: serial("id").primaryKey(),
+  companyId: integer("company_id").notNull().default(1),
   userId: integer("user_id").references(() => users.id).notNull(),
   month: integer("month").notNull(), // 1-12
   year: integer("year").notNull(),
@@ -679,6 +749,7 @@ export const payroll = pgTable("payroll", {
 // ==========================================
 export const botSettings = pgTable("bot_settings", {
   id: serial("id").primaryKey(),
+  companyId: integer("company_id").notNull().default(1),
   platform: text("platform").notNull().unique(), // "telegram" | "whatsapp"
   enabled: boolean("enabled").notNull().default(false),
   botToken: text("bot_token"), // stored but never returned to client
@@ -697,6 +768,7 @@ export const botSettings = pgTable("bot_settings", {
 // ==========================================
 export const botUploadInbox = pgTable("bot_upload_inbox", {
   id: serial("id").primaryKey(),
+  companyId: integer("company_id").notNull().default(1),
   source: text("source").notNull(), // "telegram" | "whatsapp"
   senderId: text("sender_id").notNull(), // telegram chat_id or whatsapp from number
   senderName: text("sender_name"),
@@ -724,6 +796,7 @@ export const botUploadInbox = pgTable("bot_upload_inbox", {
 // ==========================================
 export const webhookLogs = pgTable("webhook_logs", {
   id: serial("id").primaryKey(),
+  companyId: integer("company_id").notNull().default(1),
   platform: text("platform").notNull(),
   direction: text("direction").notNull().default("inbound"), // "inbound" | "outbound"
   event: text("event"),
@@ -764,6 +837,7 @@ export const insertProductSchema = createInsertSchema(products).omit({ id: true,
 // ─── Phase 3: Audit Logs ─────────────────────────────────────────────────────
 export const auditLogs = pgTable("audit_logs", {
   id: serial("id").primaryKey(),
+  companyId: integer("company_id").notNull().default(1),
   userId: integer("user_id"),
   userName: text("user_name"),
   action: text("action").notNull(), // create | update | delete | approve | status_change
@@ -781,6 +855,7 @@ export const auditLogs = pgTable("audit_logs", {
 // ─── Phase 3: Notifications ──────────────────────────────────────────────────
 export const notifications = pgTable("notifications", {
   id: serial("id").primaryKey(),
+  companyId: integer("company_id").notNull().default(1),
   type: text("type").notNull(), // pending_wcc | missing_photos | missing_signed_wcc | invoice_ready | payment_due | payment_overdue
   title: text("title").notNull(),
   message: text("message"),
@@ -916,3 +991,12 @@ export type InsertProjectStoreStatus = z.infer<typeof insertProjectStoreStatusSc
 
 export type EstimateFormatProfileRow = typeof estimateFormatProfiles.$inferSelect;
 export type InsertEstimateFormatProfile = z.infer<typeof insertEstimateFormatProfileSchema>;
+
+
+export const insertCompanySchema = createInsertSchema(companies).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertCompanyUserSchema = createInsertSchema(companyUsers).omit({ id: true, createdAt: true });
+
+export type Company = typeof companies.$inferSelect;
+export type InsertCompany = z.infer<typeof insertCompanySchema>;
+export type CompanyUser = typeof companyUsers.$inferSelect;
+export type InsertCompanyUser = z.infer<typeof insertCompanyUserSchema>;

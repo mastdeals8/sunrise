@@ -23,6 +23,8 @@ import {
   materialCodes,
   appSettings,
   estimateFormatProfiles,
+  companies,
+  companyUsers,
 } from "../shared/schema";
 import { eq, and, or, isNull, gte, lte, desc, sql } from "drizzle-orm";
 import * as bcrypt from "bcryptjs";
@@ -47,10 +49,23 @@ import type {
   StaffAdvance, InsertStaffAdvance,
   Payroll, InsertPayroll,
   ClientBillingProfile, InsertClientBillingProfile,
-  EstimateFormatProfileRow
+  EstimateFormatProfileRow,
+  Company, InsertCompany,
+  CompanyUser, InsertCompanyUser
 } from "../shared/schema";
 
 export interface IStorage {
+  // Multi-Company
+  getCompany(id: number): Promise<Company | undefined>;
+  getAllCompanies(): Promise<Company[]>;
+  createCompany(company: InsertCompany): Promise<Company>;
+  updateCompany(id: number, updates: Partial<InsertCompany>): Promise<Company | undefined>;
+  getUserCompanies(userId: number): Promise<any[]>;
+  getCompanyUsers(companyId: number): Promise<any[]>;
+  addUserToCompany(userId: number, companyId: number, role: string, isDefault?: boolean): Promise<any>;
+  removeUserFromCompany(userId: number, companyId: number): Promise<boolean>;
+  updateCompanyUserRole(userId: number, companyId: number, role: string): Promise<any>;
+
   // Users / Staff
   getUser(id: number): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
@@ -96,7 +111,7 @@ export interface IStorage {
   // Invoices
   getInvoice(id: number): Promise<Invoice | undefined>;
   getInvoiceByNumber(invoiceNumber: string): Promise<Invoice | undefined>;
-  getAllInvoices(filters?: { type?: string; status?: string }): Promise<Invoice[]>;
+  getAllInvoices(filters?: { type?: string; status?: string; companyId?: number } | number): Promise<Invoice[]>;
   createInvoice(invoice: InsertInvoice): Promise<Invoice>;
   updateInvoice(id: number, updates: Partial<InsertInvoice>): Promise<Invoice | undefined>;
 
@@ -109,12 +124,12 @@ export interface IStorage {
 
   // Payments
   getPayment(id: number): Promise<Payment | undefined>;
-  getAllPayments(filters?: { type?: string }): Promise<Payment[]>;
+  getAllPayments(filters?: { type?: string; companyId?: number }): Promise<Payment[]>;
   createPayment(payment: InsertPayment): Promise<Payment>;
   createPaymentWithAllocations(payment: InsertPayment, allocations: any[]): Promise<Payment>;
 
   // Clients
-  getAllClients(): Promise<Client[]>;
+  getAllClients(companyId?: number): Promise<Client[]>;
   createClient(client: InsertClient): Promise<Client>;
   
   // Client Billing Profiles
@@ -126,19 +141,19 @@ export interface IStorage {
   deleteBillingProfile(id: number): Promise<boolean>;
   
   // Brands
-  getAllBrands(clientId?: number): Promise<Brand[]>;
+  getAllBrands(clientId?: number, companyId?: number): Promise<Brand[]>;
   createBrand(brand: InsertBrand): Promise<Brand>;
 
   // Stores
-  getAllStores(clientId?: number, brandId?: number): Promise<Store[]>;
+  getAllStores(clientId?: number, brandId?: number, companyId?: number): Promise<Store[]>;
   createStore(store: InsertStore): Promise<Store>;
 
   // Products
-  getAllProducts(): Promise<Product[]>;
+  getAllProducts(companyId?: number): Promise<Product[]>;
   createProduct(product: InsertProduct): Promise<Product>;
 
   // Estimates
-  getAllEstimates(): Promise<Estimate[]>;
+  getAllEstimates(companyId?: number): Promise<Estimate[]>;
   getEstimate(id: number): Promise<Estimate | undefined>;
   createEstimate(estimate: InsertEstimate, items: InsertEstimateItem[]): Promise<Estimate>;
   getEstimateItems(estimateId: number): Promise<EstimateItem[]>;
@@ -147,7 +162,7 @@ export interface IStorage {
   getEstimateFormatProfile(code: string): Promise<EstimateFormatProfileRow | undefined>;
 
   // Delivery Challans
-  getAllDeliveryChallans(): Promise<DeliveryChallan[]>;
+  getAllDeliveryChallans(companyId?: number): Promise<DeliveryChallan[]>;
   getDeliveryChallan(id: number): Promise<DeliveryChallan | undefined>;
   getDeliveryChallansByEstimate(estimateId: number): Promise<DeliveryChallan[]>;
   createDeliveryChallan(dc: InsertDeliveryChallan): Promise<DeliveryChallan>;
@@ -181,6 +196,126 @@ export function sanitizeUser<T extends Record<string, any>>(user: T): Omit<T, "p
 export class DatabaseStorage implements IStorage {
   constructor() {
     this.seedChartOfAccounts();
+  }
+
+  // ==========================================
+  // Multi-Company
+  // ==========================================
+  async getCompany(id: number): Promise<Company | undefined> {
+    try {
+      const result = await db.select().from(companies).where(eq(companies.id, id)).limit(1);
+      return result[0];
+    } catch (err: any) {
+      console.warn("[storage] getCompany failed:", err?.message);
+      return undefined;
+    }
+  }
+
+  async getAllCompanies(): Promise<Company[]> {
+    try {
+      return await db.select().from(companies).orderBy(companies.id);
+    } catch (err: any) {
+      console.warn("[storage] getAllCompanies failed:", err?.message);
+      return [];
+    }
+  }
+
+  async createCompany(comp: InsertCompany): Promise<Company> {
+    const result = await db.insert(companies).values(comp).returning();
+    return result[0];
+  }
+
+  async updateCompany(id: number, updates: Partial<InsertCompany>): Promise<Company | undefined> {
+    const result = await db.update(companies).set({ ...updates, updatedAt: new Date() }).where(eq(companies.id, id)).returning();
+    return result[0];
+  }
+
+  async getUserCompanies(userId: number): Promise<any[]> {
+    try {
+      const rows = await db
+        .select({
+          id: companyUsers.id,
+          userId: companyUsers.userId,
+          companyId: companyUsers.companyId,
+          role: companyUsers.role,
+          isDefault: companyUsers.isDefault,
+          createdAt: companyUsers.createdAt,
+          company: companies,
+        })
+        .from(companyUsers)
+        .innerJoin(companies, eq(companyUsers.companyId, companies.id))
+        .where(eq(companyUsers.userId, userId));
+      return rows;
+    } catch (err: any) {
+      console.warn("[storage] getUserCompanies failed:", err?.message);
+      return [];
+    }
+  }
+
+  async getCompanyUsers(companyId: number): Promise<any[]> {
+    try {
+      const rows = await db
+        .select({
+          id: companyUsers.id,
+          userId: companyUsers.userId,
+          companyId: companyUsers.companyId,
+          role: companyUsers.role,
+          isDefault: companyUsers.isDefault,
+          createdAt: companyUsers.createdAt,
+          user: {
+            id: users.id,
+            name: users.name,
+            username: users.username,
+            email: users.email,
+            role: users.role,
+          },
+        })
+        .from(companyUsers)
+        .innerJoin(users, eq(companyUsers.userId, users.id))
+        .where(eq(companyUsers.companyId, companyId));
+      return rows;
+    } catch (err: any) {
+      console.warn("[storage] getCompanyUsers failed:", err?.message);
+      return [];
+    }
+  }
+
+  async addUserToCompany(userId: number, companyId: number, role: string, isDefault: boolean = false): Promise<any> {
+    const existing = await db
+      .select()
+      .from(companyUsers)
+      .where(and(eq(companyUsers.userId, userId), eq(companyUsers.companyId, companyId)))
+      .limit(1);
+    if (existing[0]) {
+      const updated = await db
+        .update(companyUsers)
+        .set({ role, isDefault })
+        .where(eq(companyUsers.id, existing[0].id))
+        .returning();
+      return updated[0];
+    }
+    const created = await db
+      .insert(companyUsers)
+      .values({ userId, companyId, role, isDefault })
+      .returning();
+    return created[0];
+  }
+
+  async removeUserFromCompany(userId: number, companyId: number): Promise<boolean> {
+    const result = await db
+      .delete(companyUsers)
+      .where(and(eq(companyUsers.userId, userId), eq(companyUsers.companyId, companyId)))
+      .returning();
+    return result.length > 0;
+  }
+
+  async updateCompanyUserRole(userId: number, companyId: number, role: string): Promise<any> {
+    const result = await db
+      .update(companyUsers)
+      .set({ role })
+      .where(and(eq(companyUsers.userId, userId), eq(companyUsers.companyId, companyId)))
+      .returning();
+    return result[0];
   }
 
   // ==========================================
@@ -455,17 +590,19 @@ export class DatabaseStorage implements IStorage {
     return result[0];
   }
 
-  async getAllInvoices(filters?: { type?: string; status?: string }): Promise<Invoice[]> {
-    let query = db.select().from(invoices);
-    
-    if (filters?.type && filters?.status) {
-      return query.where(and(eq(invoices.type, filters.type), eq(invoices.status, filters.status))).orderBy(desc(invoices.date));
-    } else if (filters?.type) {
-      return query.where(eq(invoices.type, filters.type)).orderBy(desc(invoices.date));
-    } else if (filters?.status) {
-      return query.where(eq(invoices.status, filters.status)).orderBy(desc(invoices.date));
+  async getAllInvoices(filters?: { type?: string; status?: string; companyId?: number } | number): Promise<Invoice[]> {
+    const norm = typeof filters === "number" ? { companyId: filters } : filters;
+    const conds: any[] = [];
+    if (norm?.type) conds.push(eq(invoices.type, norm.type));
+    if (norm?.status) conds.push(eq(invoices.status, norm.status));
+    if (norm?.companyId) conds.push(eq(invoices.companyId, norm.companyId));
+
+    if (conds.length === 1) {
+      return db.select().from(invoices).where(conds[0]).orderBy(desc(invoices.date));
+    } else if (conds.length > 1) {
+      return db.select().from(invoices).where(and(...conds)).orderBy(desc(invoices.date));
     }
-    return query.orderBy(desc(invoices.date));
+    return db.select().from(invoices).orderBy(desc(invoices.date));
   }
 
   async createInvoice(invoice: InsertInvoice): Promise<Invoice> {
@@ -589,12 +726,17 @@ export class DatabaseStorage implements IStorage {
     return result[0];
   }
 
-  async getAllPayments(filters?: { type?: string }): Promise<Payment[]> {
-    let query = db.select().from(payments);
-    if (filters?.type) {
-      return query.where(eq(payments.type, filters.type)).orderBy(desc(payments.date));
+  async getAllPayments(filters?: { type?: string; companyId?: number }): Promise<Payment[]> {
+    const conds: any[] = [];
+    if (filters?.type) conds.push(eq(payments.type, filters.type));
+    if (filters?.companyId) conds.push(eq(payments.companyId, filters.companyId));
+
+    if (conds.length === 1) {
+      return db.select().from(payments).where(conds[0]).orderBy(desc(payments.date));
+    } else if (conds.length > 1) {
+      return db.select().from(payments).where(and(...conds)).orderBy(desc(payments.date));
     }
-    return query.orderBy(desc(payments.date));
+    return db.select().from(payments).orderBy(desc(payments.date));
   }
 
   async createPayment(payment: InsertPayment): Promise<Payment> {
@@ -703,7 +845,10 @@ export class DatabaseStorage implements IStorage {
   // ==========================================
   // Sunrise Custom Business Operations
   // ==========================================
-  async getAllClients(): Promise<Client[]> {
+  async getAllClients(companyId?: number): Promise<Client[]> {
+    if (companyId) {
+      return db.select().from(clients).where(eq(clients.companyId, companyId)).orderBy(desc(clients.createdAt));
+    }
     return db.select().from(clients).orderBy(desc(clients.createdAt));
   }
 
@@ -760,12 +905,17 @@ export class DatabaseStorage implements IStorage {
     return result.length > 0;
   }
 
-  async getAllBrands(clientId?: number): Promise<Brand[]> {
-    let q: any = db.select().from(brands);
-    if (clientId) {
-      q = q.where(eq(brands.parentClientId, clientId));
+  async getAllBrands(clientId?: number, companyId?: number): Promise<Brand[]> {
+    const conds: any[] = [];
+    if (clientId) conds.push(eq(brands.parentClientId, clientId));
+    if (companyId) conds.push(eq(brands.companyId, companyId));
+
+    if (conds.length === 1) {
+      return db.select().from(brands).where(conds[0]).orderBy(desc(brands.createdAt));
+    } else if (conds.length > 1) {
+      return db.select().from(brands).where(and(...conds)).orderBy(desc(brands.createdAt));
     }
-    return q.orderBy(desc(brands.createdAt));
+    return db.select().from(brands).orderBy(desc(brands.createdAt));
   }
 
   async createBrand(brand: InsertBrand): Promise<Brand> {
@@ -773,14 +923,18 @@ export class DatabaseStorage implements IStorage {
     return result[0];
   }
 
-  async getAllStores(clientId?: number, brandId?: number): Promise<Store[]> {
-    let q: any = db.select().from(stores);
+  async getAllStores(clientId?: number, brandId?: number, companyId?: number): Promise<Store[]> {
     const conds: any[] = [];
     if (clientId) conds.push(eq(stores.clientId, clientId));
     if (brandId) conds.push(eq(stores.brandId, brandId));
-    if (conds.length === 1) q = q.where(conds[0]);
-    else if (conds.length > 1) q = q.where(and(...conds));
-    return q.orderBy(desc(stores.createdAt));
+    if (companyId) conds.push(eq(stores.companyId, companyId));
+
+    if (conds.length === 1) {
+      return db.select().from(stores).where(conds[0]).orderBy(desc(stores.createdAt));
+    } else if (conds.length > 1) {
+      return db.select().from(stores).where(and(...conds)).orderBy(desc(stores.createdAt));
+    }
+    return db.select().from(stores).orderBy(desc(stores.createdAt));
   }
 
   async createStore(store: InsertStore): Promise<Store> {
@@ -788,7 +942,10 @@ export class DatabaseStorage implements IStorage {
     return result[0];
   }
 
-  async getAllProducts(): Promise<Product[]> {
+  async getAllProducts(companyId?: number): Promise<Product[]> {
+    if (companyId) {
+      return db.select().from(products).where(eq(products.companyId, companyId)).orderBy(desc(products.createdAt));
+    }
     return db.select().from(products).orderBy(desc(products.createdAt));
   }
 
@@ -797,7 +954,10 @@ export class DatabaseStorage implements IStorage {
     return result[0];
   }
 
-  async getAllEstimates(): Promise<Estimate[]> {
+  async getAllEstimates(companyId?: number): Promise<Estimate[]> {
+    if (companyId) {
+      return db.select().from(estimates).where(eq(estimates.companyId, companyId)).orderBy(desc(estimates.createdAt));
+    }
     return db.select().from(estimates).orderBy(desc(estimates.createdAt));
   }
 
@@ -850,7 +1010,10 @@ export class DatabaseStorage implements IStorage {
     return result[0];
   }
 
-  async getAllDeliveryChallans(): Promise<DeliveryChallan[]> {
+  async getAllDeliveryChallans(companyId?: number): Promise<DeliveryChallan[]> {
+    if (companyId) {
+      return db.select().from(deliveryChallans).where(eq(deliveryChallans.companyId, companyId)).orderBy(desc(deliveryChallans.createdAt));
+    }
     return db.select().from(deliveryChallans).orderBy(desc(deliveryChallans.createdAt));
   }
 

@@ -262,16 +262,12 @@ const InvoicePacketPage: React.FC = () => {
   useEffect(() => {
     const load = async () => {
       try {
-        if (isBoltMode) {
-          const [settings, invs] = await Promise.all([fetchCompanySettings(token), fetchInvoices(token)]);
-          if (settings) setSellerProfile(settings);
-          setInvoices(invs as Invoice[]);
-        } else {
-          const settingsRes = await fetch("/api/company-settings", { headers: { Authorization: `Bearer ${token}` } });
-          if (settingsRes.ok) setSellerProfile(await settingsRes.json());
-          const res = await fetch("/api/finance/invoices", { headers: { Authorization: `Bearer ${token}` } });
-          if (res.ok) setInvoices(await res.json());
-        }
+        const [settings, invs] = await Promise.all([
+          fetchCompanySettings(token),
+          fetchInvoices(token)
+        ]);
+        if (settings) setSellerProfile(settings);
+        setInvoices(invs as Invoice[]);
       } catch (err) {
         console.error(err);
       } finally {

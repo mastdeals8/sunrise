@@ -1310,8 +1310,69 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return legacyValue;
   };
 
-  async function getSellerProfile(): Promise<SellerProfile> {
-    const out = { ...SUNRISE_DEFAULT_SELLER };
+  async function getSellerProfile(companyId?: number): Promise<SellerProfile & { companyId: number; documentHeader?: string; documentFooter?: string }> {
+    const cId = companyId || 1;
+    const company = await storage.getCompany(cId).catch(() => undefined);
+
+    if (cId !== 1 && company) {
+      return {
+        name: company.displayName || company.tradeName || company.name || "Company Workspace",
+        gstin: company.gstin || "",
+        pan: company.pan || "",
+        state: company.state || "",
+        stateCode: company.stateCode || "",
+        address: company.address || "",
+        mobile: company.mobile || "",
+        email: company.email || "",
+        bankName: company.bankName || "",
+        bankAccountNumber: company.bankAccountNumber || "",
+        bankIfsc: company.bankIfsc || "",
+        bankBranch: company.bankBranch || "",
+        defaultGstPercent: String(company.defaultGstPercent ?? "18"),
+        defaultPacking: String(company.defaultPackingPercent ?? "4"),
+        defaultImplementation: String(company.defaultImplementationPercent ?? "7"),
+        defaultLocalTransport: String(company.defaultLocalTransport ?? "1000"),
+        defaultOutstationTransportRate: String(company.defaultOutstationTransportRate ?? "18"),
+        defaultEstimatePrefix: company.estimatePrefix || "EST",
+        defaultInvoicePrefix: company.invoicePrefix || "INV",
+        defaultDcPrefix: company.dcPrefix || "DC",
+        logoPath: company.logoPath || "",
+        signatureStampPath: company.signatureStampPath || "",
+        terms: company.termsAndConditions || "",
+        documentHeader: company.docHeaderText || "",
+        documentFooter: company.docFooterText || "",
+        companyId: company.id,
+      };
+    }
+
+    const out: any = { ...SUNRISE_DEFAULT_SELLER, companyId: 1 };
+    if (company) {
+      if (company.name) out.name = company.name;
+      if (company.gstin) out.gstin = company.gstin;
+      if (company.pan) out.pan = company.pan;
+      if (company.state) out.state = company.state;
+      if (company.stateCode) out.stateCode = company.stateCode;
+      if (company.address) out.address = company.address;
+      if (company.mobile) out.mobile = company.mobile;
+      if (company.email) out.email = company.email;
+      if (company.bankName) out.bankName = company.bankName;
+      if (company.bankAccountNumber) out.bankAccountNumber = company.bankAccountNumber;
+      if (company.bankIfsc) out.bankIfsc = company.bankIfsc;
+      if (company.bankBranch) out.bankBranch = company.bankBranch;
+      if (company.defaultGstPercent != null) out.defaultGstPercent = String(company.defaultGstPercent);
+      if (company.defaultPackingPercent != null) out.defaultPacking = String(company.defaultPackingPercent);
+      if (company.defaultImplementationPercent != null) out.defaultImplementation = String(company.defaultImplementationPercent);
+      if (company.defaultLocalTransport != null) out.defaultLocalTransport = String(company.defaultLocalTransport);
+      if (company.defaultOutstationTransportRate != null) out.defaultOutstationTransportRate = String(company.defaultOutstationTransportRate);
+      if (company.estimatePrefix) out.defaultEstimatePrefix = company.estimatePrefix;
+      if (company.invoicePrefix) out.defaultInvoicePrefix = company.invoicePrefix;
+      if (company.dcPrefix) out.defaultDcPrefix = company.dcPrefix;
+      if (company.logoPath) out.logoPath = company.logoPath;
+      if (company.signatureStampPath) out.signatureStampPath = company.signatureStampPath;
+      if (company.termsAndConditions) out.terms = company.termsAndConditions;
+      if (company.docHeaderText) out.documentHeader = company.docHeaderText;
+      if (company.docFooterText) out.documentFooter = company.docFooterText;
+    }
     for (const [settingKey, outKey] of Object.entries(companySettingMap)) {
       const v = await readSettingWithLegacy(settingKey);
       if (outKey === "logoPath" || outKey === "signatureStampPath") {
@@ -1544,10 +1605,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const token = generateToken(user);
+      const memberships = await storage.getUserCompanies(user.id);
+      const isSuperAdmin = user.role === "admin" || memberships.some(m => m.role === "super_admin");
+      const defaultCompany = memberships.find(m => m.isDefault) || memberships[0];
+
       // httpOnly cookie lets <img>/<a href> requests (file downloads, prints)
       // authenticate without putting tokens in URLs (audit C1/C3).
       setSessionCookie(res, token);
-      res.json({ user: { id: user.id, username: user.username, name: user.name, role: user.role }, token });
+      res.json({
+        user: {
+          id: user.id,
+          username: user.username,
+          name: user.name,
+          role: user.role,
+          isSuperAdmin,
+          activeCompanyId: defaultCompany?.companyId || 1,
+          memberships: memberships.map(m => ({
+            companyId: m.companyId,
+            companyName: m.company?.name || `Company ${m.companyId}`,
+            role: m.role,
+            isDefault: m.isDefault,
+          })),
+        },
+        token,
+      });
     } catch (err: any) {
       res.status(500).json({ message: err.message });
     }
@@ -1571,7 +1652,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
     if (!req.user) return res.status(401).json({ message: "Unauthenticated" });
     const user = await storage.getUser(req.user.id);
     if (!user) return res.status(404).json({ message: "User not found" });
-    res.json({ id: user.id, username: user.username, name: user.name, role: user.role, email: user.email });
+    const memberships = await storage.getUserCompanies(user.id);
+    const isSuperAdmin = user.role === "admin" || memberships.some(m => m.role === "super_admin");
+    res.json({
+      id: user.id,
+      username: user.username,
+      name: user.name,
+      role: user.role,
+      email: user.email,
+      isSuperAdmin,
+      activeCompanyId: req.companyId || 1,
+      companyRole: req.companyRole,
+      memberships: memberships.map(m => ({
+        companyId: m.companyId,
+        companyName: m.company?.name || `Company ${m.companyId}`,
+        role: m.role,
+        isDefault: m.isDefault,
+      })),
+    });
   });
 
   app.get("/api/users", authenticateToken, requireRole(["admin", "manager"]), async (req: AuthRequest, res: Response) => {
@@ -1890,7 +1988,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const type = req.query.type as string | undefined;
       const status = req.query.status as string | undefined;
-      const list = searchList(await storage.getAllInvoices({ type, status }), req,
+      const list = searchList(await storage.getAllInvoices({ type, status, companyId: req.companyId }), req,
         ["invoiceNumber", "partyName", "status", "type"]);
       // Opt-in pagination (audit H4): ?limit=&offset= slice + X-Total-Count.
       // Without params, full list is returned — existing clients unaffected.
@@ -1962,19 +2060,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
+      parsed.data.companyId = req.companyId || 1;
       const invoiceNum = String(parsed.data.invoiceNumber || "").trim();
       if (!invoiceNum) {
-        parsed.data.invoiceNumber = await nextDocumentNumber("invoice", parsed.data.date);
+        parsed.data.invoiceNumber = await nextDocumentNumber("invoice", parsed.data.date, req.companyId);
       } else {
         const dupNum = await db.select().from(invoices).where(
           and(
+            eq(invoices.companyId, req.companyId || 1),
             eq(invoices.invoiceNumber, invoiceNum),
             ne(invoices.status, "cancelled")
           )
         ).limit(1);
         if (dupNum.length > 0) {
           return res.status(409).json({
-            message: `Invoice number "${invoiceNum}" is already in use. Please enter a unique invoice number.`,
+            message: `Invoice number "${invoiceNum}" is already in use for this company. Please enter a unique invoice number.`,
           });
         }
         parsed.data.invoiceNumber = invoiceNum;
@@ -2488,7 +2588,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ==========================================
   app.get("/api/operations/clients", authenticateToken, async (req: AuthRequest, res: Response) => {
     try {
-      const list = await storage.getAllClients();
+      const list = await storage.getAllClients(req.companyId);
       res.json(list);
     } catch (err: any) {
       res.status(500).json({ message: err.message });
@@ -2508,6 +2608,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const parsed = insertClientSchema.safeParse({
         ...req.body,
+        companyId: req.companyId || 1,
         name: normalizeDisplayName(req.body.name),
         city: normalizeDisplayName(req.body.city) || null,
         gstNumber: normalizeGstinPan(req.body.gstNumber) || null,
@@ -2592,7 +2693,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/operations/brands", authenticateToken, async (req: AuthRequest, res: Response) => {
     try {
       const clientId = req.query.clientId ? parseInt(req.query.clientId as string, 10) : undefined;
-      const list = await storage.getAllBrands(clientId);
+      const list = await storage.getAllBrands(clientId, req.companyId);
       res.json(list);
     } catch (err: any) {
       res.status(500).json({ message: err.message });
@@ -2611,6 +2712,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       const parsed = insertBrandSchema.safeParse({
         ...req.body,
+        companyId: req.companyId || 1,
         name: normalizeDisplayName(req.body.name),
         parentClientId,
         parentBrand: normalizeDisplayName(parentClient.name) || null,
@@ -2629,7 +2731,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const clientId = req.query.clientId ? parseInt(req.query.clientId as string, 10) : undefined;
       const brandId = req.query.brandId ? parseInt(req.query.brandId as string, 10) : undefined;
-      const list = await storage.getAllStores(clientId, brandId);
+      const list = await storage.getAllStores(clientId, brandId, req.companyId);
       res.json(list);
     } catch (err: any) {
       res.status(500).json({ message: err.message });
@@ -2640,6 +2742,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const parsed = insertStoreSchema.safeParse({
         ...req.body,
+        companyId: req.companyId || 1,
         name: normalizeDisplayName(req.body.name),
         location: normalizeDisplayName(req.body.location) || null,
         contactPerson: normalizeDisplayName(req.body.contactPerson) || null,
@@ -2659,7 +2762,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/operations/products", authenticateToken, async (req: AuthRequest, res: Response) => {
     try {
-      const list = await storage.getAllProducts();
+      const list = await storage.getAllProducts(req.companyId);
       res.json(list);
     } catch (err: any) {
       res.status(500).json({ message: err.message });
@@ -2667,11 +2770,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   const productCategoryKey = (value: unknown) => String(value ?? "").trim().replace(/\s+/g, " ").toLowerCase();
-  const normalizeProductCategory = async (value: unknown): Promise<string | null> => {
+  const normalizeProductCategory = async (value: unknown, companyId?: number): Promise<string | null> => {
     const normalized = normalizeDisplayName(value);
     if (!normalized) return null;
     const key = productCategoryKey(normalized);
-    const list = await storage.getAllProducts();
+    const list = await storage.getAllProducts(companyId);
     const existing = list.find(p => productCategoryKey(p.category) === key);
     return existing?.category || normalized;
   };
@@ -2680,7 +2783,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const body = {
         ...req.body,
-        category: await normalizeProductCategory(req.body.category),
+        companyId: req.companyId || 1,
+        category: await normalizeProductCategory(req.body.category, req.companyId),
       };
       const parsed = insertProductSchema.safeParse(body);
       if (!parsed.success) {
@@ -2696,7 +2800,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/operations/estimates", authenticateToken, async (req: AuthRequest, res: Response) => {
     const _t0 = performance.now();
     try {
-      const list = searchList(await storage.getAllEstimates(), req,
+      const list = searchList(await storage.getAllEstimates(req.companyId), req,
         ["estimateNumber", "title", "clientName", "billingTo", "status"]);
       const { page, total } = paginateList(list, req);
       if (total !== null) res.setHeader("X-Total-Count", String(total));
@@ -2733,7 +2837,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Auto-derive gstType from seller (Sunrise) state vs billing state.
       // Same state → CGST+SGST; different → IGST. Override remains possible
       // by explicitly setting gstType in the request.
-      const seller = await getSellerProfile();
+      const seller = await getSellerProfile(req.companyId);
       const billingStateCode = estimate?.billingStateCodeSnapshot || estimate?.stateCode || null;
       if (estimate && !estimate.gstType) {
         estimate.gstType = deriveGstType(seller.stateCode, billingStateCode);
@@ -2745,7 +2849,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         { field: "estimateDate", defaultTo: () => new Date() },
         "poDate",
       ]);
-      preprocessed.estimateNumber = await nextDocumentNumber("estimate");
+      preprocessed.companyId = req.companyId || 1;
+      preprocessed.estimateNumber = await nextDocumentNumber("estimate", preprocessed.estimateDate, req.companyId);
 
       // Resolve format profile code
       const resolvedFormatCode = estimate?.formatProfileCode
@@ -2790,9 +2895,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const created = await storage.createEstimate(
         {
           ...parsedEstimate.data,
+          companyId: req.companyId || 1,
           createdBy: req.user.id
         },
-        parsedItems.data as any
+        parsedItems.data.map((item: any) => ({ ...item, companyId: req.companyId || 1 })) as any
       );
       await backfillExecutionStores();
 
@@ -3737,7 +3843,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/operations/delivery-challans", authenticateToken, async (req: AuthRequest, res: Response) => {
     const _t0 = performance.now();
     try {
-      const list = searchList(await storage.getAllDeliveryChallans(), req,
+      const list = searchList(await storage.getAllDeliveryChallans(req.companyId), req,
         ["dcNumber", "challanNumber", "status", "storeCode"]);
       const { page, total } = paginateList(list, req);
       if (total !== null) res.setHeader("X-Total-Count", String(total));
@@ -4335,11 +4441,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       // Drizzle timestamp columns -> z.date() (no coercion). See server/utils/dateFields.ts.
       const body = preprocessDateFields(req.body, [{ field: "deliveryDate", defaultTo: nowDefault }]);
+      body.companyId = req.companyId || 1;
       body.documentType = documentTypeForDc(body);
       const rawDc = String(body.dcNumber ?? "").trim();
       const legacyPlaceholder = /^(DC|WCC)-\d+(-.*)?$/i.test(rawDc);
       if (!rawDc || legacyPlaceholder) {
-        body.dcNumber = await nextDocumentNumber("dc");
+        body.dcNumber = await nextDocumentNumber("dc", body.deliveryDate, req.companyId);
       }
       if (body.documentType === "wcc") {
         const storeCode = storeCodeForDc(body);
@@ -5043,64 +5150,226 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Used by the estimate header (top-right) and as the source of truth for
   // CGST+SGST vs IGST decisions. Reads `company.<key>` from app_settings,
   // falling back to SUNRISE_DEFAULT_SELLER for any unset key.
-  app.get("/api/company-settings", authenticateToken, async (_req: AuthRequest, res: Response) => {
+  app.get("/api/company-settings", authenticateToken, async (req: AuthRequest, res: Response) => {
     try {
-      const seller = await getSellerProfile();
+      const seller = await getSellerProfile(req.companyId);
       res.json(seller);
     } catch (err: any) {
       res.status(500).json({ message: err.message });
     }
   });
+
   app.put("/api/company-settings", authenticateToken, requireRole(["admin", "manager"]), async (req: AuthRequest, res: Response) => {
     try {
-      const fieldToKey: Record<string, string> = {
-        name: "company.name",
-        gstin: "company.gstin",
-        pan: "company.pan",
-        state: "company.state",
-        stateCode: "company.stateCode",
-        address: "company.address",
-        mobile: "company.mobile",
-        email: "company.email",
-        bankName: "bank.name",
-        bankAccountNumber: "bank.accountNumber",
-        bankIfsc: "bank.ifsc",
-        bankBranch: "bank.branch",
-        defaultGstPercent: "defaults.gstPercent",
-        defaultPacking: "defaults.packingPercent",
-        defaultImplementation: "defaults.implementationPercent",
-        defaultLocalTransport: "defaults.localTransport",
-        defaultOutstationTransportRate: "defaults.outstationTransportRate",
-        terms: "defaults.terms",
-        logoPath: "company.logoPath",
-        signatureStampPath: "company.signatureStampPath",
-      };
-      const allowed = Object.keys(fieldToKey);
-      for (const key of allowed) {
-        if (key in req.body) {
-          const value = key === "logoPath" || key === "signatureStampPath"
-            ? cleanCompanyAssetRef(req.body[key])
-            : String(req.body[key] ?? "");
-          await storage.setAppSetting(fieldToKey[key], value);
+      const cId = req.companyId || 1;
+      const compUpdates: any = {};
+      if ("name" in req.body) compUpdates.name = String(req.body.name ?? "");
+      if ("legalName" in req.body) compUpdates.legalName = String(req.body.legalName ?? "");
+      if ("tradeName" in req.body) compUpdates.tradeName = String(req.body.tradeName ?? "");
+      if ("gstin" in req.body) compUpdates.gstin = String(req.body.gstin ?? "");
+      if ("pan" in req.body) compUpdates.pan = String(req.body.pan ?? "");
+      if ("state" in req.body) compUpdates.state = String(req.body.state ?? "");
+      if ("stateCode" in req.body) compUpdates.stateCode = String(req.body.stateCode ?? "");
+      if ("address" in req.body) compUpdates.address = String(req.body.address ?? "");
+      if ("mobile" in req.body) compUpdates.mobile = String(req.body.mobile ?? "");
+      if ("email" in req.body) compUpdates.email = String(req.body.email ?? "");
+      if ("bankName" in req.body) compUpdates.bankName = String(req.body.bankName ?? "");
+      if ("bankAccountNumber" in req.body) compUpdates.bankAccountNumber = String(req.body.bankAccountNumber ?? "");
+      if ("bankIfsc" in req.body) compUpdates.bankIfsc = String(req.body.bankIfsc ?? "");
+      if ("bankBranch" in req.body) compUpdates.bankBranch = String(req.body.bankBranch ?? "");
+      if ("defaultGstPercent" in req.body) compUpdates.defaultGstPercent = parseFloat(req.body.defaultGstPercent) || 18;
+      if ("defaultPacking" in req.body) compUpdates.defaultPackingPercent = parseFloat(req.body.defaultPacking) || 4;
+      if ("defaultImplementation" in req.body) compUpdates.defaultImplementationPercent = parseFloat(req.body.defaultImplementation) || 7;
+      if ("defaultLocalTransport" in req.body) compUpdates.defaultLocalTransport = parseFloat(req.body.defaultLocalTransport) || 1000;
+      if ("defaultOutstationTransportRate" in req.body) compUpdates.defaultOutstationTransportRate = parseFloat(req.body.defaultOutstationTransportRate) || 18;
+      if ("terms" in req.body) compUpdates.termsAndConditions = String(req.body.terms ?? "");
+      if ("documentHeader" in req.body) compUpdates.docHeaderText = String(req.body.documentHeader ?? "");
+      if ("documentFooter" in req.body) compUpdates.docFooterText = String(req.body.documentFooter ?? "");
+      if ("defaultEstimatePrefix" in req.body) compUpdates.estimatePrefix = String(req.body.defaultEstimatePrefix ?? "");
+      if ("defaultInvoicePrefix" in req.body) compUpdates.invoicePrefix = String(req.body.defaultInvoicePrefix ?? "");
+      if ("defaultDcPrefix" in req.body) compUpdates.dcPrefix = String(req.body.defaultDcPrefix ?? "");
+      if ("logoPath" in req.body) compUpdates.logoPath = cleanCompanyAssetRef(req.body.logoPath);
+      if ("signatureStampPath" in req.body) compUpdates.signatureStampPath = cleanCompanyAssetRef(req.body.signatureStampPath);
+
+      await storage.updateCompany(cId, compUpdates);
+
+      if (cId === 1) {
+        const fieldToKey: Record<string, string> = {
+          name: "company.name",
+          gstin: "company.gstin",
+          pan: "company.pan",
+          state: "company.state",
+          stateCode: "company.stateCode",
+          address: "company.address",
+          mobile: "company.mobile",
+          email: "company.email",
+          bankName: "bank.name",
+          bankAccountNumber: "bank.accountNumber",
+          bankIfsc: "bank.ifsc",
+          bankBranch: "bank.branch",
+          defaultGstPercent: "defaults.gstPercent",
+          defaultPacking: "defaults.packingPercent",
+          defaultImplementation: "defaults.implementationPercent",
+          defaultLocalTransport: "defaults.localTransport",
+          defaultOutstationTransportRate: "defaults.outstationTransportRate",
+          terms: "defaults.terms",
+          logoPath: "company.logoPath",
+          signatureStampPath: "company.signatureStampPath",
+        };
+        for (const key of Object.keys(fieldToKey)) {
+          if (key in req.body) {
+            const value = key === "logoPath" || key === "signatureStampPath"
+              ? cleanCompanyAssetRef(req.body[key])
+              : String(req.body[key] ?? "");
+            await storage.setAppSetting(fieldToKey[key], value).catch(() => null);
+          }
         }
       }
-      const prefixUpdates: Array<[string, string]> = [
-        ["defaultEstimatePrefix", "estimate"],
-        ["defaultInvoicePrefix", "invoice"],
-        ["defaultDcPrefix", "dc"],
-      ];
-      for (const [field, kind] of prefixUpdates) {
-        if (!(field in req.body)) continue;
-        const current = (await storage.getAppSetting(`numbering.${kind}`).catch(() => null) as any) || {};
-        await storage.setAppSetting(`numbering.${kind}`, {
-          ...current,
-          prefix: String(req.body[field] ?? ""),
-          startAt: Number.isFinite(Number(current.startAt)) ? Number(current.startAt) : 101,
-          fyAware: current.fyAware !== false,
-        });
-      }
-      const seller = await getSellerProfile();
+
+      const seller = await getSellerProfile(cId);
       res.json(seller);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // ==========================================
+  // Multi-Company Workspaces & Management API
+  // ==========================================
+  app.get("/api/companies", authenticateToken, async (req: AuthRequest, res: Response) => {
+    try {
+      if (req.user?.isSuperAdmin) {
+        const all = await storage.getAllCompanies();
+        return res.json(all);
+      }
+      const memberships = await storage.getUserCompanies(req.user!.id);
+      const userCompanyList = memberships.map(m => ({
+        ...m.company,
+        role: m.role,
+        isDefault: m.isDefault,
+      }));
+      res.json(userCompanyList);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.get("/api/companies/:id", authenticateToken, async (req: AuthRequest, res: Response) => {
+    try {
+      const targetId = parseInt(req.params.id, 10);
+      if (!req.user?.isSuperAdmin) {
+        const allowed = req.user?.memberships?.some(m => m.companyId === targetId);
+        if (!allowed) {
+          return res.status(403).json({ message: "Forbidden: You do not have access to this company workspace." });
+        }
+      }
+      const company = await storage.getCompany(targetId);
+      if (!company) return res.status(404).json({ message: "Company workspace not found." });
+      res.json(company);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.post("/api/companies", authenticateToken, async (req: AuthRequest, res: Response) => {
+    try {
+      if (!req.user?.isSuperAdmin) {
+        return res.status(403).json({ message: "Only Super Administrators can create new company workspaces." });
+      }
+      const { name, legalName, tradeName, gstin, pan, state, stateCode, address, mobile, email } = req.body;
+      if (!name) return res.status(400).json({ message: "Company workspace name is required." });
+
+      const newCompany = await storage.createCompany({
+        name,
+        legalName: legalName || null,
+        tradeName: tradeName || null,
+        gstin: gstin || null,
+        pan: pan || null,
+        state: state || null,
+        stateCode: stateCode || null,
+        address: address || null,
+        mobile: mobile || null,
+        email: email || null,
+        estimatePrefix: req.body.estimatePrefix || "EST",
+        invoicePrefix: req.body.invoicePrefix || "INV",
+        dcPrefix: req.body.dcPrefix || "DC",
+      });
+
+      await storage.addUserToCompany(req.user.id, newCompany.id, "super_admin");
+      res.status(201).json(newCompany);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.put("/api/companies/:id", authenticateToken, async (req: AuthRequest, res: Response) => {
+    try {
+      const targetId = parseInt(req.params.id, 10);
+      const isSuper = req.user?.isSuperAdmin;
+      const memberRole = req.user?.memberships?.find(m => m.companyId === targetId)?.role;
+      if (!isSuper && memberRole !== "company_admin" && memberRole !== "super_admin") {
+        return res.status(403).json({ message: "Forbidden: Company Administrator permissions required." });
+      }
+
+      const updated = await storage.updateCompany(targetId, req.body);
+      if (!updated) return res.status(404).json({ message: "Company not found." });
+      res.json(updated);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.get("/api/companies/:id/users", authenticateToken, async (req: AuthRequest, res: Response) => {
+    try {
+      const targetId = parseInt(req.params.id, 10);
+      const isSuper = req.user?.isSuperAdmin;
+      const memberRole = req.user?.memberships?.find(m => m.companyId === targetId)?.role;
+      if (!isSuper && memberRole !== "company_admin" && memberRole !== "super_admin") {
+        return res.status(403).json({ message: "Forbidden: Company Administrator permissions required." });
+      }
+
+      const usersList = await storage.getCompanyUsers(targetId);
+      res.json(usersList);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.post("/api/companies/:id/users", authenticateToken, async (req: AuthRequest, res: Response) => {
+    try {
+      const targetId = parseInt(req.params.id, 10);
+      const isSuper = req.user?.isSuperAdmin;
+      const memberRole = req.user?.memberships?.find(m => m.companyId === targetId)?.role;
+      if (!isSuper && memberRole !== "company_admin" && memberRole !== "super_admin") {
+        return res.status(403).json({ message: "Forbidden: Company Administrator permissions required." });
+      }
+
+      const { userId, role, isDefault } = req.body;
+      if (!userId || !role) return res.status(400).json({ message: "userId and role are required." });
+
+      const membership = await storage.addUserToCompany(Number(userId), targetId, role, !!isDefault);
+      res.status(201).json(membership);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.delete("/api/companies/:id/users/:userId", authenticateToken, async (req: AuthRequest, res: Response) => {
+    try {
+      const targetId = parseInt(req.params.id, 10);
+      const targetUserId = parseInt(req.params.userId, 10);
+      const isSuper = req.user?.isSuperAdmin;
+      const memberRole = req.user?.memberships?.find(m => m.companyId === targetId)?.role;
+      if (!isSuper && memberRole !== "company_admin" && memberRole !== "super_admin") {
+        return res.status(403).json({ message: "Forbidden: Company Administrator permissions required." });
+      }
+
+      if (targetUserId === 1 && targetId === 1) {
+        return res.status(400).json({ message: "Cannot remove primary administrator." });
+      }
+
+      const removed = await storage.removeUserFromCompany(targetUserId, targetId);
+      res.json({ success: removed });
     } catch (err: any) {
       res.status(500).json({ message: err.message });
     }
@@ -6088,19 +6357,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   }
 
-  async function nextDocumentNumber(kind: "invoice" | "estimate" | "dc", date?: Date): Promise<string> {
+  async function nextDocumentNumber(kind: "invoice" | "estimate" | "dc", date?: Date, companyId?: number): Promise<string> {
+    const cId = companyId || 1;
+    try {
+      const dStr = (date || new Date()).toISOString().slice(0, 10);
+      const res: any = await db.execute(sql`SELECT public.next_sunrise_document_number(${kind}, ${dStr}::date, ${cId}) as num`);
+      const row = Array.isArray(res) ? res[0] : res?.rows?.[0];
+      if (row?.num) {
+        return String(row.num);
+      }
+    } catch (e: any) {
+      console.warn("[nextDocumentNumber] RPC call failed, falling back to local sequence logic:", e?.message);
+    }
+
     const cfg = await loadNumberingConfig(kind);
+    const comp = await storage.getCompany(cId).catch(() => undefined);
     const map = docKindMap[kind];
-    const all = (await db.select().from(map.table)) as any[];
+    const all = (await db.select().from(map.table).where(eq((map.table as any).companyId, cId))) as any[];
     const fy = fyForDate(date || new Date());
 
+    const companyPrefix = kind === "invoice" ? (comp?.invoicePrefix || "SM") : kind === "estimate" ? (comp?.estimatePrefix || "SM/E") : (comp?.dcPrefix || "SM/DC");
+
     if (kind === "invoice") {
-      // Required Sunrise invoice format: <FY>/SM/<number> (e.g. 26-27/SM/171)
-      const tallyStart = cfg.fySequences?.[fy.label] ?? cfg.tallyCurrentNumber ?? (cfg.startAt > 1 ? cfg.startAt : 0);
+      const prefix = cId === 1 ? "SM" : (comp?.invoicePrefix || "INV");
+      const tallyStart = cId === 1 ? (cfg.fySequences?.[fy.label] ?? cfg.tallyCurrentNumber ?? (cfg.startAt > 1 ? cfg.startAt : 0)) : 0;
       let maxSeq = Math.max(0, tallyStart);
 
-      const standardMatcher = new RegExp(`^${escapeReg(fy.label)}/SM/(\\d+)$`, "i");
-      const legacyMatcher = new RegExp(`^SM/INV/${escapeReg(fy.label)}/(\\d+)$`, "i");
+      const standardMatcher = new RegExp(`^${escapeReg(fy.label)}/${escapeReg(prefix)}/(\\d+)$`, "i");
+      const legacyMatcher = new RegExp(`^${escapeReg(prefix)}/INV/${escapeReg(fy.label)}/(\\d+)$`, "i");
       const looseMatcher = new RegExp(`/${escapeReg(fy.label)}/(\\d+)$`, "i");
 
       for (const row of all) {
@@ -6113,15 +6397,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
       const next = maxSeq + 1;
-      return `${fy.label}/SM/${next}`;
+      return `${fy.label}/${prefix}/${next}`;
     }
 
-    const startAt = kind === "estimate"
+    const startAt = kind === "estimate" && cId === 1
       ? estimateFyStartAtOverrides[fy.label] ?? cfg.startAt
-      : cfg.startAt;
+      : (cId === 1 ? cfg.startAt : 1);
+    const prefix = companyPrefix;
     const fyMatcher = cfg.fyAware
-      ? new RegExp(`^${escapeReg(cfg.prefix)}/${escapeReg(fy.label)}/(\\d+)$`)
-      : new RegExp(`^${escapeReg(cfg.prefix)}/(\\d+)$`);
+      ? new RegExp(`^${escapeReg(prefix)}/${escapeReg(fy.label)}/(\\d+)$`)
+      : new RegExp(`^${escapeReg(prefix)}/(\\d+)$`);
     let maxSeq = startAt - 1;
     for (const row of all) {
       if (row.status === "cancelled") continue;
@@ -6134,8 +6419,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
     const next = maxSeq + 1;
     return cfg.fyAware
-      ? `${cfg.prefix}/${fy.label}/${next}`
-      : `${cfg.prefix}/${next}`;
+      ? `${prefix}/${fy.label}/${next}`
+      : `${prefix}/${next}`;
   }
 
   function escapeReg(s: string) {
@@ -6147,7 +6432,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const kind = req.params.kind;
       if (!docKindMap[kind]) return res.status(400).json({ message: "Unknown numbering kind" });
       const date = req.query.date ? new Date(String(req.query.date)) : new Date();
-      const number = await nextDocumentNumber(kind as any, date);
+      const number = await nextDocumentNumber(kind as any, date, req.companyId);
       res.json({ number });
     } catch (err: any) {
       res.status(500).json({ message: err.message });
@@ -6299,7 +6584,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const [original] = await db.select().from(estimates).where(eq(estimates.id, id));
       if (!original) return res.status(404).json({ message: "Estimate not found" });
       const originalItems = await db.select().from(estimateItems).where(eq(estimateItems.estimateId, id));
-      const newNumber = await nextDocumentNumber("estimate");
+      const targetCompanyId = original.companyId || req.companyId || 1;
+      const newNumber = await nextDocumentNumber("estimate", new Date(), targetCompanyId);
       const { id: _id, createdAt: _c, updatedAt: _u, ...rest } = original as any;
 
       let targetStore: any = null;
@@ -6379,6 +6665,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const [newEst] = await db.insert(estimates).values({
         ...rest,
+        companyId: targetCompanyId,
         storeId: targetStoreId,
         title: newTitle,
         shippingTo,
@@ -6412,6 +6699,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         await db.insert(estimateItems).values(
           originalItems.map(({ id: _iid, estimateId: _eid, ...item }: any) => ({
             ...item,
+            companyId: targetCompanyId,
             estimateId: newEst.id,
             storeId: targetStoreId,
             storeCode: targetStore?.storeCode ?? item.storeCode,
