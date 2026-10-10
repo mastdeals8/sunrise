@@ -95,6 +95,7 @@ async function verify() {
   console.log("\n=================================================================");
   console.log("ALL VERIFICATION CHECKS PASSED WITH 100% SUCCESS");
   console.log("=================================================================");
+  process.exit(0);
 }
 
 verify().catch((err) => {

@@ -84,3 +84,57 @@ export function isStoreCodeRequiredForFormat(code: unknown): boolean {
 export function normalizeFormatProfileCode(code: unknown): string {
   return getEstimateFormatProfile(code).code;
 }
+
+export function resolveCustomerFormatProfile(
+  estimate?: { formatProfileCode?: string | null; clientFormat?: string | null; clientId?: number | null } | null,
+  client?: { id?: number; name?: string | null; clientGroupName?: string | null; defaultFormatProfileCode?: string | null; format?: string | null } | null
+): EstimateFormatProfile {
+  const clientName = String(client?.name || "").toLowerCase();
+  const clientGroup = String(client?.clientGroupName || "").toLowerCase();
+
+  // 1. ABFRL Customer -> existing ABFRL custom format
+  const isClientAbfrl =
+    clientName.includes("aditya birla") ||
+    clientName.includes("abfrl") ||
+    clientName.includes("ablbl") ||
+    clientGroup.includes("abfrl") ||
+    clientGroup.includes("ablbl") ||
+    ["abfrl", "ablbl", "abfrl_multi_store", "ablbl_multi_store"].includes(String(client?.defaultFormatProfileCode ?? "").trim().toLowerCase()) ||
+    ["abfrl", "ablbl", "abfrl_multi_store", "ablbl_multi_store"].includes(String(client?.format ?? "").trim().toLowerCase());
+
+  const isEstAbfrl =
+    ["abfrl", "ablbl", "abfrl_multi_store", "ablbl_multi_store"].includes(String(estimate?.formatProfileCode ?? "").trim().toLowerCase()) ||
+    ["abfrl", "ablbl", "abfrl_multi_store", "ablbl_multi_store"].includes(String(estimate?.clientFormat ?? "").trim().toLowerCase());
+
+  if (isClientAbfrl || isEstAbfrl) {
+    return ESTIMATE_FORMAT_PROFILES.ABLBL;
+  }
+
+  // 2. Wakefit and other retail customers -> existing Retail Store format
+  const isClientRetail =
+    clientName.includes("wakefit") ||
+    clientGroup.includes("wakefit") ||
+    isRetailSingleStoreFormat(client?.defaultFormatProfileCode) ||
+    isRetailSingleStoreFormat(client?.format);
+
+  const isEstRetail =
+    isRetailSingleStoreFormat(estimate?.formatProfileCode) ||
+    isRetailSingleStoreFormat(estimate?.clientFormat);
+
+  if (isClientRetail || isEstRetail) {
+    return ESTIMATE_FORMAT_PROFILES.RETAIL_SINGLE_STORE;
+  }
+
+  // 3. Other customers -> their configured format profile or existing default format
+  const explicitClientProfile = client?.defaultFormatProfileCode || client?.format;
+  if (explicitClientProfile && explicitClientProfile !== "normal") {
+    return getEstimateFormatProfile(explicitClientProfile);
+  }
+
+  const explicitEstProfile = estimate?.formatProfileCode || estimate?.clientFormat;
+  if (explicitEstProfile && explicitEstProfile !== "normal") {
+    return getEstimateFormatProfile(explicitEstProfile);
+  }
+
+  return ESTIMATE_FORMAT_PROFILES.normal;
+}

@@ -46,7 +46,7 @@ export function normalizeFormatMode(format: unknown): "normal" | "ABLBL" {
 export function displayFormatLabel(format: unknown): string {
   if (isAblblFormat(format)) return "ABLBL";
   if (String(format || "").trim().toUpperCase() === "RETAIL_SINGLE_STORE") return "Retail Store";
-  return "Standard / Normal";
+  return "Standard";
 }
 
 function titleToken(token: string, index: number): string {

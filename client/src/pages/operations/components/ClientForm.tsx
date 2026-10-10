@@ -80,7 +80,7 @@ const ClientForm: React.FC<ClientFormProps> = ({ value, onChange }) => {
       </Row>
       <Row label="Billing Format Setting">
         <select value={value.formatSetting} onChange={e => set("formatSetting", e.target.value)} className={`${cls} font-bold`}>
-          <option value="normal">Standard / Normal</option>
+          <option value="normal">Standard Corporate</option>
           <option value="ABLBL">ABLBL</option>
         </select>
       </Row>

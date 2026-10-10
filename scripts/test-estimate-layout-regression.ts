@@ -52,12 +52,11 @@ async function runRegressionTests() {
   );
 
   // Assertion: Column labels
-  assert(wakefitHtml.includes("Print Size"), "Must contain 'Print Size' label");
   assert(wakefitHtml.includes("(W)"), "Must contain '(W)' label");
   assert(wakefitHtml.includes("(H)"), "Must contain '(H)' label");
   assert(!wakefitHtml.includes(">Size (W)<"), "Must NOT contain old 'Size (W)' heading");
   assert(!wakefitHtml.includes(">Size (H)<"), "Must NOT contain old 'Size (H)' heading");
-  console.log("  ✓ PASS: Column headings 'Print Size (W)' and 'Print Size (H)' rendered without old labels.");
+  console.log("  ✓ PASS: Column headings '(W)' and '(H)' rendered without old labels.");
 
   // Assertion: Subject Line
   assert(wakefitHtml.includes(`Subject : ${wakefitEst.subject || wakefitEst.title}`), "Subject line must be present");

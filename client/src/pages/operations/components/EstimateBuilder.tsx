@@ -4,7 +4,7 @@ import { createPortal } from "react-dom";
 import { Link } from "wouter";
 import { Archive, Building2, Check, CheckCircle2, CheckSquare, ChevronDown, ChevronRight, ClipboardPaste, Copy, CreditCard as Edit3, Download, Eye, FilePlus2, FileSpreadsheet, FileText, FileUp, Filter, FolderOpen, MoreHorizontal, MoveDown, MoveUp, Pencil, Plus, Printer, Receipt, Redo2, Search, Square, Trash, Undo2, X } from "lucide-react";
 import { displayFormatLabel, isAblblFormat, normalizeDisplayName, normalizeFormatMode, normalizeGstinPan } from "../../../../../shared/textFormat";
-import { getEstimateFormatProfile, isRetailSingleStoreFormat, isMultiStoreFormat } from "../../../../../shared/estimateProfiles";
+import { getEstimateFormatProfile, isRetailSingleStoreFormat, isMultiStoreFormat, resolveCustomerFormatProfile } from "../../../../../shared/estimateProfiles";
 import { formatProductDetails, sameDisplayText } from "../../../../../shared/productDetails";
 import { formatCurrency } from "../utils/formatters";
 import ProductForm, { type ProductFormValue, emptyProductFormValue } from "./ProductForm";
@@ -3129,31 +3129,40 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                               autoFocus={!editingEstimateId}
                             />
                           </label>
-                          <label>
-                            <span>Estimate Type</span>
-                            <select
-                              value={eIsRetailSingleStore ? "RETAIL_SINGLE_STORE" : normalizeFormatMode(estFormat)}
-                              onChange={(e) => {
-                                const nextVal = e.target.value;
-                                if (nextVal === "RETAIL_SINGLE_STORE") {
-                                  setEstFormat("RETAIL_SINGLE_STORE");
-                                  setEstFormatProfileCode?.("RETAIL_SINGLE_STORE");
-                                } else if (isAblblFormat(nextVal)) {
-                                  setEstFormat("ABLBL");
-                                  setEstFormatProfileCode?.("ABLBL");
-                                  if (!estAbfrlProjectType) setEstAbfrlProjectType("SELEX");
-                                } else {
-                                  const normalized = normalizeFormatMode(nextVal);
-                                  setEstFormat(normalized);
-                                  setEstFormatProfileCode?.(normalized);
-                                }
-                              }}
-                            >
-                              <option value="normal">Normal / Non-ABFRL</option>
-                              <option value="RETAIL_SINGLE_STORE">Retail (Single Store)</option>
-                              <option value="ABLBL">ABFRL Estimate</option>
-                            </select>
-                          </label>
+                          {(() => {
+                            const selectedClientObj = clients.find(c => c.id === Number(estClientId));
+                            const autoClientProfile = selectedClientObj ? resolveCustomerFormatProfile(null, selectedClientObj) : null;
+                            const isProfileLocked = Boolean(autoClientProfile && autoClientProfile.code !== "normal");
+                            return (
+                              <label>
+                                <span>Estimate Type{isProfileLocked ? " (Customer Profile)" : ""}</span>
+                                <select
+                                  disabled={isProfileLocked}
+                                  title={isProfileLocked ? `Automatically determined by ${selectedClientObj?.name} format profile` : undefined}
+                                  value={eIsRetailSingleStore ? "RETAIL_SINGLE_STORE" : normalizeFormatMode(estFormat)}
+                                  onChange={(e) => {
+                                    const nextVal = e.target.value;
+                                    if (nextVal === "RETAIL_SINGLE_STORE") {
+                                      setEstFormat("RETAIL_SINGLE_STORE");
+                                      setEstFormatProfileCode?.("RETAIL_SINGLE_STORE");
+                                    } else if (isAblblFormat(nextVal)) {
+                                      setEstFormat("ABLBL");
+                                      setEstFormatProfileCode?.("ABLBL");
+                                      if (!estAbfrlProjectType) setEstAbfrlProjectType("SELEX");
+                                    } else {
+                                      const normalized = normalizeFormatMode(nextVal);
+                                      setEstFormat(normalized);
+                                      setEstFormatProfileCode?.(normalized);
+                                    }
+                                  }}
+                                >
+                                  <option value="normal">Standard Corporate</option>
+                                  <option value="RETAIL_SINGLE_STORE">Retail Store (Single Store)</option>
+                                  <option value="ABLBL">ABFRL Custom Format</option>
+                                </select>
+                              </label>
+                            );
+                          })()}
                           <label>
                             <span>Brand{eIsAbfrl ? " *" : ""}</span>
                             <select

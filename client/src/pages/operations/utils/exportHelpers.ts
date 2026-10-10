@@ -1,7 +1,7 @@
 import { unzipSync, zipSync } from "fflate";
 import { isServiceEstimateItem, resolveServiceProduct, serviceProductLabel } from "../../../../../shared/serviceProductDisplay";
 import { orderedEstimateItems, orderedStoreKeysFromItems } from "./estimateOrdering";
-import { getEstimateFormatProfile } from "../../../../../shared/estimateProfiles";
+import { getEstimateFormatProfile, resolveCustomerFormatProfile } from "../../../../../shared/estimateProfiles";
 
 export const downloadBlob = (blob: Blob, fileName: string) => {
   const a = document.createElement("a");
@@ -393,7 +393,7 @@ export async function exportEstimateToExcel(
   let grandCgst = 0;
   let grandIgst = 0;
 
-  const formatProfile = getEstimateFormatProfile(estimate.formatProfileCode || estimate.clientFormat);
+  const formatProfile = resolveCustomerFormatProfile(estimate, { name: clientName });
   const isAbfrlFormat = formatProfile.code === "ABLBL" || formatProfile.printLayout === "abfrl_grouped";
   const isRetailStoreFormat = formatProfile.code === "RETAIL_SINGLE_STORE" || formatProfile.printLayout === "retail_single_store";
   const showMaterialCostRow = isAbfrlFormat && !isRetailStoreFormat;

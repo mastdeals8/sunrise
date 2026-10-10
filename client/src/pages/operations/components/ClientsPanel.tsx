@@ -196,7 +196,7 @@ const ClientsPanel: React.FC<ClientsPanelProps> = ({
           </div>
           <select value={filterFormat} onChange={e => setFilterFormat(e.target.value)} className="px-2 py-1 border border-slate-200 rounded-md bg-white text-xs">
             <option value="all">All formats</option>
-            <option value="normal">Standard / Normal</option>
+            <option value="normal">Standard Corporate</option>
             <option value="ABLBL">ABLBL</option>
           </select>
           <label className="flex items-center gap-1 text-xs text-slate-600 cursor-pointer select-none">
@@ -387,7 +387,7 @@ const ClientsPanel: React.FC<ClientsPanelProps> = ({
             <Field label="PAN"><input value={editClient.pan || ""} onChange={e => setEditClient({ ...editClient, pan: e.target.value })} className="input-compact" /></Field>
             <Field label="Format">
               <select value={normalizeFormatMode(editClient.format)} onChange={e => setEditClient({ ...editClient, format: e.target.value })} className="input-compact">
-                <option value="normal">Standard / Normal</option>
+                <option value="normal">Standard Corporate</option>
                 <option value="ABLBL">ABLBL</option>
               </select>
             </Field>

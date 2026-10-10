@@ -7,7 +7,7 @@ import { isServiceEstimateItem, resolveServiceProduct, serviceProductLabel } fro
 import { companyAssetUrl } from "../utils/companyAssets";
 import type { Estimate, EstimateItem, Store, Client, Brand, Product } from "../pages/operations/types";
 import { orderedEstimateItems, orderedStoreKeysFromItems } from "../pages/operations/utils/estimateOrdering";
-import { getEstimateFormatProfile } from "../../../shared/estimateProfiles";
+import { getEstimateFormatProfile, resolveCustomerFormatProfile } from "../../../shared/estimateProfiles";
 
 export interface EstimateDocumentProps {
   estimate: Estimate;
@@ -360,8 +360,11 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
     </tr>
   );
 
-  // Determine estimate format from existing format profile/configuration
-  const formatProfile = getEstimateFormatProfile(est.formatProfileCode || est.clientFormat);
+  // The estimate's assigned customer format profile automatically determines the template:
+  // - ABFRL -> existing ABFRL custom format
+  // - Wakefit and other retail customers -> existing Retail Store format
+  // - Other customers -> configured format profile or existing default format
+  const formatProfile = resolveCustomerFormatProfile(est, targetClient);
   const isAbfrlFormat = formatProfile.code === "ABLBL" || formatProfile.printLayout === "abfrl_grouped";
   const isRetailStoreFormat = formatProfile.code === "RETAIL_SINGLE_STORE" || formatProfile.printLayout === "retail_single_store";
   const showMaterialCostRow = isAbfrlFormat && !isRetailStoreFormat;
@@ -618,7 +621,7 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
           </tr>
         ))}
         {showMaterialCostRow && (
-          <tr className="estimate-store-total-keep" data-pdf-row style={yellowRow}>
+          <tr className="estimate-store-total-keep" data-pdf-row data-pdf-material-cost-row="true" style={yellowRow}>
             <td colSpan={10} style={{ ...cellBase, fontWeight: 700, padding: "4px 6px" }}>Total Material Cost</td>
             <td style={{ ...cellRight, fontWeight: 700 }}>{num(sec.materialBase)}</td>
             <td style={{ ...cellCenter, fontWeight: 700 }}>{isIgst ? "18%" : "18%"}</td>
