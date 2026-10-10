@@ -140,7 +140,7 @@ interface OperationsPageProps {
 }
 
 const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, focusSubtitle }) => {
-  const { token, user } = useAuth();
+  const { token, user, activeCompanyId } = useAuth();
   const globalDate = useGlobalDate();
   const [, setLocation] = useLocation();
   const [activeTab, setActiveTab] = useState<OpTab>(getInitialTab(focusTab));
@@ -163,7 +163,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     fetchLedgerData,
     fetchEstimates,
     fetchData,
-  } = useOperationsData(token, globalDate.range);
+  } = useOperationsData(token, globalDate.range, activeCompanyId);
 
   // Sync active tab with URL hash so sidebar deep links work — disabled in
   // focus mode where the URL path identifies the panel instead of a hash.

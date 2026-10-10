@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useAuth } from "../contexts/AuthContext";
 import { isBoltMode } from "../lib/supabase";
-import { fetchUsers as fetchUsersApi } from "../lib/api";
+import { fetchUsers as fetchUsersApi, createUser, apiFetch } from "../lib/api";
 import {
   Users as UsersIcon,
   Plus,
@@ -81,7 +81,7 @@ const emptyForm: UserFormState = {
 };
 
 const AdminPage: React.FC = () => {
-  const { token, user: me } = useAuth();
+  const { token, user: me, activeCompanyId } = useAuth();
   const [users, setUsers] = useState<UserRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
@@ -102,9 +102,7 @@ const AdminPage: React.FC = () => {
         setUsers(data as any[]);
         return;
       }
-      const res = await fetch("/api/users", {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const res = await apiFetch("/api/users", token);
       if (res.ok) setUsers(await res.json());
     } catch (err) {
       console.error("fetch users", err);
@@ -169,12 +167,8 @@ const AdminPage: React.FC = () => {
           isActive: form.isActive,
         };
         if (form.password) payload.password = form.password;
-        const res = await fetch(`/api/users/${editId}`, {
+        const res = await apiFetch(`/api/users/${editId}`, token, {
           method: "PUT",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
           body: JSON.stringify(payload),
         });
         if (!res.ok) {
@@ -194,25 +188,14 @@ const AdminPage: React.FC = () => {
           name: form.name,
           password: form.password,
           role: form.role,
-          phone: form.phone || null,
-          employeeId: form.employeeId || null,
-          department: form.department || null,
-          designation: form.designation || null,
+          phone: form.phone || undefined,
+          employeeId: form.employeeId || undefined,
+          department: form.department || undefined,
+          designation: form.designation || undefined,
           isActive: form.isActive,
+          companyId: activeCompanyId,
         };
-        const res = await fetch(`/api/auth/register`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify(payload),
-        });
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({ message: "Create failed" }));
-          showMsg("err", err.message || "Create failed");
-          return;
-        }
+        await createUser(token, payload);
         showMsg("ok", "User created");
       }
       closeForm();

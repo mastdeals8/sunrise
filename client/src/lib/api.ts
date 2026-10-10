@@ -7,7 +7,7 @@
  * Write operations always go through Express (or will become Edge Functions).
  * In Bolt mode, writes gracefully fail — the app stays in read-only mode.
  */
-import { supabase, isBoltMode } from "./supabase";
+import { supabase, isBoltMode, hasSupabaseConfig } from "./supabase";
 
 // ─── Signed URL session cache ─────────────────────────────────────────────────
 // Signed URLs for the private execution-documents bucket are valid for 2 hours
@@ -31,11 +31,11 @@ function _cacheSignedUrl(path: string, url: string): void {
   _signedUrlCache.set(path, { url, expiresAt: Date.now() + SIGNED_URL_TTL_S * 1000 });
 }
 
-// ─── Bolt safety interceptor ─────────────────────────────────────────────────
-// In Bolt mode, any stray /api/* fetch call would silently receive index.html
-// and then fail with "Unexpected token '<'" when parsed as JSON.
-// Intercept at module load so the error is immediate and clearly labelled.
-if (isBoltMode && typeof window !== "undefined") {
+// ─── Fetch interceptor ───────────────────────────────────────────────────────
+// In Bolt mode, block /api/* calls so they do not silently fail on index.html.
+// In Express mode, guarantee X-Company-Id is always sent for /api/* calls so that
+// queries and writes are strictly scoped to the active workspace.
+if (typeof window !== "undefined") {
   const _origFetch = window.fetch;
   window.fetch = function (input: RequestInfo | URL, init?: RequestInit) {
     const url =
@@ -44,11 +44,34 @@ if (isBoltMode && typeof window !== "undefined") {
         : input instanceof URL
           ? input.href
           : (input as Request).url;
-    if (url.startsWith("/api/")) {
+
+    if (isBoltMode && url.startsWith("/api/")) {
       const err = new Error(`[Bolt] Blocked legacy /api call: ${url}`);
       console.error(err);
       return Promise.reject(err);
     }
+
+    if (!isBoltMode && (url.startsWith("/api/") || url.includes("/api/"))) {
+      const activeId = getActiveCompanyId();
+      let headers: Headers;
+      if (init?.headers) {
+        headers = new Headers(init.headers);
+      } else if (input instanceof Request) {
+        headers = new Headers(input.headers);
+      } else {
+        headers = new Headers();
+      }
+
+      if (!headers.has("X-Company-Id") && activeId) {
+        headers.set("X-Company-Id", String(activeId));
+      }
+
+      return _origFetch.call(window, input, {
+        ...init,
+        headers,
+      });
+    }
+
     return _origFetch.call(window, input, init);
   };
 }
@@ -295,7 +318,8 @@ export async function fetchClients(token: string | null) {
     const res = await apiFetch("/api/operations/clients", token);
     return res.ok ? res.json() : [];
   }
-  return sbSelect("clients", (q) => q.select("*").order("name"));
+  const companyId = getActiveCompanyId();
+  return sbSelect("clients", (q) => q.select("*").eq("company_id", companyId).order("name"));
 }
 
 export async function fetchBrands(token: string | null) {
@@ -303,7 +327,8 @@ export async function fetchBrands(token: string | null) {
     const res = await apiFetch("/api/operations/brands", token);
     return res.ok ? res.json() : [];
   }
-  return sbSelect("brands", (q) => q.select("*").order("name"));
+  const companyId = getActiveCompanyId();
+  return sbSelect("brands", (q) => q.select("*").eq("company_id", companyId).order("name"));
 }
 
 export async function fetchStores(token: string | null) {
@@ -311,7 +336,8 @@ export async function fetchStores(token: string | null) {
     const res = await apiFetch("/api/operations/stores", token);
     return res.ok ? res.json() : [];
   }
-  return sbSelect("stores", (q) => q.select("*").order("name"));
+  const companyId = getActiveCompanyId();
+  return sbSelect("stores", (q) => q.select("*").eq("company_id", companyId).order("name"));
 }
 
 export async function fetchProducts(token: string | null) {
@@ -319,7 +345,8 @@ export async function fetchProducts(token: string | null) {
     const res = await apiFetch("/api/operations/products", token);
     return res.ok ? res.json() : [];
   }
-  return sbSelect("products", (q) => q.select("*").order("name"));
+  const companyId = getActiveCompanyId();
+  return sbSelect("products", (q) => q.select("*").eq("company_id", companyId).order("name"));
 }
 
 export async function fetchMaterialCodes(token: string | null) {
@@ -361,8 +388,9 @@ export async function fetchEstimates(token: string | null) {
     const res = await apiFetch("/api/operations/estimates", token);
     return res.ok ? res.json() : [];
   }
+  const companyId = getActiveCompanyId();
   return sbSelect("estimates", (q) =>
-    q.select("*").order("created_at", { ascending: false })
+    q.select("*").eq("company_id", companyId).order("created_at", { ascending: false })
   );
 }
 
@@ -381,8 +409,9 @@ export async function fetchDeliveryChallans(token: string | null) {
     const res = await apiFetch("/api/operations/delivery-challans", token);
     return res.ok ? await attachPhotoSignedUrls(await res.json()) : [];
   }
+  const companyId = getActiveCompanyId();
   const rows = await sbSelect<any>("delivery_challans", (q) =>
-    q.select("*").order("created_at", { ascending: false })
+    q.select("*").eq("company_id", companyId).order("created_at", { ascending: false })
   );
   // Register and project-list reads are metadata-only. Signing every historical
   // WCC image here turns one list request into many sequential Storage calls.
@@ -481,8 +510,9 @@ export async function fetchInvoices(token: string | null) {
     const res = await apiFetch("/api/finance/invoices", token);
     return res.ok ? res.json() : [];
   }
+  const companyId = getActiveCompanyId();
   return sbSelect("invoices", (q) =>
-    q.select("*").order("created_at", { ascending: false })
+    q.select("*").eq("company_id", companyId).order("created_at", { ascending: false })
   );
 }
 
@@ -491,8 +521,9 @@ export async function fetchPayments(token: string | null) {
     const res = await apiFetch("/api/finance/payments", token);
     return res.ok ? res.json() : [];
   }
+  const companyId = getActiveCompanyId();
   return sbSelect("payments", (q) =>
-    q.select("*").order("created_at", { ascending: false })
+    q.select("*").eq("company_id", companyId).order("created_at", { ascending: false })
   );
 }
 
@@ -501,7 +532,8 @@ export async function fetchAccounts(token: string | null) {
     const res = await apiFetch("/api/finance/accounts", token);
     return res.ok ? res.json() : [];
   }
-  return sbSelect("chart_of_accounts", (q) => q.select("*").order("name"));
+  const companyId = getActiveCompanyId();
+  return sbSelect("chart_of_accounts", (q) => q.select("*").eq("company_id", companyId).order("name"));
 }
 
 export async function fetchLedgerSummary(token: string | null) {
@@ -556,6 +588,82 @@ export async function fetchUsers(token: string | null) {
       .eq("is_active", true)
       .order("name")
   );
+}
+
+export async function createUser(
+  token: string | null,
+  payload: {
+    username: string;
+    email: string;
+    name: string;
+    password: string;
+    role?: string;
+    companyId?: number;
+    companyRole?: string;
+    phone?: string;
+    department?: string;
+    designation?: string;
+    employeeId?: string;
+    isActive?: boolean;
+  }
+) {
+  if (!isBoltMode) {
+    const res = await apiFetch("/api/users", token, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.message || "Failed to create user");
+    }
+    return res.json();
+  }
+
+  // Bolt / Supabase mode
+  if (!hasSupabaseConfig) throw new Error("Supabase is not configured.");
+  const { data: authData, error: authErr } = await supabase.auth.signUp({
+    email: payload.email,
+    password: payload.password,
+    options: {
+      data: {
+        name: payload.name,
+        username: payload.username,
+        role: payload.role || "staff",
+      },
+    },
+  });
+  if (authErr) throw new Error(authErr.message);
+
+  const { data: newUser, error: uErr } = await supabase
+    .from("users")
+    .insert({
+      username: payload.username,
+      email: payload.email,
+      password: "SUPABASE_MANAGED",
+      name: payload.name,
+      role: payload.role || "staff",
+      phone: payload.phone || null,
+      department: payload.department || null,
+      designation: payload.designation || null,
+      employee_id: payload.employeeId || null,
+      auth_user_id: authData?.user?.id || null,
+      is_active: payload.isActive !== false,
+    })
+    .select()
+    .single();
+
+  if (uErr) throw new Error(uErr.message);
+
+  const targetCompanyId = payload.companyId || getActiveCompanyId();
+  const targetCompanyRole = payload.companyRole || "company_user";
+  await supabase.from("company_users").insert({
+    user_id: newUser.id,
+    company_id: targetCompanyId,
+    role: targetCompanyRole,
+    is_default: true,
+  });
+
+  return { user: newUser, companyId: targetCompanyId, role: targetCompanyRole };
 }
 
 export async function fetchAttendance(token: string | null) {

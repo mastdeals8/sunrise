@@ -12,6 +12,8 @@ import {
   fetchDeliveryChallans,
   fetchInvoices,
   fetchLedgerSummary,
+  apiFetch,
+  getActiveCompanyId,
 } from "../../../lib/api";
 
 export interface Invoice {
@@ -43,7 +45,7 @@ export interface LedgerSummary {
   status: string;
 }
 
-export const useOperationsData = (token?: string | null, globalRange?: DateRange) => {
+export const useOperationsData = (token?: string | null, globalRange?: DateRange, companyId?: number) => {
   const [loading, setLoading] = useState(true);
   const [clients, setClients] = useState<Client[]>([]);
   const [brands, setBrands] = useState<Brand[]>([]);
@@ -55,7 +57,7 @@ export const useOperationsData = (token?: string | null, globalRange?: DateRange
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [ledgerSummary, setLedgerSummary] = useState<LedgerSummary[]>([]);
 
-  const headers = { Authorization: `Bearer ${token}` };
+  const effectiveCompanyId = companyId ?? getActiveCompanyId();
 
   const applyRange = <T,>(rows: T[], dateKey: (r: T) => string | undefined) =>
     globalRange
@@ -77,20 +79,20 @@ export const useOperationsData = (token?: string | null, globalRange?: DateRange
       }
 
       const [invRes, sumRes] = await Promise.all([
-        fetch("/api/finance/invoices", { headers }),
-        fetch("/api/finance/ledgers/summary", { headers }),
+        apiFetch("/api/finance/invoices", token ?? null),
+        apiFetch("/api/finance/ledgers/summary", token ?? null),
       ]);
       if (invRes.ok) {
         const rows = await invRes.json();
         setInvoices(
-          applyRange(rows, (r: Invoice) => r.date || r.createdAt)
+          applyRange(rows, (r: Invoice) => r.date || (r as any).createdAt)
         );
       }
       if (sumRes.ok) setLedgerSummary(await sumRes.json());
     } catch (err) {
       console.error("Error loading ledger data:", err);
     }
-  }, [token]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [token, effectiveCompanyId, globalRange]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const fetchEstimatesOnly = useCallback(async () => {
     try {
@@ -105,7 +107,7 @@ export const useOperationsData = (token?: string | null, globalRange?: DateRange
     } catch (err) {
       console.error("Error loading estimates:", err);
     }
-  }, [token, globalRange]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [token, effectiveCompanyId, globalRange]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const fetchData = useCallback(async () => {
     try {
@@ -113,9 +115,6 @@ export const useOperationsData = (token?: string | null, globalRange?: DateRange
       const t0 = performance.now();
 
       if (isBoltMode) {
-        // Ledger data is independent of the operations registers. Start it at
-        // the same time rather than adding its invoice/summary requests to the
-        // end of the critical path.
         const ledgerPromise = fetchLedgerData();
         const [c, b, s, p, mc, e, dc] = await Promise.all([
           fetchClients(token ?? null),
@@ -147,13 +146,13 @@ export const useOperationsData = (token?: string | null, globalRange?: DateRange
       }
 
       const [cRes, bRes, sRes, pRes, mcRes, eRes, dRes] = await Promise.all([
-        fetch("/api/operations/clients", { headers }),
-        fetch("/api/operations/brands", { headers }),
-        fetch("/api/operations/stores", { headers }),
-        fetch("/api/operations/products", { headers }),
-        fetch("/api/operations/material-codes", { headers }).catch(() => null),
-        fetch("/api/operations/estimates", { headers }),
-        fetch("/api/operations/delivery-challans", { headers }),
+        apiFetch("/api/operations/clients", token ?? null),
+        apiFetch("/api/operations/brands", token ?? null),
+        apiFetch("/api/operations/stores", token ?? null),
+        apiFetch("/api/operations/products", token ?? null),
+        apiFetch("/api/operations/material-codes", token ?? null).catch(() => null),
+        apiFetch("/api/operations/estimates", token ?? null),
+        apiFetch("/api/operations/delivery-challans", token ?? null),
       ]);
 
       if (cRes.ok) setClients(await cRes.json());
@@ -182,10 +181,28 @@ export const useOperationsData = (token?: string | null, globalRange?: DateRange
     } finally {
       setLoading(false);
     }
-  }, [fetchLedgerData, globalRange, token]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [fetchLedgerData, globalRange, token, effectiveCompanyId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     fetchData();
+  }, [fetchData]);
+
+  // Handle active company switches across the application
+  useEffect(() => {
+    const handleSwitch = () => {
+      setClients([]);
+      setBrands([]);
+      setStores([]);
+      setProducts([]);
+      setMaterialCodes([]);
+      setEstimates([]);
+      setChallans([]);
+      setInvoices([]);
+      setLedgerSummary([]);
+      fetchData();
+    };
+    window.addEventListener("company-switched", handleSwitch);
+    return () => window.removeEventListener("company-switched", handleSwitch);
   }, [fetchData]);
 
   return {

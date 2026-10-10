@@ -11,6 +11,7 @@ import {
   Sparkles,
   Users,
   Plus,
+  UserPlus,
   ShieldCheck,
   CheckCircle2,
   Trash2,
@@ -30,6 +31,7 @@ import {
   fetchCompanyUsers,
   addCompanyUser,
   removeCompanyUser,
+  createUser,
 } from "../lib/api";
 
 interface SettingsState {
@@ -98,6 +100,93 @@ function getCurrentFyLabel(): string {
   const startYear = d.getMonth() < 3 ? y - 1 : y;
   return `${String(startYear).slice(-2)}-${String(startYear + 1).slice(-2)}`;
 }
+
+interface SettingsFieldProps {
+  label: string;
+  value: string;
+  onChange: (val: string) => void;
+  type?: string;
+  rows?: number;
+  placeholder?: string;
+  disabled?: boolean;
+}
+
+const SettingsField: React.FC<SettingsFieldProps> = ({
+  label,
+  value,
+  onChange,
+  type = "text",
+  rows,
+  placeholder,
+  disabled,
+}) => (
+  <div>
+    <label className="text-xs font-bold uppercase text-slate-600">{label}</label>
+    {rows ? (
+      <textarea
+        rows={rows}
+        value={value}
+        placeholder={placeholder}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full border border-slate-200 rounded-md px-3 py-2 text-sm mt-1 focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 outline-hidden font-medium"
+        disabled={disabled}
+      />
+    ) : (
+      <input
+        type={type}
+        value={value}
+        placeholder={placeholder}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full border border-slate-200 rounded-md px-3 py-2 text-sm mt-1 focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 outline-hidden font-medium"
+        disabled={disabled}
+      />
+    )}
+  </div>
+);
+
+interface SettingsAssetFieldProps {
+  label: string;
+  value: string;
+  hint: string;
+  disabled: boolean;
+  onUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
+}
+
+const SettingsAssetField: React.FC<SettingsAssetFieldProps> = ({
+  label,
+  value,
+  hint,
+  disabled,
+  onUpload,
+}) => (
+  <div className="border border-slate-200 rounded-lg p-3.5 bg-white shadow-2xs">
+    <div className="flex items-start justify-between gap-3">
+      <div className="min-w-0">
+        <label className="text-xs font-bold uppercase text-slate-700">{label}</label>
+        <p className="text-xs text-slate-500 mt-0.5">{hint}</p>
+        <div className="mt-2 flex items-center gap-2">
+          {value ? (
+            <img src={value} alt={label} className="h-10 w-auto max-w-32 object-contain border border-slate-200 rounded bg-slate-50 p-1" />
+          ) : (
+            <span className="text-[11px] text-slate-400 italic">No image uploaded</span>
+          )}
+          <p className="text-[10px] text-slate-400 truncate font-mono max-w-xs">{value}</p>
+        </div>
+      </div>
+      <label className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border text-xs font-semibold shrink-0 transition-colors ${!disabled ? "cursor-pointer bg-slate-50 hover:bg-orange-50 hover:text-orange-600 hover:border-orange-200 text-slate-700 border-slate-200 shadow-2xs" : "cursor-not-allowed bg-slate-50 text-slate-400 border-slate-200"}`}>
+        <Upload className="w-3.5 h-3.5" />
+        Upload
+        <input
+          type="file"
+          accept="image/png,image/jpeg,image/webp"
+          className="hidden"
+          disabled={disabled}
+          onChange={onUpload}
+        />
+      </label>
+    </div>
+  </div>
+);
 
 const SettingsPage: React.FC = () => {
   const { token, user, activeCompanyId, availableCompanies, switchCompany, refreshCompanies } = useAuth();
@@ -381,60 +470,62 @@ const SettingsPage: React.FC = () => {
     }
   };
 
-  const Field: React.FC<{ label: string; k: keyof SettingsState; type?: string; rows?: number; placeholder?: string }> = ({ label, k, type = "text", rows, placeholder }) => (
-    <div>
-      <label className="text-xs font-bold uppercase text-slate-600">{label}</label>
-      {rows ? (
-        <textarea
-          rows={rows}
-          value={form[k]}
-          placeholder={placeholder}
-          onChange={(e) => setForm({ ...form, [k]: e.target.value })}
-          className="w-full border border-slate-200 rounded-md px-3 py-2 text-sm mt-1 focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 outline-hidden"
-          disabled={!isAdmin}
-        />
-      ) : (
-        <input
-          type={type}
-          value={form[k]}
-          placeholder={placeholder}
-          onChange={(e) => setForm({ ...form, [k]: e.target.value })}
-          className="w-full border border-slate-200 rounded-md px-3 py-2 text-sm mt-1 focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 outline-hidden"
-          disabled={!isAdmin}
-        />
-      )}
-    </div>
-  );
+  const updateField = (k: keyof SettingsState) => (val: string) => {
+    setForm((prev) => ({ ...prev, [k]: val }));
+  };
 
-  const AssetField: React.FC<{ label: string; k: "companyLogoPath" | "signatureStampPath"; hint: string }> = ({ label, k, hint }) => (
-    <div className="border border-slate-200 rounded-lg p-3.5 bg-white shadow-2xs">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <label className="text-xs font-bold uppercase text-slate-700">{label}</label>
-          <p className="text-xs text-slate-500 mt-0.5">{hint}</p>
-          <div className="mt-2 flex items-center gap-2">
-            {form[k] ? (
-              <img src={form[k]} alt={label} className="h-10 w-auto max-w-32 object-contain border border-slate-200 rounded bg-slate-50 p-1" />
-            ) : (
-              <span className="text-[11px] text-slate-400 italic">No image uploaded</span>
-            )}
-            <p className="text-[10px] text-slate-400 truncate font-mono max-w-xs">{form[k]}</p>
-          </div>
-        </div>
-        <label className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border text-xs font-semibold shrink-0 transition-colors ${isAdmin ? "cursor-pointer bg-slate-50 hover:bg-orange-50 hover:text-orange-600 hover:border-orange-200 text-slate-700 border-slate-200 shadow-2xs" : "cursor-not-allowed bg-slate-50 text-slate-400 border-slate-200"}`}>
-          <Upload className="w-3.5 h-3.5" />
-          Upload
-          <input
-            type="file"
-            accept="image/png,image/jpeg,image/webp"
-            className="hidden"
-            disabled={!isAdmin}
-            onChange={(e) => uploadAsset(e, k)}
-          />
-        </label>
-      </div>
-    </div>
-  );
+  const [showNewUserModal, setShowNewUserModal] = useState(false);
+  const [newUserForm, setNewUserForm] = useState({
+    name: "",
+    username: "",
+    email: "",
+    password: "",
+    companyId: selectedCompanyId,
+    companyRole: "company_user",
+    role: "staff",
+    phone: "",
+  });
+  const [newUserCreating, setNewUserCreating] = useState(false);
+
+  const handleCreateNewUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newUserForm.name.trim() || !newUserForm.username.trim() || !newUserForm.email.trim() || !newUserForm.password) {
+      setMsg({ kind: "err", text: "Please fill in all required fields." });
+      return;
+    }
+    setNewUserCreating(true);
+    try {
+      await createUser(token, {
+        name: newUserForm.name.trim(),
+        username: newUserForm.username.trim(),
+        email: newUserForm.email.trim(),
+        password: newUserForm.password,
+        companyId: Number(newUserForm.companyId || selectedCompanyId),
+        companyRole: newUserForm.companyRole,
+        role: newUserForm.role || "staff",
+        phone: newUserForm.phone.trim() || undefined,
+      });
+      await loadCompanyUsersList(selectedCompanyId);
+      await loadAllSystemUsers();
+      setShowNewUserModal(false);
+      setNewUserForm({
+        name: "",
+        username: "",
+        email: "",
+        password: "",
+        companyId: selectedCompanyId,
+        companyRole: "company_user",
+        role: "staff",
+        phone: "",
+      });
+      setMsg({ kind: "ok", text: `User "${newUserForm.name}" created and assigned successfully!` });
+      setTimeout(() => setMsg(null), 4000);
+    } catch (err: any) {
+      setMsg({ kind: "err", text: err.message || "Failed to create user" });
+    } finally {
+      setNewUserCreating(false);
+    }
+  };
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto pb-12">
@@ -604,6 +695,18 @@ const SettingsPage: React.FC = () => {
                 </h3>
                 <p className="text-xs text-slate-500">Only assigned users can query or create business records in this workspace.</p>
               </div>
+              {isAdmin && (
+                <button
+                  onClick={() => {
+                    setNewUserForm((f) => ({ ...f, companyId: selectedCompanyId }));
+                    setShowNewUserModal(true);
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-lg text-xs shadow-xs"
+                >
+                  <UserPlus className="w-3.5 h-3.5 text-orange-400" />
+                  Create New User
+                </button>
+              )}
             </div>
 
             {/* Add User bar */}
@@ -777,14 +880,12 @@ const SettingsPage: React.FC = () => {
               <Building2 className="w-5 h-5 text-orange-600" />
               Company Entity Details
             </h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <Field label="Display / Trading Name" k="displayName" placeholder="e.g. Sunrise Media / Delhi Branch" />
-              <Field label="Legal Entity Name" k="legalName" placeholder="e.g. Sunrise Media Private Limited" />
-              <Field label="GSTIN" k="companyGstin" placeholder="e.g. 27AAAAA0000A1Z5" />
-              <Field label="PAN" k="companyPan" placeholder="e.g. AAAAA0000A" />
-              <div className="md:col-span-2">
-                <Field label="Registered Office Address" k="companyAddress" rows={2} placeholder="Full legal registered address" />
-              </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <SettingsField label="Company System Identifier Name" value={form.companyName} onChange={updateField("companyName")} placeholder="e.g. Delhi Company" disabled={!isAdmin} />
+              <SettingsField label="Display / Trading Name" value={form.displayName} onChange={updateField("displayName")} placeholder="e.g. Sunrise Media / Delhi Branch" disabled={!isAdmin} />
+              <SettingsField label="Legal Entity Name" value={form.legalName} onChange={updateField("legalName")} placeholder="e.g. Sunrise Media Private Limited" disabled={!isAdmin} />
+              <SettingsField label="GSTIN" value={form.companyGstin} onChange={updateField("companyGstin")} placeholder="e.g. 27AAAAA0000A1Z5" disabled={!isAdmin} />
+              <SettingsField label="PAN" value={form.companyPan} onChange={updateField("companyPan")} placeholder="e.g. AAAAA0000A" disabled={!isAdmin} />
               <div>
                 <label className="text-xs font-bold uppercase text-slate-600">State / State Code</label>
                 <select
@@ -793,7 +894,7 @@ const SettingsPage: React.FC = () => {
                     const code = getStateCode(e.target.value);
                     setForm({ ...form, companyStateCode: code });
                   }}
-                  className="w-full border border-slate-200 rounded-md px-3 py-2 text-sm mt-1 focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 outline-hidden"
+                  className="w-full border border-slate-200 rounded-md px-3 py-2 text-sm mt-1 focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 outline-hidden font-medium bg-white"
                   disabled={!isAdmin}
                 >
                   <option value="">Select state</option>
@@ -802,8 +903,11 @@ const SettingsPage: React.FC = () => {
                   ))}
                 </select>
               </div>
-              <Field label="Contact Mobile" k="companyMobile" placeholder="+91 9876543210" />
-              <Field label="Official Email" k="companyEmail" type="email" placeholder="billing@company.com" />
+              <div className="md:col-span-3">
+                <SettingsField label="Registered Office Address" value={form.companyAddress} onChange={updateField("companyAddress")} rows={2} placeholder="Full legal registered address" disabled={!isAdmin} />
+              </div>
+              <SettingsField label="Contact Mobile" value={form.companyMobile} onChange={updateField("companyMobile")} placeholder="+91 9876543210" disabled={!isAdmin} />
+              <SettingsField label="Official Email" value={form.companyEmail} onChange={updateField("companyEmail")} type="email" placeholder="billing@company.com" disabled={!isAdmin} />
             </div>
           </div>
 
@@ -814,17 +918,21 @@ const SettingsPage: React.FC = () => {
               Document Header & Footer (Pasteable Text)
             </h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <Field
+              <SettingsField
                 label="Document Header Text"
-                k="docHeaderText"
+                value={form.docHeaderText}
+                onChange={updateField("docHeaderText")}
                 rows={3}
                 placeholder="Top-of-page document header text or notice (e.g. TAX INVOICE / ESTIMATE OF WORK)"
+                disabled={!isAdmin}
               />
-              <Field
+              <SettingsField
                 label="Document Footer Text"
-                k="docFooterText"
+                value={form.docFooterText}
+                onChange={updateField("docFooterText")}
                 rows={3}
                 placeholder="Bottom-of-page footer text, registration notes or jurisdiction notice"
+                disabled={!isAdmin}
               />
             </div>
           </div>
@@ -836,8 +944,8 @@ const SettingsPage: React.FC = () => {
               Document Logos & Signatures
             </h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <AssetField label="Company Logo" k="companyLogoPath" hint="Rendered on estimate, invoice, DC, and packet PDFs." />
-              <AssetField label="Signature & Stamp Image" k="signatureStampPath" hint="Transparent PNG with signature and stamp for official invoices." />
+              <SettingsAssetField label="Company Logo" value={form.companyLogoPath} hint="Rendered on estimate, invoice, DC, and packet PDFs." disabled={!isAdmin} onUpload={(e) => uploadAsset(e, "companyLogoPath")} />
+              <SettingsAssetField label="Signature & Stamp Image" value={form.signatureStampPath} hint="Transparent PNG with signature and stamp for official invoices." disabled={!isAdmin} onUpload={(e) => uploadAsset(e, "signatureStampPath")} />
             </div>
           </div>
 
@@ -848,10 +956,10 @@ const SettingsPage: React.FC = () => {
               Bank Account Details (Printed on Invoices & Estimates)
             </h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <Field label="Bank Name" k="bankName" placeholder="e.g. HDFC Bank" />
-              <Field label="Account Number" k="bankAccountNumber" placeholder="e.g. 50200012345678" />
-              <Field label="IFSC Code" k="bankIfsc" placeholder="e.g. HDFC0001234" />
-              <Field label="Branch Location" k="bankBranch" placeholder="e.g. Andheri East, Mumbai" />
+              <SettingsField label="Bank Name" value={form.bankName} onChange={updateField("bankName")} placeholder="e.g. HDFC Bank" disabled={!isAdmin} />
+              <SettingsField label="Account Number" value={form.bankAccountNumber} onChange={updateField("bankAccountNumber")} placeholder="e.g. 50200012345678" disabled={!isAdmin} />
+              <SettingsField label="IFSC Code" value={form.bankIfsc} onChange={updateField("bankIfsc")} placeholder="e.g. HDFC0001234" disabled={!isAdmin} />
+              <SettingsField label="Branch Location" value={form.bankBranch} onChange={updateField("bankBranch")} placeholder="e.g. Andheri East, Mumbai" disabled={!isAdmin} />
             </div>
           </div>
 
@@ -862,18 +970,29 @@ const SettingsPage: React.FC = () => {
               Document Numbering & Calculation Defaults
             </h3>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              <Field label="Default GST %" k="defaultGstPercent" type="number" />
-              <Field label="Packing % (ABFRL)" k="defaultPacking" type="number" />
-              <Field label="Implementation % (ABFRL)" k="defaultImplementation" type="number" />
-              <Field label="Local Transport (₹)" k="defaultLocalTransport" type="number" />
-              <Field label="Outstation Rate (₹/KM)" k="defaultOutstationTransportRate" type="number" />
-              <Field label="Estimate Prefix" k="defaultEstimatePrefix" placeholder="e.g. SM/E or DEL/E" />
-              <Field label="Invoice Prefix" k="defaultInvoicePrefix" placeholder="e.g. SM or DEL" />
-              <Field label="Delivery Challan Prefix" k="defaultDcPrefix" placeholder="e.g. SM/DC or DEL/DC" />
+              <SettingsField label="Default GST %" value={form.defaultGstPercent} onChange={updateField("defaultGstPercent")} type="number" disabled={!isAdmin} />
+              <SettingsField label="Packing % (ABFRL)" value={form.defaultPacking} onChange={updateField("defaultPacking")} type="number" disabled={!isAdmin} />
+              <SettingsField label="Implementation % (ABFRL)" value={form.defaultImplementation} onChange={updateField("defaultImplementation")} type="number" disabled={!isAdmin} />
+              <SettingsField label="Local Transport (₹)" value={form.defaultLocalTransport} onChange={updateField("defaultLocalTransport")} type="number" disabled={!isAdmin} />
+              <SettingsField label="Outstation Rate (₹/KM)" value={form.defaultOutstationTransportRate} onChange={updateField("defaultOutstationTransportRate")} type="number" disabled={!isAdmin} />
+              <SettingsField label="Estimate Prefix" value={form.defaultEstimatePrefix} onChange={updateField("defaultEstimatePrefix")} placeholder="e.g. SM/E or DEL/E" disabled={!isAdmin} />
+              <SettingsField label="Invoice Prefix" value={form.defaultInvoicePrefix} onChange={updateField("defaultInvoicePrefix")} placeholder="e.g. SM or DEL" disabled={!isAdmin} />
+              <SettingsField label="Delivery Challan Prefix" value={form.defaultDcPrefix} onChange={updateField("defaultDcPrefix")} placeholder="e.g. SM/DC or DEL/DC" disabled={!isAdmin} />
               <div className="md:col-span-3">
-                <Field label="Default Terms & Conditions" k="terms" rows={4} />
+                <SettingsField label="Default Terms & Conditions" value={form.terms} onChange={updateField("terms")} rows={4} disabled={!isAdmin} />
               </div>
             </div>
+          </div>
+
+          <div className="flex justify-end pt-2 pb-6">
+            <button
+              onClick={save}
+              disabled={!isAdmin || saving}
+              className="flex items-center gap-2 px-6 py-2.5 bg-gradient-to-r from-orange-600 to-amber-500 hover:from-orange-700 hover:to-amber-600 text-white font-bold rounded-lg text-sm shadow-md transition-all disabled:opacity-50"
+            >
+              <Save className="w-4 h-4" />
+              {saving ? "Saving…" : "Save Company Settings"}
+            </button>
           </div>
 
           {/* Tally Alignment */}
@@ -971,6 +1090,120 @@ const SettingsPage: React.FC = () => {
                   className="px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-lg text-xs font-bold shadow-xs disabled:opacity-50"
                 >
                   {newCompanyCreating ? "Creating…" : "Create Workspace"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Create User & Assign to Workspace */}
+      {showNewUserModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-xl shadow-2xl border border-slate-200 max-w-lg w-full p-6 animate-in fade-in zoom-in-95 duration-150">
+            <h3 className="text-lg font-bold text-slate-900 mb-1 flex items-center gap-2">
+              <UserPlus className="w-5 h-5 text-orange-600" />
+              Create & Assign New User
+            </h3>
+            <p className="text-xs text-slate-500 mb-4">
+              Add a new user to the ERP and grant immediate access to the selected company workspace.
+            </p>
+
+            <form onSubmit={handleCreateNewUser} className="space-y-3.5">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-bold uppercase text-slate-700">Full Name *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Rahul Sharma"
+                    value={newUserForm.name}
+                    onChange={(e) => setNewUserForm({ ...newUserForm, name: e.target.value })}
+                    className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm mt-1 focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 outline-hidden font-medium"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-bold uppercase text-slate-700">Username *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. rahul_delhi"
+                    value={newUserForm.username}
+                    onChange={(e) => setNewUserForm({ ...newUserForm, username: e.target.value })}
+                    className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm mt-1 focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 outline-hidden font-medium"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-bold uppercase text-slate-700">Email Address *</label>
+                  <input
+                    type="email"
+                    required
+                    placeholder="rahul@company.com"
+                    value={newUserForm.email}
+                    onChange={(e) => setNewUserForm({ ...newUserForm, email: e.target.value })}
+                    className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm mt-1 focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 outline-hidden font-medium"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-bold uppercase text-slate-700">Password * (min 4 chars)</label>
+                  <input
+                    type="password"
+                    required
+                    minLength={4}
+                    placeholder="••••••••"
+                    value={newUserForm.password}
+                    onChange={(e) => setNewUserForm({ ...newUserForm, password: e.target.value })}
+                    className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm mt-1 focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 outline-hidden font-medium"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-bold uppercase text-slate-700">Company Workspace *</label>
+                  <select
+                    value={newUserForm.companyId}
+                    onChange={(e) => setNewUserForm({ ...newUserForm, companyId: Number(e.target.value) })}
+                    className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm mt-1 focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 outline-hidden font-medium bg-white"
+                  >
+                    {availableCompanies.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        #{c.id} — {c.displayName || c.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-bold uppercase text-slate-700">Workspace Role *</label>
+                  <select
+                    value={newUserForm.companyRole}
+                    onChange={(e) => setNewUserForm({ ...newUserForm, companyRole: e.target.value })}
+                    className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm mt-1 focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 outline-hidden font-medium bg-white"
+                  >
+                    <option value="company_user">Company User (Isolated Access)</option>
+                    <option value="company_admin">Company Admin (Workspace Management)</option>
+                    {isSuperAdmin && <option value="super_admin">Super Admin (Cross-Company)</option>}
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setShowNewUserModal(false)}
+                  className="px-4 py-2 border border-slate-200 rounded-lg text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={newUserCreating || !newUserForm.name.trim() || !newUserForm.username.trim() || !newUserForm.password}
+                  className="px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-lg text-xs font-bold shadow-xs disabled:opacity-50"
+                >
+                  {newUserCreating ? "Creating…" : "Create & Assign User"}
                 </button>
               </div>
             </form>

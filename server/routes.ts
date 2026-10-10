@@ -1550,7 +1550,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Invalid user data", errors: parsed.error.errors });
       }
 
-      // First-user signup is open; after that, only admins can create users.
+      // First-user signup is open; after that, admins or company admins can create users.
       const existingAll = await storage.getAllUsers();
       if (existingAll.length > 0) {
         const authHeader = req.headers["authorization"];
@@ -1561,8 +1561,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         try {
           const decoded: any = jwt.verify(token, JWT_SECRET);
           const requester = await storage.getUser(decoded.id);
-          if (!requester || !requester.isActive || requester.role !== "admin") {
-            return res.status(403).json({ message: "Only admins can create users" });
+          const memberships = requester ? await storage.getUserCompanies(requester.id) : [];
+          const isSuper = requester?.id === 1 || requester?.role === "admin" || memberships.some(m => m.role === "super_admin");
+          const isCompanyAdmin = memberships.some(m => m.role === "company_admin");
+          if (!requester || !requester.isActive || (!isSuper && !isCompanyAdmin)) {
+            return res.status(403).json({ message: "Only administrators can create users" });
           }
         } catch (e) {
           return res.status(401).json({ message: "Invalid admin token" });
@@ -1580,8 +1583,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         password: hashedPassword
       });
 
+      // Assign initial company membership
+      const targetCompanyId = req.body.companyId ? Number(req.body.companyId) : 1;
+      const targetCompanyRole = req.body.companyRole || (user.role === "admin" ? "super_admin" : "company_user");
+      await storage.addUserToCompany(user.id, targetCompanyId, targetCompanyRole, true);
+
       const token = generateToken(user);
-      res.status(201).json({ user: { id: user.id, username: user.username, name: user.name, role: user.role }, token });
+      res.status(201).json({ user: { id: user.id, username: user.username, name: user.name, role: user.role }, token, companyId: targetCompanyId, companyRole: targetCompanyRole });
     } catch (err: any) {
       res.status(500).json({ message: err.message });
     }
@@ -1678,6 +1686,90 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(list);
     } catch (err: any) {
       res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.post("/api/users", authenticateToken, async (req: AuthRequest, res: Response) => {
+    try {
+      if (!req.user) return res.status(401).json({ message: "Authentication required" });
+
+      const isSuper = req.user.isSuperAdmin;
+      const isCompanyAdmin = req.companyRole === "company_admin";
+
+      if (!isSuper && !isCompanyAdmin && req.user.role !== "admin") {
+        return res.status(403).json({ message: "Forbidden: Only administrators can create users." });
+      }
+
+      const {
+        username,
+        email,
+        password,
+        name,
+        role = "staff",
+        companyId,
+        companyRole = "company_user",
+        phone,
+        department,
+        designation,
+        employeeId,
+        isActive = true,
+      } = req.body;
+
+      if (!username || !email || !password || !name) {
+        return res.status(400).json({ message: "Name, username, email, and password are required." });
+      }
+
+      if (String(password).length < 4) {
+        return res.status(400).json({ message: "Password must be at least 4 characters." });
+      }
+
+      // Company scoping
+      const targetCompanyId = isSuper
+        ? (companyId ? Number(companyId) : (req.companyId || 1))
+        : (req.companyId || 1);
+
+      const targetCompanyRole = isSuper
+        ? (companyRole || "company_user")
+        : (companyRole === "super_admin" ? "company_user" : (companyRole || "company_user"));
+
+      // Check duplicates
+      const existingUser = await storage.getUserByUsername(username.trim());
+      if (existingUser) {
+        return res.status(400).json({ message: `Username "${username.trim()}" is already taken.` });
+      }
+
+      const existingEmail = await storage.getUserByEmail(email.trim());
+      if (existingEmail) {
+        return res.status(400).json({ message: `Email "${email.trim()}" is already registered.` });
+      }
+
+      const hashedPassword = await hashPassword(String(password));
+      const user = await storage.createUser({
+        username: username.trim(),
+        email: email.trim(),
+        password: hashedPassword,
+        name: normalizeDisplayName(name.trim()),
+        role,
+        phone: phone ? String(phone).trim() : null,
+        department: department ? normalizeDisplayName(String(department).trim()) : null,
+        designation: designation ? normalizeDisplayName(String(designation).trim()) : null,
+        employeeId: employeeId ? String(employeeId).trim() : null,
+        isActive: Boolean(isActive),
+      });
+
+      // Assign to target company
+      await storage.addUserToCompany(user.id, targetCompanyId, targetCompanyRole, true);
+
+      res.status(201).json({
+        user: sanitizeUser(user),
+        membership: {
+          companyId: targetCompanyId,
+          role: targetCompanyRole,
+        },
+      });
+    } catch (err: any) {
+      console.error("[POST /api/users] error:", err);
+      res.status(500).json({ message: err.message || "Failed to create user." });
     }
   });
 
@@ -6547,7 +6639,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
       const next = maxSeq + 1;
-      return `${fy.label}/${prefix}/${next}`;
+      const padded = String(next).padStart(3, "0");
+      return `${fy.label}/${prefix}/${padded}`;
     }
 
     const startAt = kind === "estimate" && cId === 1
@@ -6568,9 +6661,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
     }
     const next = maxSeq + 1;
+    const padded = String(next).padStart(3, "0");
     return cfg.fyAware
-      ? `${prefix}/${fy.label}/${next}`
-      : `${prefix}/${next}`;
+      ? `${prefix}/${fy.label}/${padded}`
+      : `${prefix}/${padded}`;
   }
 
   function escapeReg(s: string) {

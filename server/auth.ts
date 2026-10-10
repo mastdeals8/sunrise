@@ -157,11 +157,15 @@ export const requireRole = (allowedRoles: string[]) => {
       return res.status(401).json({ message: "Authentication required" });
     }
 
-    if (!allowedRoles.includes(req.user.role)) {
-      return res.status(403).json({ message: "Insufficient permissions" });
+    if (req.user.isSuperAdmin || allowedRoles.includes(req.user.role)) {
+      return next();
     }
 
-    next();
+    if (req.companyRole === "company_admin" && (allowedRoles.includes("admin") || allowedRoles.includes("manager"))) {
+      return next();
+    }
+
+    return res.status(403).json({ message: "Insufficient permissions" });
   };
 };
 
