@@ -7,6 +7,7 @@ import { isServiceEstimateItem, resolveServiceProduct, serviceProductLabel } fro
 import { companyAssetUrl } from "../utils/companyAssets";
 import type { Estimate, EstimateItem, Store, Client, Brand, Product } from "../pages/operations/types";
 import { orderedEstimateItems, orderedStoreKeysFromItems } from "../pages/operations/utils/estimateOrdering";
+import { getEstimateFormatProfile } from "../../../shared/estimateProfiles";
 
 export interface EstimateDocumentProps {
   estimate: Estimate;
@@ -359,23 +360,51 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
     </tr>
   );
 
+  // Determine estimate format from existing format profile/configuration
+  const formatProfile = getEstimateFormatProfile(est.formatProfileCode || est.clientFormat);
+  const isAbfrlFormat = formatProfile.code === "ABLBL" || formatProfile.printLayout === "abfrl_grouped";
+  const isRetailStoreFormat = formatProfile.code === "RETAIL_SINGLE_STORE" || formatProfile.printLayout === "retail_single_store";
+  const showMaterialCostRow = isAbfrlFormat && !isRetailStoreFormat;
+
   // Cell + table styles for dense print-grade layout. Inline styles so
   // they survive print without depending on Tailwind classes.
   const cellBase: React.CSSProperties = {
     border: "1px solid #000",
-    padding: "4.5px 5.5px",
-    fontSize: "9px",
-    lineHeight: 1.35,
+    padding: "3.5px 4px",
+    fontSize: "8.5px",
+    lineHeight: 1.3,
     verticalAlign: "middle",
     fontWeight: 400,
+    boxSizing: "border-box",
   };
-  const cellRight: React.CSSProperties = { ...cellBase, textAlign: "right", whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" };
-  const cellCenter: React.CSSProperties = { ...cellBase, textAlign: "center", whiteSpace: "nowrap" };
-  const headCell: React.CSSProperties = { ...cellBase, fontWeight: 700, textAlign: "center", backgroundColor: "#fff", whiteSpace: "nowrap" };
+  const cellRight: React.CSSProperties = {
+    ...cellBase,
+    textAlign: "right",
+    whiteSpace: "nowrap",
+    fontVariantNumeric: "tabular-nums",
+    paddingRight: "5px",
+  };
+  const cellCenter: React.CSSProperties = {
+    ...cellBase,
+    textAlign: "center",
+    whiteSpace: "nowrap",
+  };
+  const headCell: React.CSSProperties = {
+    ...cellBase,
+    fontWeight: 700,
+    textAlign: "center",
+    backgroundColor: "#fff",
+    verticalAlign: "middle",
+    lineHeight: 1.2,
+    padding: "4px 2px",
+    fontSize: "8.5px",
+    whiteSpace: "normal",
+    wordBreak: "normal",
+  };
   const totalRowStyle: React.CSSProperties = { backgroundColor: "#f8fafc" };
   const yellowRow: React.CSSProperties = { backgroundColor: "#f8fafc" };
-  // 14 columns: SL, Element, HSN, Std/Non, Product Details, W, H, Qty,
-  // T.Sqft, Rate, Amount, GST%, GST Amount, Total.
+  // 14 columns: SL, Element, HSN, Std/Non, Product Details, Print Size (W),
+  // Print Size (H), Qty, T.Sqft, Rate, Amount, GST%, GST Amount, Total.
   const COL_COUNT = 14;
 
   // A service charges row (Packing / Installation / Transport).
@@ -438,24 +467,24 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
     );
   };
 
-  // Portrait A4 printable width is 194mm at the 8mm page margins below.
-  // Numeric columns are intentionally wide enough for Indian-formatted
-  // five/six-digit values; the product-details column absorbs wrapping.
+  // Portrait A4 printable width is 194mm (~733px at 96 DPI).
+  // Defined, sufficient widths across all 14 columns to prevent
+  // any overlapping or crowding across headings and numeric cells.
   const columnWidths = [
     "3.5%",  // SL
-    "12%",   // Element
-    "5.5%",  // HSN
-    "6.5%",  // Std/Non
-    "20.5%", // Product Details
-    "4.5%",  // Size (W)
-    "4.5%",  // Size (H)
-    "4%",    // Qty
-    "5%",    // T.Sqft
+    "9.5%",  // Element
+    "5%",    // HSN
+    "6%",    // Std/Non
+    "18%",   // Product Details
+    "7%",    // Print Size (W)
+    "7%",    // Print Size (H)
+    "4.5%",  // Qty
+    "5.5%",  // T.Sqft
     "6.5%",  // Rate
     "8.5%",  // Amount
     "4.5%",  // GST %
     "7%",    // GST Amt
-    "7.5%",  // Total
+    "8%",    // Total
   ];
 
   const renderDocumentHeader = () => (
@@ -494,7 +523,19 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
   const renderEstimateTableHead = () => (
     <thead data-pdf-thead style={{ display: "table-header-group" }}>
       <tr>
-        <td colSpan={COL_COUNT} style={{ ...cellCenter, fontWeight: 700, padding: "5px 8px" }}>
+        <td
+          colSpan={COL_COUNT}
+          style={{
+            ...cellBase,
+            textAlign: "left",
+            fontWeight: 700,
+            fontSize: "11px",
+            lineHeight: 1.3,
+            padding: "8px 10px",
+            backgroundColor: "#fff",
+            border: "1px solid #000",
+          }}
+        >
           Subject : {est.subject || est.title}
         </td>
       </tr>
@@ -502,72 +543,105 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
         <td style={headCell}>SL</td>
         <td style={headCell}>Element</td>
         <td style={headCell}>HSN</td>
-        <td style={headCell}>Std / Non</td>
-        <td style={headCell}>Product Details</td>
-        <td style={headCell}>Size (W)</td>
-        <td style={headCell}>Size (H)</td>
+        <td style={headCell}>
+          <div style={{ whiteSpace: "nowrap" }}>Std /</div>
+          <div style={{ whiteSpace: "nowrap" }}>Non</div>
+        </td>
+        <td style={{ ...headCell, textAlign: "left", paddingLeft: "6px" }}>Product Details</td>
+        <td style={headCell}>
+          <div style={{ whiteSpace: "nowrap" }}>Print Size</div>
+          <div style={{ whiteSpace: "nowrap" }}>(W)</div>
+        </td>
+        <td style={headCell}>
+          <div style={{ whiteSpace: "nowrap" }}>Print Size</div>
+          <div style={{ whiteSpace: "nowrap" }}>(H)</div>
+        </td>
         <td style={headCell}>Qty</td>
         <td style={headCell}>T.Sqft</td>
         <td style={headCell}>Rate</td>
         <td style={headCell}>Amount</td>
-        <td style={headCell}>GST %</td>
-        <td style={headCell}>GST Amt</td>
+        <td style={headCell}>
+          <div style={{ whiteSpace: "nowrap" }}>GST</div>
+          <div style={{ whiteSpace: "nowrap" }}>%</div>
+        </td>
+        <td style={headCell}>
+          <div style={{ whiteSpace: "nowrap" }}>GST</div>
+          <div style={{ whiteSpace: "nowrap" }}>Amt</div>
+        </td>
         <td style={headCell}>Total</td>
       </tr>
     </thead>
   );
 
-  const renderStoreSection = (sec: Section, sIdx: number) => (
-    <tbody
-      className="estimate-store-section"
-      key={`sec-${sIdx}-${sec.storeCode || sec.storeName}`}
-      data-store-code={sec.storeCode}
-      style={{ breakInside: "avoid", pageBreakInside: "avoid" }}
-    >
-      <tr data-pdf-row data-pdf-store-heading="true">
-        <td colSpan={COL_COUNT} style={{ ...cellCenter, fontWeight: 700, padding: "4px 8px", backgroundColor: "#f1f5f9" }}>
-          Store: {sec.storeName}{sec.storeCode ? `, Store Code : ${sec.storeCode}` : ""}
-        </td>
-      </tr>
-      {sec.itemRows.map((row, rIdx) => (
-        <tr key={`sec-${sIdx}-row-${rIdx}`} data-pdf-row>
-          <td style={cellCenter}>{row.label}</td>
-          <td style={cellBase}>{row.type}</td>
-          <td style={cellCenter}>{row.hsn || ""}</td>
-          <td style={{ ...cellCenter, fontSize: "9px" }}>{row.stdLabel}</td>
-          <td style={cellBase}>{row.description}</td>
-          <td style={cellRight}>{row.width}</td>
-          <td style={cellRight}>{row.height}</td>
-          <td style={cellCenter}>{row.qty}</td>
-          <td style={cellRight}>{row.tsqft}</td>
-          <td style={cellRight}>{row.psqft}</td>
-          <td style={cellRight}>{num(row.amount)}</td>
-          <td style={cellCenter}>{isIgst ? row.igstPercent : row.sgstPercent + row.cgstPercent}%</td>
-          <td style={cellRight}>{num(isIgst ? row.igstAmt : row.sgstAmt + row.cgstAmt)}</td>
-          <td style={cellRight}>{num(row.total)}</td>
-        </tr>
-      ))}
-      <tr className="estimate-store-total-keep" data-pdf-row style={yellowRow}>
-        <td colSpan={10} style={{ ...cellBase, fontWeight: 700, padding: "4px 6px" }}>Total Material Cost</td>
-        <td style={{ ...cellRight, fontWeight: 700 }}>{num(sec.materialBase)}</td>
-        <td style={{ ...cellCenter, fontWeight: 700 }}>{isIgst ? "18%" : "18%"}</td>
-        <td style={{ ...cellRight, fontWeight: 700 }}>{num(isIgst ? sec.materialIgst : sec.materialSgst + sec.materialCgst)}</td>
-        <td style={{ ...cellRight, fontWeight: 700 }}>{num(sec.materialTotal)}</td>
-      </tr>
-      {sec.serviceRows.length > 0 ? sec.serviceRows.map(item => savedServiceRow(item, `s${sIdx}`)) : (
-        <>
-          {sec.packingPercent > 0 && (() => { const label = serviceProductLabel({ lineType: "packing", rate: sec.packingPercent, calculationType: "percentage" }, products); return serviceRow(label, label, `${sec.packingPercent}%`, sec.packingBase, `s${sIdx}`); })()}
-          {sec.implPercent > 0 && (() => { const label = serviceProductLabel({ lineType: "installation", rate: sec.implPercent, calculationType: "percentage" }, products); return serviceRow(label, label, `${sec.implPercent}%`, sec.implBase, `s${sIdx}`); })()}
-          {sec.transportAmt > 0 && (() => { const label = serviceProductLabel({ lineType: "transport", itemName: sec.transportDescription }, products); return serviceRow(label, label, "", sec.transportBase, `s${sIdx}`); })()}
-        </>
-      )}
-      {sIdx < sections.length - 1 && (
-        <tr className="estimate-store-spacer">
-          <td colSpan={COL_COUNT} style={{ ...cellBase, height: "6px", padding: 0, border: "none" }}></td>
-        </tr>
-      )}
-    </tbody>
-  );
+  const renderStoreSection = (sec: Section, sIdx: number) => {
+    const isStoreEstimate = Boolean(hasStoreGrouping || est.storeId || targetStore || (sec.storeCode && sec.storeCode.trim()));
+
+    return (
+      <tbody
+        className="estimate-store-section"
+        key={`sec-${sIdx}-${sec.storeCode || sec.storeName}`}
+        data-store-code={sec.storeCode}
+        style={{ breakInside: "avoid", pageBreakInside: "avoid" }}
+      >
+        {isStoreEstimate && (
+          <tr data-pdf-row data-pdf-store-heading="true">
+            <td
+              colSpan={COL_COUNT}
+              style={{
+                ...cellBase,
+                textAlign: "left",
+                fontWeight: 700,
+                fontSize: "9.5px",
+                padding: "5px 8px",
+                backgroundColor: "#f1f5f9",
+              }}
+            >
+              Store: {sec.storeName}{sec.storeCode ? `, Store Code: ${sec.storeCode}` : ""}
+            </td>
+          </tr>
+        )}
+        {sec.itemRows.map((row, rIdx) => (
+          <tr key={`sec-${sIdx}-row-${rIdx}`} data-pdf-row>
+            <td style={cellCenter}>{row.label}</td>
+            <td style={cellBase}>{row.type}</td>
+            <td style={cellCenter}>{row.hsn || ""}</td>
+            <td style={{ ...cellCenter, fontSize: "9px" }}>{row.stdLabel}</td>
+            <td style={cellBase}>{row.description}</td>
+            <td style={cellRight}>{row.width}</td>
+            <td style={cellRight}>{row.height}</td>
+            <td style={cellCenter}>{row.qty}</td>
+            <td style={cellRight}>{row.tsqft}</td>
+            <td style={cellRight}>{row.psqft}</td>
+            <td style={cellRight}>{num(row.amount)}</td>
+            <td style={cellCenter}>{isIgst ? row.igstPercent : row.sgstPercent + row.cgstPercent}%</td>
+            <td style={cellRight}>{num(isIgst ? row.igstAmt : row.sgstAmt + row.cgstAmt)}</td>
+            <td style={cellRight}>{num(row.total)}</td>
+          </tr>
+        ))}
+        {showMaterialCostRow && (
+          <tr className="estimate-store-total-keep" data-pdf-row style={yellowRow}>
+            <td colSpan={10} style={{ ...cellBase, fontWeight: 700, padding: "4px 6px" }}>Total Material Cost</td>
+            <td style={{ ...cellRight, fontWeight: 700 }}>{num(sec.materialBase)}</td>
+            <td style={{ ...cellCenter, fontWeight: 700 }}>{isIgst ? "18%" : "18%"}</td>
+            <td style={{ ...cellRight, fontWeight: 700 }}>{num(isIgst ? sec.materialIgst : sec.materialSgst + sec.materialCgst)}</td>
+            <td style={{ ...cellRight, fontWeight: 700 }}>{num(sec.materialTotal)}</td>
+          </tr>
+        )}
+        {sec.serviceRows.length > 0 ? sec.serviceRows.map(item => savedServiceRow(item, `s${sIdx}`)) : (
+          <>
+            {sec.packingPercent > 0 && (() => { const label = serviceProductLabel({ lineType: "packing", rate: sec.packingPercent, calculationType: "percentage" }, products); return serviceRow(label, label, `${sec.packingPercent}%`, sec.packingBase, `s${sIdx}`); })()}
+            {sec.implPercent > 0 && (() => { const label = serviceProductLabel({ lineType: "installation", rate: sec.implPercent, calculationType: "percentage" }, products); return serviceRow(label, label, `${sec.implPercent}%`, sec.implBase, `s${sIdx}`); })()}
+            {sec.transportAmt > 0 && (() => { const label = serviceProductLabel({ lineType: "transport", itemName: sec.transportDescription }, products); return serviceRow(label, label, "", sec.transportBase, `s${sIdx}`); })()}
+          </>
+        )}
+        {sIdx < sections.length - 1 && (
+          <tr className="estimate-store-spacer">
+            <td colSpan={COL_COUNT} style={{ ...cellBase, height: "6px", padding: 0, border: "none" }}></td>
+          </tr>
+        )}
+      </tbody>
+    );
+  };
 
   const amountInWords = (numVal: number): string => {
     const a = ["", "One ", "Two ", "Three ", "Four ", "Five ", "Six ", "Seven ", "Eight ", "Nine ", "Ten ", "Eleven ", "Twelve ", "Thirteen ", "Fourteen ", "Fifteen ", "Sixteen ", "Seventeen ", "Eighteen ", "Nineteen "];

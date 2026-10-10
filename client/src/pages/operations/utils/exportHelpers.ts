@@ -1,6 +1,7 @@
 import { unzipSync, zipSync } from "fflate";
 import { isServiceEstimateItem, resolveServiceProduct, serviceProductLabel } from "../../../../../shared/serviceProductDisplay";
 import { orderedEstimateItems, orderedStoreKeysFromItems } from "./estimateOrdering";
+import { getEstimateFormatProfile } from "../../../../../shared/estimateProfiles";
 
 export const downloadBlob = (blob: Blob, fileName: string) => {
   const a = document.createElement("a");
@@ -330,7 +331,7 @@ export async function exportEstimateToExcel(
   // ── Column header row ────────────────────────────────────────────────────────
   const headR = addRow([
     "SL", "ELEMENT", "HSN", "Standard / Non", "PRODUCT DETAILS",
-    "W", "H", "Qty", "T.Sqft", "Rate", "Amount", "GST %", "GST Amount", "Total",
+    "Print Size (W)", "Print Size (H)", "Qty", "T.Sqft", "Rate", "Amount", "GST %", "GST Amount", "Total",
   ]);
   styleRange(headR, 0, LAST_COL, S_HEADER);
   const repeatHeaderStart = headR + 1;
@@ -392,10 +393,15 @@ export async function exportEstimateToExcel(
   let grandCgst = 0;
   let grandIgst = 0;
 
+  const formatProfile = getEstimateFormatProfile(estimate.formatProfileCode || estimate.clientFormat);
+  const isAbfrlFormat = formatProfile.code === "ABLBL" || formatProfile.printLayout === "abfrl_grouped";
+  const isRetailStoreFormat = formatProfile.code === "RETAIL_SINGLE_STORE" || formatProfile.printLayout === "retail_single_store";
+  const showMaterialCostRow = isAbfrlFormat && !isRetailStoreFormat;
+
   sections.forEach((sec, sIdx) => {
     const storeR = addRow((() => {
       const r = blankRow();
-      r[0] = `Store: ${sec.storeName}${sec.storeCode ? `,  Store Code: ${sec.storeCode}` : ""}`;
+      r[0] = `Store: ${sec.storeName}${sec.storeCode ? `, Store Code: ${sec.storeCode}` : ""}`;
       return r;
     })());
     pushMerge(storeR, 0, LAST_COL);
@@ -428,17 +434,19 @@ export async function exportEstimateToExcel(
     const materialCgst = sec.storeItems.reduce((sum, it) => sum + Number(it.cgstAmount || 0), 0);
     const materialIgst = sec.storeItems.reduce((sum, it) => sum + Number(it.igstAmount || 0), 0);
 
-    const tmcR = addRow((() => {
-      const r = blankRow();
-      r[1] = "Total Material Cost";
-      r[10] = r2(materialBase);
-      r[11] = 18;
-      r[12] = r2(isIgst ? materialIgst : materialSgst + materialCgst);
-      r[13] = r2(materialBase + materialSgst + materialCgst + materialIgst);
-      return r;
-    })());
-    styleRange(tmcR, 0, 9, S_YELLOW);
-    styleRange(tmcR, 10, LAST_COL, S_YELLOW_NUM);
+    if (showMaterialCostRow) {
+      const tmcR = addRow((() => {
+        const r = blankRow();
+        r[1] = "Total Material Cost";
+        r[10] = r2(materialBase);
+        r[11] = 18;
+        r[12] = r2(isIgst ? materialIgst : materialSgst + materialCgst);
+        r[13] = r2(materialBase + materialSgst + materialCgst + materialIgst);
+        return r;
+      })());
+      styleRange(tmcR, 0, 9, S_YELLOW);
+      styleRange(tmcR, 10, LAST_COL, S_YELLOW_NUM);
+    }
 
     const hasSavedServices = sec.serviceItems.length > 0;
     const packAmt = hasSavedServices
