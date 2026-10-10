@@ -9,7 +9,7 @@ export const companyAssetUrl = (filePath?: string | null, token?: string | null)
       const parsed = new URL(cleanPath);
       const match = decodeURIComponent(parsed.pathname).match(/\/storage\/v1\/object\/(?:sign|public)\/company-assets\/(.+)$/);
       if (match?.[1]) {
-        const supabaseUrl = (import.meta.env.VITE_SUPABASE_URL as string | undefined) ?? `${parsed.protocol}//${parsed.host}`;
+        const supabaseUrl = (import.meta.env?.VITE_SUPABASE_URL as string | undefined) ?? `${parsed.protocol}//${parsed.host}`;
         return `${supabaseUrl}/storage/v1/object/public/company-assets/${match[1].split("/").map(encodeURIComponent).join("/")}`;
       }
     } catch { /* retain a non-Supabase absolute URL */ }
@@ -18,7 +18,7 @@ export const companyAssetUrl = (filePath?: string | null, token?: string | null)
 
   // Supabase storage path (relative, no leading slash) — public bucket URL
   if (!cleanPath.startsWith("/")) {
-    const supabaseUrl = (import.meta.env.VITE_SUPABASE_URL as string | undefined) ?? "";
+    const supabaseUrl = (import.meta.env?.VITE_SUPABASE_URL as string | undefined) ?? "";
     return `${supabaseUrl}/storage/v1/object/public/company-assets/${cleanPath}`;
   }
 
@@ -26,9 +26,9 @@ export const companyAssetUrl = (filePath?: string | null, token?: string | null)
   if (cleanPath.startsWith("/uploads/company-assets/")) {
     const filename = cleanPath.split("/").pop();
     if (!filename) return "";
-    const isBolt = import.meta.env.VITE_BOLT_PREVIEW === "true";
+    const isBolt = import.meta.env?.VITE_BOLT_PREVIEW === "true";
     if (isBolt) {
-      const supabaseUrl = (import.meta.env.VITE_SUPABASE_URL as string | undefined) ?? "";
+      const supabaseUrl = (import.meta.env?.VITE_SUPABASE_URL as string | undefined) ?? "";
       return `${supabaseUrl}/storage/v1/object/public/company-assets/${encodeURIComponent(filename)}`;
     }
     // SECURITY: browser requests authenticate via httpOnly session cookie.

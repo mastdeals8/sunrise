@@ -540,8 +540,7 @@
   font-weight: 400;
   box-sizing: border-box;
 }
-.estimate-print .estimate-table thead tr[data-pdf-col-header="true"] td,
-.estimate-print-canvas .estimate-table thead tr[data-pdf-col-header="true"] td {
+.estimate-print .estimate-table thead tr[data-pdf-col-header="true"] td {
   padding: 3.5px 2px !important;
   font-size: 8.5px !important;
   line-height: 1.15 !important;
@@ -560,16 +559,8 @@
   font-weight: 700;
   letter-spacing: 0.4px;
 }
-.estimate-print-canvas .estimate-table td,
-.estimate-print-canvas .estimate-table th {
-  padding: 3.5px 4px !important;
-  font-size: 8.5px !important;
-  line-height: 1.3 !important;
-}
 .estimate-print-mode-compact .estimate-print .estimate-table td,
-.estimate-print-mode-compact .estimate-print .estimate-table th,
-.estimate-print-canvas.estimate-print-mode-compact .estimate-table td,
-.estimate-print-canvas.estimate-print-mode-compact .estimate-table th {
+.estimate-print-mode-compact .estimate-print .estimate-table th {
   padding: 1px 2px !important;
   font-size: 8.5px !important;
   line-height: 1.1 !important;

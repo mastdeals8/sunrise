@@ -26,6 +26,7 @@ import crypto from "crypto";
 import { JWT_SECRET, UPLOAD_DIR, UPLOAD_MAX_BYTES, TELEGRAM_WEBHOOK_SECRET } from "./config";
 import { preprocessDateFields, nowDefault } from "./utils/dateFields";
 import { buildInvoicePacketPdf } from "./utils/pdfPacket.js";
+import { renderEstimatePdfBuffer } from "./utils/estimatePdfRenderer.js";
 import { ABLBL_LEGAL_NAME, isAblblFormat, normalizeDisplayName, normalizeFormatMode, normalizeGstinPan, nameMatchKey, nameSimilarity, NAME_SIMILAR_THRESHOLD } from "../shared/textFormat";
 import { formatProductDetails } from "../shared/productDetails";
 import { isServiceEstimateItem, resolveServiceProduct, serviceProductLabel } from "../shared/serviceProductDisplay";
@@ -3159,6 +3160,48 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({ success: true, estimate: updatedEst });
     } catch (err: any) {
       res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.get("/api/operations/estimates/:id/pdf", authenticateBrowserRequest, async (req: AuthRequest, res: Response) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      const scale = req.query.scale ? parseInt(String(req.query.scale), 10) : 100;
+      const density = req.query.density === "compact" ? "compact" : "normal";
+      const layout = req.query.layout === "landscape" ? "landscape" : "portrait";
+      const { buffer, filename } = await renderEstimatePdfBuffer({
+        estimateId: id,
+        scale,
+        density,
+        layout,
+      });
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
+      res.send(buffer);
+    } catch (err: any) {
+      console.error("[estimate-pdf]", err);
+      res.status(500).json({ message: err.message || "Failed to generate estimate PDF" });
+    }
+  });
+
+  app.post("/api/operations/estimates/:id/pdf", authenticateBrowserRequest, async (req: AuthRequest, res: Response) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      const scale = req.body?.scale ? parseInt(String(req.body.scale), 10) : req.query.scale ? parseInt(String(req.query.scale), 10) : 100;
+      const density = (req.body?.density || req.query.density) === "compact" ? "compact" : "normal";
+      const layout = (req.body?.layout || req.query.layout) === "landscape" ? "landscape" : "portrait";
+      const { buffer, filename } = await renderEstimatePdfBuffer({
+        estimateId: id,
+        scale,
+        density,
+        layout,
+      });
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+      res.send(buffer);
+    } catch (err: any) {
+      console.error("[estimate-pdf]", err);
+      res.status(500).json({ message: err.message || "Failed to generate estimate PDF" });
     }
   });
 

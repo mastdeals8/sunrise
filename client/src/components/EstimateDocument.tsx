@@ -528,6 +528,7 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
           style={{
             ...cellBase,
             textAlign: "left",
+            verticalAlign: "middle",
             fontWeight: 700,
             fontSize: "11px",
             lineHeight: 1.3,
@@ -549,11 +550,9 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
         </td>
         <td style={{ ...headCell, textAlign: "left", paddingLeft: "6px" }}>Product Details</td>
         <td style={headCell}>
-          <div style={{ whiteSpace: "nowrap" }}>Print Size</div>
           <div style={{ whiteSpace: "nowrap" }}>(W)</div>
         </td>
         <td style={headCell}>
-          <div style={{ whiteSpace: "nowrap" }}>Print Size</div>
           <div style={{ whiteSpace: "nowrap" }}>(H)</div>
         </td>
         <td style={headCell}>Qty</td>

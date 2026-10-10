@@ -1,17 +1,11 @@
 // Estimate PDF Export utilities
-// Uses the canonical EstimateDocument renderer, html2canvas, and pdf-lib
+// Uses the canonical EstimateDocument renderer and Playwright backend
 // to generate individual A4 PDFs or combined print PDFs without altering
 // estimate data or numbering.
 
-import html2canvas from "html2canvas";
 import { PDFDocument } from "pdf-lib";
 import { zipSync } from "fflate";
-
-const A4_W = 595.28;
-const A4_H = 841.89;
-const PRINT_MARGIN = 22.68; // 8mm standard print margin
-const PRINTABLE_W = A4_W - PRINT_MARGIN * 2; // ~549.92 pt (~194mm)
-const PRINTABLE_H = A4_H - PRINT_MARGIN * 2; // ~796.53 pt (~281mm)
+import { isBoltMode } from "../../../lib/supabase";
 
 /**
  * Sanitize strings for cross-platform filesystem compatibility.
@@ -78,198 +72,44 @@ export function getEstimatePdfFilename(est: any, stores: any[] = []): string {
 }
 
 /**
- * Convert a base64 data URL to Uint8Array.
+ * Fetch canonical individual PDF bytes directly from the server.
+ * Uses the exact same renderer, print CSS, logo, and page setup options
+ * as the approved individual export.
  */
-export function dataUrlToBytes(dataUrl: string): Uint8Array {
-  const commaIdx = dataUrl.indexOf(",");
-  const base64 = commaIdx >= 0 ? dataUrl.slice(commaIdx + 1) : dataUrl;
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
+export async function fetchEstimateCanonicalPdf(
+  token: string | null | undefined,
+  estimateId: number,
+  options?: {
+    scale?: number;
+    density?: "normal" | "compact";
+    layout?: "portrait" | "landscape";
   }
-  return bytes;
-}
+): Promise<Uint8Array> {
+  if (isBoltMode) {
+    throw new Error("Bulk PDF generation requires the full server environment.");
+  }
 
-/**
- * Wait for all images inside an element to finish loading.
- */
-export async function waitForImages(element: HTMLElement, timeoutMs = 1200): Promise<void> {
-  const imgs = Array.from(element.querySelectorAll("img"));
-  if (imgs.length === 0) return;
+  const query = new URLSearchParams();
+  if (options?.scale) query.set("scale", String(options.scale));
+  if (options?.density) query.set("density", options.density);
+  if (options?.layout) query.set("layout", options.layout);
 
-  await Promise.all(
-    imgs.map(
-      (img) =>
-        new Promise<void>((resolve) => {
-          if (img.complete && img.naturalWidth > 0) return resolve();
-          const timer = setTimeout(resolve, timeoutMs);
-          img.onload = () => {
-            clearTimeout(timer);
-            resolve();
-          };
-          img.onerror = () => {
-            clearTimeout(timer);
-            resolve();
-          };
-        })
-    )
-  );
-}
+  const headers: Record<string, string> = {};
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
 
-/**
- * Renders an on-DOM EstimateDocument element into A4 pages on a PDFDocument.
- * If pdfDoc is provided, appends pages to it. Otherwise creates a new PDFDocument.
- */
-export async function renderEstimateElementToPdf(
-  docEl: HTMLElement,
-  pdfDoc?: PDFDocument,
-  docTitle = "Estimate",
-  targetFitPages?: number | null
-): Promise<PDFDocument> {
-  const pdf = pdfDoc || (await PDFDocument.create());
-
-  await waitForImages(docEl);
-
-  const canvas = await html2canvas(docEl, {
-    scale: 2,
-    useCORS: true,
-    backgroundColor: "#ffffff",
-    logging: false,
-    scrollX: 0,
-    scrollY: 0,
+  const res = await fetch(`/api/operations/estimates/${estimateId}/pdf?${query.toString()}`, {
+    headers,
   });
 
-  const cW = canvas.width;
-  const cH = canvas.height;
-  const a4Aspect = PRINTABLE_H / PRINTABLE_W;
-  const pageCanvasH = Math.round(cW * a4Aspect);
-  const rawDrawH = PRINTABLE_W * (cH / cW);
-
-  // Check if document fits comfortably on a single A4 page
-  const fitsSinglePage = (targetFitPages === 1 && rawDrawH <= PRINTABLE_H * 1.35) || rawDrawH <= PRINTABLE_H * 1.05;
-
-  if (fitsSinglePage) {
-    const fitScale = Math.min(1, PRINTABLE_H / rawDrawH);
-    const drawW = PRINTABLE_W * fitScale;
-    const drawH = rawDrawH * fitScale;
-    const dataUrl = canvas.toDataURL("image/jpeg", 0.95);
-    const bytes = dataUrlToBytes(dataUrl);
-    const img = await pdf.embedJpg(bytes);
-
-    const page = pdf.addPage([A4_W, A4_H]);
-    page.drawImage(img, {
-      x: PRINT_MARGIN + (PRINTABLE_W - drawW) / 2,
-      y: A4_H - PRINT_MARGIN - drawH,
-      width: drawW,
-      height: drawH,
-    });
-  } else {
-    // Multi-page slicing at clean row boundaries
-    const docRect = docEl.getBoundingClientRect();
-    const rowEls = Array.from(
-      docEl.querySelectorAll(
-        "[data-pdf-row], .invoice-footer-block, .estimate-footer-block, .estimate-store-section"
-      )
-    );
-    const scaleFactor = cH / (docRect.height || 1);
-    const rowBottoms = rowEls
-      .map((el) => {
-        const r = el.getBoundingClientRect();
-        return Math.round((r.bottom - docRect.top) * scaleFactor);
-      })
-      .filter((y) => y > 0 && y < cH)
-      .sort((a, b) => a - b);
-
-    // Capture the table column header row to repeat on continuation pages
-    const colHeaderEl = docEl.querySelector("[data-pdf-col-header='true']");
-    let colHeaderCanvas: HTMLCanvasElement | null = null;
-    let colHeaderH = 0;
-    if (colHeaderEl) {
-      const chRect = colHeaderEl.getBoundingClientRect();
-      const chTop = Math.round((chRect.top - docRect.top) * scaleFactor);
-      colHeaderH = Math.round(chRect.height * scaleFactor);
-      if (colHeaderH > 0 && chTop >= 0 && chTop + colHeaderH <= cH) {
-        colHeaderCanvas = document.createElement("canvas");
-        colHeaderCanvas.width = cW;
-        colHeaderCanvas.height = colHeaderH;
-        const chCtx = colHeaderCanvas.getContext("2d");
-        if (chCtx) {
-          chCtx.fillStyle = "#ffffff";
-          chCtx.fillRect(0, 0, cW, colHeaderH);
-          chCtx.drawImage(canvas, 0, chTop, cW, colHeaderH, 0, 0, cW, colHeaderH);
-        }
-      }
-    }
-
-    const slices: { startY: number; height: number; isContinuation: boolean }[] = [];
-    let currentY = 0;
-
-    while (currentY < cH) {
-      const isContinuation = currentY > 0;
-      const repeatH = isContinuation && colHeaderCanvas ? colHeaderH : 0;
-      const availableContentH = pageCanvasH - repeatH;
-      const remainingH = cH - currentY;
-
-      if (remainingH <= availableContentH * 1.05) {
-        slices.push({ startY: currentY, height: remainingH, isContinuation });
-        break;
-      }
-
-      const targetSplitY = currentY + availableContentH;
-      const candidate = rowBottoms
-        .filter((b) => b > currentY + availableContentH * 0.55 && b <= targetSplitY)
-        .pop();
-      const splitY = candidate || targetSplitY;
-      const sliceH = splitY - currentY;
-      slices.push({ startY: currentY, height: sliceH, isContinuation });
-      currentY = splitY;
-    }
-
-    for (const slice of slices) {
-      const sliceRepeatH = slice.isContinuation && colHeaderCanvas ? colHeaderH : 0;
-      const totalSliceH = slice.height + sliceRepeatH;
-
-      const sliceCanvas = document.createElement("canvas");
-      sliceCanvas.width = cW;
-      sliceCanvas.height = totalSliceH;
-      const sCtx = sliceCanvas.getContext("2d");
-      if (sCtx) {
-        sCtx.fillStyle = "#ffffff";
-        sCtx.fillRect(0, 0, cW, totalSliceH);
-
-        if (sliceRepeatH > 0 && colHeaderCanvas) {
-          sCtx.drawImage(colHeaderCanvas, 0, 0);
-        }
-        sCtx.drawImage(canvas, 0, slice.startY, cW, slice.height, 0, sliceRepeatH, cW, slice.height);
-      }
-
-      const dataUrl = sliceCanvas.toDataURL("image/jpeg", 0.95);
-      const bytes = dataUrlToBytes(dataUrl);
-      const img = await pdf.embedJpg(bytes);
-
-      const drawW = PRINTABLE_W;
-      const drawH = PRINTABLE_W * (totalSliceH / cW);
-      const page = pdf.addPage([A4_W, A4_H]);
-      page.drawImage(img, {
-        x: PRINT_MARGIN,
-        y: A4_H - PRINT_MARGIN - drawH,
-        width: drawW,
-        height: drawH,
-      });
-    }
+  if (!res.ok) {
+    const errText = await res.text().catch(() => "");
+    throw new Error(`PDF generation failed (${res.status}): ${errText || res.statusText}`);
   }
 
-  // Set document metadata if this is a fresh document
-  if (!pdfDoc) {
-    pdf.setTitle(docTitle);
-    pdf.setAuthor("Sunrise Media");
-    pdf.setCreator("Sunrise Media ERP");
-    pdf.setProducer("Sunrise Media ERP");
-    pdf.setCreationDate(new Date());
-  }
-
-  return pdf;
+  const arrayBuffer = await res.arrayBuffer();
+  return new Uint8Array(arrayBuffer);
 }
 
 /**

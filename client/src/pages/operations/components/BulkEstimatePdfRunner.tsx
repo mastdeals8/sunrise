@@ -16,7 +16,7 @@ import EstimateDocument from "../../../components/EstimateDocument";
 import { fetchEstimateItems } from "../../../lib/api";
 import {
   getEstimatePdfFilename,
-  renderEstimateElementToPdf,
+  fetchEstimateCanonicalPdf,
   packagePdfsIntoZip,
   downloadFileBlob,
 } from "../utils/estimatePdfExport";
@@ -67,14 +67,7 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
   const [successCount, setSuccessCount] = useState(0);
   const [combinedPdfBlobUrl, setCombinedPdfBlobUrl] = useState<string | null>(null);
 
-  // Off-screen rendering host data
-  const [currentRenderData, setCurrentRenderData] = useState<{
-    estimate: Estimate;
-    items: any[];
-  } | null>(null);
-
   const cancelledRef = useRef(false);
-  const hostRef = useRef<HTMLDivElement>(null);
 
   // If opened directly with zip or combined mode from toolbar, trigger that mode
   useEffect(() => {
@@ -112,7 +105,7 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
     };
   }, [previewIdx, selectedEstimates, token, mode]);
 
-  // Execute bulk export (either individual ZIP or combined PDF)
+  // Execute bulk export using the canonical individual PDF renderer
   const handleStartBulkExport = async (exportMode: "zip" | "combined") => {
     if (selectedEstimates.length === 0) return;
 
@@ -144,45 +137,20 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
 
       const est = selectedEstimates[i];
       setCurrentIndex(i + 1);
-      setStatusText(`Loading items for ${est.estimateNumber || `Estimate #${est.id}`} (${i + 1} of ${total})...`);
+      setStatusText(
+        `Rendering estimate ${est.estimateNumber || `Estimate #${est.id}`} (${i + 1} of ${total})...`
+      );
 
-      let items: any[] = [];
       try {
-        items = await fetchEstimateItems(token, est.id);
-      } catch (fetchErr: any) {
-        console.error(`Failed to fetch items for estimate ${est.estimateNumber}:`, fetchErr);
-        failedList.push({
-          estimate: est,
-          error: fetchErr.message || "Failed to load estimate items",
+        const pdfBytes = await fetchEstimateCanonicalPdf(token, est.id, {
+          scale,
+          density,
+          layout: "portrait",
         });
-        continue;
-      }
 
-      if (cancelledRef.current) break;
-
-      // Mount the estimate into the off-screen host
-      setStatusText(`Rendering estimate ${est.estimateNumber} (${i + 1} of ${total})...`);
-      setCurrentRenderData({ estimate: est, items });
-
-      // Allow React a frame to commit the DOM
-      await new Promise((resolve) => setTimeout(resolve, 150));
-
-      if (cancelledRef.current) break;
-
-      try {
-        const docEl = hostRef.current?.querySelector(".estimate-print") as HTMLElement | null;
-        if (!docEl) {
-          throw new Error("Estimate document element failed to render in container");
-        }
+        if (cancelledRef.current) break;
 
         if (exportMode === "zip") {
-          const singlePdf = await renderEstimateElementToPdf(
-            docEl,
-            undefined,
-            est.estimateNumber || "Estimate",
-            targetFitPages
-          );
-          const pdfBytes = await singlePdf.save();
           const filename = getEstimatePdfFilename(est, stores);
 
           // Handle collision safely if duplicates exist
@@ -195,24 +163,21 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
 
           zipFiles[uniqueFilename] = pdfBytes;
         } else if (exportMode === "combined" && combinedPdfDoc) {
-          await renderEstimateElementToPdf(
-            docEl,
-            combinedPdfDoc,
-            "Combined Estimates",
-            targetFitPages
+          const singleDoc = await PDFDocument.load(pdfBytes);
+          const copiedPages = await combinedPdfDoc.copyPages(
+            singleDoc,
+            singleDoc.getPageIndices()
           );
+          copiedPages.forEach((p) => combinedPdfDoc!.addPage(p));
         }
       } catch (renderErr: any) {
-        console.error(`Failed to render estimate ${est.estimateNumber}:`, renderErr);
+        console.error(`Failed to export estimate ${est.estimateNumber}:`, renderErr);
         failedList.push({
           estimate: est,
-          error: renderErr.message || "PDF canvas rendering failed",
+          error: renderErr.message || "Canonical PDF generation failed",
         });
       }
     }
-
-    // Clean up off-screen render state
-    setCurrentRenderData(null);
 
     if (cancelledRef.current) {
       setIsProcessing(false);
@@ -230,9 +195,14 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
         setStatusText("Packaging PDFs into ZIP archive...");
         try {
           const zipBlob = packagePdfsIntoZip(zipFiles);
-          downloadFileBlob(zipBlob, `Estimates_Export_${new Date().toISOString().slice(0, 10)}.zip`);
+          downloadFileBlob(
+            zipBlob,
+            `Estimates_Export_${new Date().toISOString().slice(0, 10)}.zip`
+          );
           if (showSuccess) {
-            showSuccess(`Successfully exported ${Object.keys(zipFiles).length} estimate PDF(s).`);
+            showSuccess(
+              `Successfully exported ${Object.keys(zipFiles).length} estimate PDF(s).`
+            );
           }
         } catch (zipErr: any) {
           console.error("ZIP creation failed:", zipErr);
@@ -248,31 +218,25 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
           setCombinedPdfBlobUrl(blobUrl);
 
           // Auto-open print preview via iframe
-          const iframe = document.createElement("iframe");
-          iframe.style.position = "fixed";
-          iframe.style.top = "-10000px";
-          iframe.style.left = "-10000px";
-          iframe.style.width = "1px";
-          iframe.style.height = "1px";
-          iframe.src = blobUrl;
-          document.body.appendChild(iframe);
-          iframe.onload = () => {
+          const printIframe = document.createElement("iframe");
+          printIframe.style.position = "fixed";
+          printIframe.style.right = "0";
+          printIframe.style.bottom = "0";
+          printIframe.style.width = "0";
+          printIframe.style.height = "0";
+          printIframe.style.border = "0";
+          printIframe.src = blobUrl;
+          document.body.appendChild(printIframe);
+          printIframe.onload = () => {
             setTimeout(() => {
               try {
-                iframe.contentWindow?.focus();
-                iframe.contentWindow?.print();
+                printIframe.contentWindow?.focus();
+                printIframe.contentWindow?.print();
               } catch (e) {
-                window.open(blobUrl, "_blank");
+                console.warn("Auto-print preview on iframe failed:", e);
               }
             }, 300);
           };
-          window.setTimeout(() => {
-            if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
-          }, 120000);
-
-          if (showSuccess) {
-            showSuccess(`Successfully compiled combined PDF for ${completedCount} estimate(s).`);
-          }
         } catch (combErr: any) {
           console.error("Combined PDF failed:", combErr);
           alert("Failed to build combined PDF: " + combErr.message);
@@ -287,16 +251,41 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
     const oldTitle = document.title;
     const filename = getEstimatePdfFilename(cur, stores).replace(/\.pdf$/i, "");
     document.title = filename;
+
+    // Apply canonical print classes matching EstimatePreview
+    const scaleRatio = (Number(scale) || 100) / 100;
+    let style = document.getElementById("estimate-print-options-style") as HTMLStyleElement | null;
+    if (!style) {
+      style = document.createElement("style");
+      style.id = "estimate-print-options-style";
+      document.head.appendChild(style);
+    }
+    style.textContent = `
+      @media print {
+        @page { size: A4 portrait; margin: 8mm; }
+        .estimate-print {
+          --estimate-print-zoom: ${scaleRatio} !important;
+          zoom: ${scaleRatio} !important;
+        }
+      }
+    `;
+    document.body.classList.add("estimate-print-layout-portrait", `estimate-print-mode-${density}`);
+
     window.print();
     window.setTimeout(() => {
       document.title = oldTitle;
+      document.body.classList.remove("estimate-print-layout-portrait", `estimate-print-mode-${density}`);
+      document.getElementById("estimate-print-options-style")?.remove();
     }, 1000);
   };
 
   const handleFitToPages = (targetPages: number) => {
     setTargetFitPages(targetPages);
     const totalItems = previewItems.length || 20;
-    const idealScale = Math.min(100, Math.max(50, Math.round(((targetPages * 22) / totalItems) * 100)));
+    const idealScale = Math.min(
+      100,
+      Math.max(50, Math.round(((targetPages * 22) / totalItems) * 100))
+    );
     setScale(idealScale);
   };
 
@@ -309,314 +298,263 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
   );
 
   return (
-    <>
-      {/* Hidden off-screen container for canonical EstimateDocument rendering with print styles applied */}
-      <div
-        ref={hostRef}
-        className={`estimate-print-canvas estimate-print-mode-${density}`}
-        style={{
-          position: "fixed",
-          left: 0,
-          top: 0,
-          width: "733px", // 194mm printable width at 96 DPI
-          zIndex: -9999,
-          pointerEvents: "none",
-          background: "#ffffff",
-          overflow: "hidden",
-          zoom: scaleRatio,
-        }}
-        aria-hidden="true"
-      >
-        {currentRenderData && (
-          <EstimateDocument
-            estimate={currentRenderData.estimate}
-            items={currentRenderData.items}
-            stores={stores}
-            clients={clients}
-            products={products}
-            brands={brands}
-            sellerProfile={sellerProfile}
-            assetToken={token}
-          />
-        )}
-      </div>
-
-      {/* Main Preview & Settings Modal */}
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-slate-900/70 backdrop-blur-xs animate-in fade-in duration-150">
-        <div className="relative w-full max-w-5xl h-[92vh] bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col">
-          {/* Header */}
-          <div className="px-5 py-3.5 border-b border-slate-200 bg-gradient-to-r from-slate-50 to-white flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="w-9 h-9 rounded-xl bg-orange-600 text-white flex items-center justify-center shadow-xs">
-                <Printer className="w-5 h-5" />
-              </div>
-              <div>
-                <h2 className="text-base font-bold text-slate-800">
-                  Bulk Estimate Print &amp; PDF Export
-                </h2>
-                <p className="text-xs text-slate-500">
-                  {selectedEstimates.length} estimate{selectedEstimates.length !== 1 ? "s" : ""} selected for bulk processing
-                </p>
-              </div>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-slate-900/70 backdrop-blur-xs animate-in fade-in duration-150">
+      <div className="relative w-full max-w-5xl h-[92vh] bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col">
+        {/* Header */}
+        <div className="px-5 py-3.5 border-b border-slate-200 bg-gradient-to-r from-slate-50 to-white flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-orange-600 text-white flex items-center justify-center shadow-xs">
+              <Printer className="w-5 h-5" />
             </div>
+            <div>
+              <h2 className="text-base font-bold text-slate-800">
+                Bulk Estimate Print &amp; PDF Export
+              </h2>
+              <p className="text-xs text-slate-500">
+                {selectedEstimates.length} estimate
+                {selectedEstimates.length !== 1 ? "s" : ""} selected for bulk processing
+              </p>
+            </div>
+          </div>
 
+          <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={onClose}
               disabled={isProcessing}
-              className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100 transition disabled:opacity-50"
+              className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition disabled:opacity-50"
+              aria-label="Close"
             >
               <X className="w-5 h-5" />
             </button>
           </div>
+        </div>
 
-          {/* Controls Bar: Carousel Navigator + Page Setup Toolbar + Bulk Action Buttons */}
-          <div className="p-3 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 select-none">
-            {/* Carousel / Navigation */}
-            <div className="flex items-center gap-2">
-              <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
-                Preview:
-              </span>
+        {/* Toolbar: Preview Navigator & Page Setup Controls */}
+        <div className="px-5 py-2.5 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 text-xs">
+          {/* Estimate navigator */}
+          <div className="flex items-center gap-2 bg-white px-2 py-1 rounded-lg border border-slate-200 shadow-2xs">
+            <button
+              type="button"
+              onClick={() => setPreviewIdx((prev) => Math.max(0, prev - 1))}
+              disabled={previewIdx === 0 || isProcessing}
+              className="p-1 rounded text-slate-600 hover:bg-slate-100 disabled:opacity-30 disabled:hover:bg-transparent"
+              title="Previous estimate"
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+            <span className="font-semibold text-slate-700 min-w-[130px] text-center">
+              {previewIdx + 1} of {selectedEstimates.length} —{" "}
+              {currentEst?.estimateNumber || `#${currentEst?.id}`}
+            </span>
+            <button
+              type="button"
+              onClick={() =>
+                setPreviewIdx((prev) =>
+                  Math.min(selectedEstimates.length - 1, prev + 1)
+                )
+              }
+              disabled={previewIdx >= selectedEstimates.length - 1 || isProcessing}
+              className="p-1 rounded text-slate-600 hover:bg-slate-100 disabled:opacity-30 disabled:hover:bg-transparent"
+              title="Next estimate"
+            >
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+
+          {/* Page Setup Controls */}
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-1.5 bg-white px-2.5 py-1 rounded-lg border border-slate-200 shadow-2xs">
+              <SlidersHorizontal className="w-3.5 h-3.5 text-slate-400" />
+              <label htmlFor="bulk-scale-input" className="text-slate-500 font-medium">Scale:</label>
+              <input
+                id="bulk-scale-input"
+                type="range"
+                min="50"
+                max="120"
+                step="5"
+                value={scale}
+                onChange={(e) => {
+                  setScale(Number(e.target.value));
+                  setTargetFitPages(null);
+                }}
+                disabled={isProcessing}
+                className="w-20 accent-orange-600 cursor-pointer disabled:opacity-50"
+              />
+              <span className="font-bold text-slate-700 w-9 text-right">{scale}%</span>
+            </div>
+
+            <div className="flex items-center gap-1 bg-white p-0.5 rounded-lg border border-slate-200 shadow-2xs">
               <button
                 type="button"
-                onClick={() => setPreviewIdx((p) => Math.max(0, p - 1))}
-                disabled={previewIdx === 0 || isProcessing}
-                className="p-1 rounded bg-white border border-slate-200 hover:bg-slate-100 disabled:opacity-40 transition"
-                title="Previous estimate"
+                onClick={() => handleFitToPages(1)}
+                disabled={isProcessing}
+                className={`px-2 py-0.5 rounded text-[11px] font-semibold transition ${
+                  targetFitPages === 1
+                    ? "bg-orange-600 text-white"
+                    : "text-slate-600 hover:bg-slate-100"
+                }`}
               >
-                <ChevronLeft className="w-4 h-4 text-slate-700" />
+                Fit 1 Page
               </button>
-
-              <span className="text-xs font-semibold text-slate-700 px-1">
-                {previewIdx + 1} of {selectedEstimates.length}
-                {currentEst?.estimateNumber && (
-                  <span className="font-mono text-orange-600 ml-1.5 font-bold">
-                    {currentEst.estimateNumber}
-                  </span>
-                )}
-                {currentStore?.name && (
-                  <span className="text-slate-500 text-xs ml-1">
-                    ({currentStore.name})
-                  </span>
-                )}
-              </span>
-
               <button
                 type="button"
-                onClick={() => setPreviewIdx((p) => Math.min(selectedEstimates.length - 1, p + 1))}
-                disabled={previewIdx >= selectedEstimates.length - 1 || isProcessing}
-                className="p-1 rounded bg-white border border-slate-200 hover:bg-slate-100 disabled:opacity-40 transition"
-                title="Next estimate"
+                onClick={() => handleFitToPages(2)}
+                disabled={isProcessing}
+                className={`px-2 py-0.5 rounded text-[11px] font-semibold transition ${
+                  targetFitPages === 2
+                    ? "bg-orange-600 text-white"
+                    : "text-slate-600 hover:bg-slate-100"
+                }`}
               >
-                <ChevronRight className="w-4 h-4 text-slate-700" />
+                Fit 2 Pages
               </button>
             </div>
 
-            {/* Page Setup Presets (Scale, Fit, Density) */}
-            <div className="flex items-center gap-2 flex-wrap">
-              <div className="flex items-center gap-1 font-bold text-slate-600 text-xs">
-                <SlidersHorizontal className="w-3.5 h-3.5 text-orange-600" />
-                <span className="text-[11px] uppercase tracking-wider">Page Setup:</span>
-              </div>
-
-              {/* Scale Presets */}
-              <div className="flex items-center gap-0.5 bg-white p-0.5 rounded border border-slate-200 shadow-xs">
-                <span className="text-[10px] text-slate-400 font-bold px-1 uppercase">Scale:</span>
-                {[100, 90, 85, 75, 70].map((s) => (
-                  <button
-                    key={s}
-                    type="button"
-                    onClick={() => {
-                      setScale(s);
-                      setTargetFitPages(null);
-                    }}
-                    className={`px-1.5 py-0.5 rounded text-[11px] font-bold transition ${
-                      scale === s && targetFitPages === null
-                        ? "bg-orange-600 text-white shadow-xs"
-                        : "text-slate-600 hover:bg-slate-100"
-                    }`}
-                  >
-                    {s}%
-                  </button>
-                ))}
-              </div>
-
-              {/* Quick Fit */}
-              <div className="flex items-center gap-1">
-                <button
-                  type="button"
-                  onClick={() => handleFitToPages(1)}
-                  className={`px-2 py-0.5 rounded border text-[10.5px] font-bold transition shadow-xs ${
-                    targetFitPages === 1
-                      ? "bg-orange-600 text-white border-orange-600"
-                      : "bg-white border-slate-200 text-slate-700 hover:bg-orange-50"
-                  }`}
-                >
-                  Fit 1 Page
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleFitToPages(2)}
-                  className={`px-2 py-0.5 rounded border text-[10.5px] font-bold transition shadow-xs ${
-                    targetFitPages === 2
-                      ? "bg-orange-600 text-white border-orange-600"
-                      : "bg-white border-slate-200 text-slate-700 hover:bg-orange-50"
-                  }`}
-                >
-                  Fit 2 Pages
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleFitToPages(3)}
-                  className={`px-2 py-0.5 rounded border text-[10.5px] font-bold transition shadow-xs ${
-                    targetFitPages === 3
-                      ? "bg-orange-600 text-white border-orange-600"
-                      : "bg-white border-slate-200 text-slate-700 hover:bg-orange-50"
-                  }`}
-                >
-                  Fit 3 Pages
-                </button>
-              </div>
-
-              {/* Density */}
-              <div className="flex items-center gap-0.5 bg-white p-0.5 rounded border border-slate-200 shadow-xs">
-                <span className="text-[10px] text-slate-400 font-bold px-1 uppercase">Density:</span>
-                <button
-                  type="button"
-                  onClick={() => setDensity("normal")}
-                  className={`px-1.5 py-0.5 rounded text-[11px] font-bold transition ${
-                    density === "normal" ? "bg-slate-800 text-white" : "text-slate-600 hover:bg-slate-100"
-                  }`}
-                >
-                  Normal
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setDensity("compact")}
-                  className={`px-1.5 py-0.5 rounded text-[11px] font-bold transition ${
-                    density === "compact" ? "bg-slate-800 text-white" : "text-slate-600 hover:bg-slate-100"
-                  }`}
-                >
-                  Compact
-                </button>
-              </div>
-            </div>
-
-            {/* Actions */}
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1 bg-white p-0.5 rounded-lg border border-slate-200 shadow-2xs">
               <button
                 type="button"
-                onClick={handlePrintCurrent}
-                disabled={previewLoading || isProcessing}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-bold rounded-lg transition disabled:opacity-50"
-                title="Print current previewed estimate"
-              >
-                <Printer className="w-3.5 h-3.5" />
-                <span>Print ({scale}%)</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleStartBulkExport("zip")}
+                onClick={() => setDensity("normal")}
                 disabled={isProcessing}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-orange-600 hover:bg-orange-700 text-white text-xs font-bold rounded-lg shadow-xs transition disabled:opacity-50"
-                title="Generate individual PDFs and download as ZIP"
+                className={`px-2 py-0.5 rounded text-[11px] font-semibold transition ${
+                  density === "normal"
+                    ? "bg-orange-600 text-white"
+                    : "text-slate-600 hover:bg-slate-100"
+                }`}
               >
-                <Download className="w-3.5 h-3.5" />
-                <span>Export Individual PDFs (ZIP)</span>
+                Normal
               </button>
-
               <button
                 type="button"
-                onClick={() => handleStartBulkExport("combined")}
+                onClick={() => setDensity("compact")}
                 disabled={isProcessing}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold rounded-lg shadow-xs transition disabled:opacity-50"
-                title="Combine all selected estimates into one PDF document"
+                className={`px-2 py-0.5 rounded text-[11px] font-semibold transition ${
+                  density === "compact"
+                    ? "bg-orange-600 text-white"
+                    : "text-slate-600 hover:bg-slate-100"
+                }`}
               >
-                <FileText className="w-3.5 h-3.5" />
-                <span>Print Combined PDF</span>
+                Compact
               </button>
             </div>
           </div>
 
-          {/* Progress / Status banner during processing or after completion */}
-          {(isProcessing || isDone || failures.length > 0) && (
-            <div className="px-5 py-3 border-b border-slate-200 bg-amber-50/70 flex flex-wrap items-center justify-between gap-3 text-xs">
-              <div className="flex items-center gap-2">
-                {isProcessing ? (
-                  <Loader2 className="w-4 h-4 text-orange-600 animate-spin" />
-                ) : failures.length > 0 ? (
-                  <AlertCircle className="w-4 h-4 text-rose-600" />
-                ) : (
-                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                )}
-                <span className="font-medium text-slate-800">
-                  {isProcessing
-                    ? statusText
-                    : isDone
-                    ? `Completed: ${successCount} of ${selectedEstimates.length} estimate PDF(s) generated successfully.`
-                    : ""}
-                </span>
-                {failures.length > 0 && (
-                  <span className="text-rose-600 font-bold ml-1">
-                    ({failures.length} failed)
-                  </span>
-                )}
-              </div>
+          {/* Actions */}
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handlePrintCurrent}
+              disabled={previewLoading || isProcessing}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-bold rounded-lg transition disabled:opacity-50"
+              title="Print current previewed estimate"
+            >
+              <Printer className="w-3.5 h-3.5" />
+              <span>Print ({scale}%</span>
+            </button>
 
-              {isProcessing && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    cancelledRef.current = true;
-                    setIsProcessing(false);
-                  }}
-                  className="px-2 py-1 bg-white border border-rose-300 text-rose-700 rounded text-[11px] font-bold hover:bg-rose-50"
-                >
-                  Cancel
-                </button>
+            <button
+              type="button"
+              onClick={() => handleStartBulkExport("zip")}
+              disabled={isProcessing}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-orange-600 hover:bg-orange-700 text-white text-xs font-bold rounded-lg shadow-xs transition disabled:opacity-50"
+              title="Generate individual PDFs and download as ZIP"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>Export Individual PDFs (ZIP)</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => handleStartBulkExport("combined")}
+              disabled={isProcessing}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold rounded-lg shadow-xs transition disabled:opacity-50"
+              title="Combine all selected estimates into one PDF document"
+            >
+              <FileText className="w-3.5 h-3.5" />
+              <span>Print Combined PDF</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Progress / Status banner during processing or after completion */}
+        {(isProcessing || isDone || failures.length > 0) && (
+          <div className="px-5 py-3 border-b border-slate-200 bg-amber-50/70 flex flex-wrap items-center justify-between gap-3 text-xs">
+            <div className="flex items-center gap-2">
+              {isProcessing ? (
+                <Loader2 className="w-4 h-4 text-orange-600 animate-spin" />
+              ) : failures.length > 0 ? (
+                <AlertCircle className="w-4 h-4 text-rose-600" />
+              ) : (
+                <CheckCircle2 className="w-4 h-4 text-emerald-600" />
               )}
-
-              {combinedPdfBlobUrl && !isProcessing && (
-                <div className="flex items-center gap-2">
-                  <a
-                    href={combinedPdfBlobUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="px-2.5 py-1 bg-slate-800 text-white rounded font-bold hover:bg-slate-700 transition"
-                  >
-                    Open Combined PDF
-                  </a>
-                  <a
-                    href={combinedPdfBlobUrl}
-                    download={`Combined_Estimates_${new Date().toISOString().slice(0, 10)}.pdf`}
-                    className="px-2.5 py-1 bg-orange-600 text-white rounded font-bold hover:bg-orange-700 transition"
-                  >
-                    Download Combined PDF
-                  </a>
-                </div>
+              <span className="font-medium text-slate-800">
+                {isProcessing
+                  ? statusText
+                  : isDone
+                  ? `Completed: ${successCount} of ${selectedEstimates.length} estimate PDF(s) generated successfully.`
+                  : ""}
+              </span>
+              {failures.length > 0 && (
+                <span className="text-rose-600 font-bold ml-1">
+                  ({failures.length} failed)
+                </span>
               )}
             </div>
-          )}
 
-          {/* Document Preview Viewport */}
-          <div className="flex-1 overflow-auto bg-slate-200/80 p-6 flex justify-center">
-            {previewLoading ? (
-              <div className="w-full max-w-[733px] bg-white rounded-lg shadow-md p-16 text-center text-slate-400">
-                <Loader2 className="w-8 h-8 animate-spin mx-auto mb-3 text-orange-500" />
-                <p className="text-sm font-semibold">Loading estimate items...</p>
-              </div>
-            ) : currentEst ? (
-              <div
-                className={`bg-white shadow-xl border border-slate-300 rounded-sm estimate-print-mode-${density}`}
-                style={{
-                  width: "733px", // 194mm A4 printable width
-                  minHeight: "1036px", // 274mm height proportion
-                  padding: "0",
-                  transformOrigin: "top center",
-                  zoom: scaleRatio,
+            {isProcessing && (
+              <button
+                type="button"
+                onClick={() => {
+                  cancelledRef.current = true;
+                  setIsProcessing(false);
                 }}
+                className="px-2 py-1 bg-white border border-rose-300 text-rose-700 rounded text-[11px] font-bold hover:bg-rose-50"
               >
+                Cancel
+              </button>
+            )}
+
+            {combinedPdfBlobUrl && !isProcessing && (
+              <div className="flex items-center gap-2">
+                <a
+                  href={combinedPdfBlobUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="px-2.5 py-1 bg-slate-800 text-white rounded font-bold hover:bg-slate-700 transition"
+                >
+                  Open Combined PDF
+                </a>
+                <a
+                  href={combinedPdfBlobUrl}
+                  download={`Combined_Estimates_${new Date().toISOString().slice(0, 10)}.pdf`}
+                  className="px-2.5 py-1 bg-orange-600 text-white rounded font-bold hover:bg-orange-700 transition"
+                >
+                  Download Combined PDF
+                </a>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Document Preview Viewport */}
+        <div className="flex-1 overflow-auto bg-slate-200/80 p-6 flex justify-center">
+          {previewLoading ? (
+            <div className="w-full max-w-[733px] bg-white rounded-lg shadow-md p-16 text-center text-slate-400">
+              <Loader2 className="w-8 h-8 animate-spin mx-auto mb-3 text-orange-500" />
+              <p className="text-sm font-semibold">Loading estimate items...</p>
+            </div>
+          ) : currentEst ? (
+            <div
+              className={`bg-white shadow-xl border border-slate-300 rounded-sm estimate-document-host estimate-print-mode-${density}`}
+              style={{
+                width: "733px",
+                minHeight: "1036px",
+                padding: "0",
+                transformOrigin: "top center",
+                zoom: scaleRatio,
+              }}
+            >
+              <div data-print-document="true">
                 <EstimateDocument
                   estimate={currentEst}
                   items={previewItems}
@@ -628,15 +566,15 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
                   assetToken={token}
                 />
               </div>
-            ) : (
-              <div className="text-center py-20 text-slate-400">
-                No estimate selected.
-              </div>
-            )}
-          </div>
+            </div>
+          ) : (
+            <div className="text-center py-20 text-slate-400">
+              No estimate selected.
+            </div>
+          )}
         </div>
       </div>
-    </>
+    </div>
   );
 };
 
