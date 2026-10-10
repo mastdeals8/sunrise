@@ -32,6 +32,7 @@ import {
   addCompanyUser,
   removeCompanyUser,
   createUser,
+  fetchUsers,
 } from "../lib/api";
 
 interface SettingsState {
@@ -273,11 +274,8 @@ const SettingsPage: React.FC = () => {
   const loadAllSystemUsers = async () => {
     if (!isAdmin) return;
     try {
-      const res = await apiFetch("/api/users", token);
-      if (res.ok) {
-        const uList = await res.json();
-        setAllSystemUsers(uList);
-      }
+      const uList = await fetchUsers(token);
+      setAllSystemUsers(uList);
     } catch (err) {
       console.error("Failed to load all users:", err);
     }

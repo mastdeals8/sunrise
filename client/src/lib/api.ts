@@ -92,6 +92,19 @@ function toCamel(o: any): any {
   return o;
 }
 
+function toSnake(o: any): any {
+  if (Array.isArray(o)) return o.map(toSnake);
+  if (o !== null && typeof o === "object") {
+    return Object.fromEntries(
+      Object.entries(o).map(([k, v]) => [
+        k.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`),
+        toSnake(v),
+      ])
+    );
+  }
+  return o;
+}
+
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
 /** Show in-app toast or console message for blocked write actions in Bolt mode. */
@@ -578,10 +591,26 @@ export async function fetchLedgerSummary(token: string | null) {
 
 // ─── Staff / HR ───────────────────────────────────────────────────────────────
 
-export async function fetchUsers(token: string | null) {
+export async function fetchUsers(token: string | null, companyId?: number) {
   if (!isBoltMode) {
     const res = await apiFetch("/api/users", token);
     return res.ok ? res.json() : [];
+  }
+  const targetCompanyId = companyId || getActiveCompanyId();
+  try {
+    const rows = await sbSelect<any>("company_users", (q) =>
+      q.select("role, is_default, users!inner(id, username, name, email, role, department, designation, phone, telegram_chat_id, joining_date, basic_salary, daily_wage, is_active, created_at)")
+        .eq("company_id", targetCompanyId)
+        .eq("users.is_active", true)
+    );
+    if (rows && rows.length > 0) {
+      return rows.map((r: any) => ({
+        ...r.users,
+        companyRole: r.role,
+      }));
+    }
+  } catch (err) {
+    console.warn("[api] company_users join error in fetchUsers:", err);
   }
   return sbSelect("users", (q) =>
     q.select("id, username, name, email, role, department, designation, phone, telegram_chat_id, joining_date, basic_salary, daily_wage, is_active, created_at")
@@ -619,51 +648,89 @@ export async function createUser(
     return res.json();
   }
 
-  // Bolt / Supabase mode
+  // Bolt / Supabase mode: call atomic administrative creation RPC
   if (!hasSupabaseConfig) throw new Error("Supabase is not configured.");
-  const { data: authData, error: authErr } = await supabase.auth.signUp({
-    email: payload.email,
-    password: payload.password,
-    options: {
-      data: {
-        name: payload.name,
-        username: payload.username,
-        role: payload.role || "staff",
-      },
-    },
-  });
-  if (authErr) throw new Error(authErr.message);
+  const targetCompanyId = payload.companyId || getActiveCompanyId();
+  const targetCompanyRole = payload.companyRole || "company_user";
 
-  const { data: newUser, error: uErr } = await supabase
-    .from("users")
-    .insert({
+  const { data, error } = await supabase.rpc("admin_create_user", {
+    payload: {
       username: payload.username,
       email: payload.email,
-      password: "SUPABASE_MANAGED",
+      password: payload.password,
       name: payload.name,
       role: payload.role || "staff",
+      companyId: targetCompanyId,
+      companyRole: targetCompanyRole,
       phone: payload.phone || null,
       department: payload.department || null,
       designation: payload.designation || null,
-      employee_id: payload.employeeId || null,
-      auth_user_id: authData?.user?.id || null,
-      is_active: payload.isActive !== false,
-    })
+      employeeId: payload.employeeId || null,
+      isActive: payload.isActive !== false,
+    },
+  });
+
+  if (error) {
+    throw new Error(error.message || "Failed to create user");
+  }
+
+  return data;
+}
+
+export async function updateUser(
+  token: string | null,
+  userId: number,
+  payload: Record<string, any>
+) {
+  if (!isBoltMode) {
+    const res = await apiFetch(`/api/users/${userId}`, token, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.message || "Failed to update user");
+    }
+    return res.json();
+  }
+
+  const { data, error } = await supabase
+    .from("users")
+    .update(toSnake(payload))
+    .eq("id", userId)
     .select()
     .single();
 
-  if (uErr) throw new Error(uErr.message);
+  if (error) throw new Error(error.message);
+  return toCamel(data);
+}
 
-  const targetCompanyId = payload.companyId || getActiveCompanyId();
-  const targetCompanyRole = payload.companyRole || "company_user";
-  await supabase.from("company_users").insert({
-    user_id: newUser.id,
-    company_id: targetCompanyId,
-    role: targetCompanyRole,
-    is_default: true,
-  });
+export async function deleteUser(token: string | null, userId: number) {
+  if (!isBoltMode) {
+    const res = await apiFetch(`/api/users/${userId}`, token, {
+      method: "DELETE",
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.message || "Failed to delete user");
+    }
+    return res.json();
+  }
 
-  return { user: newUser, companyId: targetCompanyId, role: targetCompanyRole };
+  const { error } = await supabase
+    .from("users")
+    .delete()
+    .eq("id", userId);
+
+  if (error) {
+    // If delete blocked by FK, soft-delete by deactivating
+    const { error: softErr } = await supabase
+      .from("users")
+      .update({ is_active: false })
+      .eq("id", userId);
+    if (softErr) throw new Error(softErr.message);
+  }
+  return { success: true };
 }
 
 export async function fetchAttendance(token: string | null) {
@@ -986,8 +1053,9 @@ export async function fetchCustomerRateCards(token: string | null, clientId?: nu
     const res = await apiFetch(url, token);
     return res.ok ? res.json() : [];
   }
+  const companyId = getActiveCompanyId();
   return sbSelect("customer_rate_cards", (q) => {
-    let query = q.select("*");
+    let query = q.select("*").eq("company_id", companyId);
     if (clientId) query = query.eq("client_id", clientId);
     return query.order("name");
   });
@@ -1006,55 +1074,195 @@ export async function fetchRateCardItems(token: string | null, cardId: number) {
     const res = await apiFetch(`/api/customer-rate-cards/${cardId}/items`, token);
     return res.ok ? res.json() : [];
   }
-  return sbSelect("customer_rate_items", (q) => q.select("*").eq("rate_card_id", cardId));
+  const rows = await sbSelect<any>("customer_rate_items", (q) =>
+    q.select(`
+      id,
+      rate_card_id,
+      product_id,
+      material_code_id,
+      item_name,
+      description,
+      hsn,
+      uom,
+      calculation_type,
+      rate,
+      gst_percent,
+      is_standard,
+      is_active,
+      created_at,
+      products (
+        id,
+        name,
+        material_code,
+        unit,
+        rate,
+        is_active
+      )
+    `).eq("rate_card_id", cardId).order("id")
+  );
+
+  return (rows || []).map((r: any) => ({
+    ...r,
+    productName: r.products?.name ?? r.item_name ?? "",
+    productMaterialCode: r.products?.material_code ?? r.hsn ?? "",
+    productUnit: r.products?.unit ?? r.uom ?? "pcs",
+    productStandardRate: r.products?.rate ?? 0,
+    productIsActive: r.products?.is_active ?? true,
+  }));
 }
 
 export async function createRateCard(token: string | null, card: any) {
-  const res = await apiFetch("/api/customer-rate-cards", token, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(card),
-  });
-  if (!res.ok) throw new Error((await res.json()).message || "Failed to create rate card");
-  return res.json();
+  if (!isBoltMode) {
+    const res = await apiFetch("/api/customer-rate-cards", token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(card),
+    });
+    if (!res.ok) throw new Error((await res.json()).message || "Failed to create rate card");
+    return res.json();
+  }
+
+  const companyId = card.companyId || getActiveCompanyId();
+  const { data, error } = await supabase
+    .from("customer_rate_cards")
+    .insert({
+      client_id: card.clientId,
+      name: card.name,
+      brand_id: card.brandId || null,
+      project_type: card.projectType || null,
+      effective_from: card.effectiveFrom ? new Date(card.effectiveFrom).toISOString() : null,
+      effective_to: card.effectiveTo ? new Date(card.effectiveTo).toISOString() : null,
+      notes: card.notes || null,
+      is_active: card.isActive !== false,
+      company_id: companyId,
+    })
+    .select()
+    .single();
+
+  if (error) throw new Error(error.message);
+  return toCamel(data);
 }
 
 export async function updateRateCard(token: string | null, cardId: number, card: any) {
-  const res = await apiFetch(`/api/customer-rate-cards/${cardId}`, token, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(card),
-  });
-  if (!res.ok) throw new Error((await res.json()).message || "Failed to update rate card");
-  return res.json();
+  if (!isBoltMode) {
+    const res = await apiFetch(`/api/customer-rate-cards/${cardId}`, token, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(card),
+    });
+    if (!res.ok) throw new Error((await res.json()).message || "Failed to update rate card");
+    return res.json();
+  }
+
+  const updates: any = {};
+  if (card.name !== undefined) updates.name = card.name;
+  if (card.brandId !== undefined) updates.brand_id = card.brandId;
+  if (card.projectType !== undefined) updates.project_type = card.projectType;
+  if (card.effectiveFrom !== undefined) updates.effective_from = card.effectiveFrom ? new Date(card.effectiveFrom).toISOString() : null;
+  if (card.effectiveTo !== undefined) updates.effective_to = card.effectiveTo ? new Date(card.effectiveTo).toISOString() : null;
+  if (card.notes !== undefined) updates.notes = card.notes;
+  if (card.isActive !== undefined) updates.is_active = card.isActive;
+
+  const { data, error } = await supabase
+    .from("customer_rate_cards")
+    .update(updates)
+    .eq("id", cardId)
+    .select()
+    .single();
+
+  if (error) throw new Error(error.message);
+  return toCamel(data);
 }
 
 export async function deleteRateCard(token: string | null, cardId: number) {
-  const res = await apiFetch(`/api/customer-rate-cards/${cardId}`, token, {
-    method: "DELETE",
-  });
-  if (!res.ok) throw new Error((await res.json()).message || "Failed to delete rate card");
-  return res.json();
+  if (!isBoltMode) {
+    const res = await apiFetch(`/api/customer-rate-cards/${cardId}`, token, {
+      method: "DELETE",
+    });
+    if (!res.ok) throw new Error((await res.json()).message || "Failed to delete rate card");
+    return res.json();
+  }
+
+  const { error } = await supabase
+    .from("customer_rate_cards")
+    .delete()
+    .eq("id", cardId);
+
+  if (error) throw new Error(error.message);
+  return { success: true };
 }
 
 export async function importProductsToRateCard(token: string | null, cardId: number) {
-  // Bolt: rate cards use Express API
-  const res = await apiFetch(`/api/customer-rate-cards/${cardId}/import-products`, token, {
-    method: "POST",
+  if (!isBoltMode) {
+    const res = await apiFetch(`/api/customer-rate-cards/${cardId}/import-products`, token, {
+      method: "POST",
+    });
+    if (!res.ok) throw new Error((await res.json()).message || "Failed to import products to rate card");
+    return res.json();
+  }
+
+  const { data, error } = await supabase.rpc("import_products_to_rate_card", {
+    p_rate_card_id: cardId,
   });
-  if (!res.ok) throw new Error((await res.json()).message || "Failed to import products to rate card");
-  return res.json();
+  if (error) throw new Error(error.message);
+  return toCamel(data);
 }
 
 export async function batchUpdateRateCardItems(token: string | null, cardId: number, items: any[]) {
-  // Bolt: rate cards use Express API
-  const res = await apiFetch(`/api/customer-rate-cards/${cardId}/batch-items`, token, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ items }),
+  if (!isBoltMode) {
+    const res = await apiFetch(`/api/customer-rate-cards/${cardId}/batch-items`, token, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items }),
+    });
+    if (!res.ok) throw new Error((await res.json()).message || "Failed to update rate card items");
+    return res.json();
+  }
+
+  const { data, error } = await supabase.rpc("batch_update_rate_card_items", {
+    p_rate_card_id: cardId,
+    p_items: items,
   });
-  if (!res.ok) throw new Error((await res.json()).message || "Failed to update rate card items");
-  return res.json();
+  if (error) throw new Error(error.message);
+  return toCamel(data);
+}
+
+export async function resolveCustomerRate(
+  token: string | null,
+  params: {
+    clientId: number;
+    brandId?: number | null;
+    productId?: number | null;
+    projectType?: string | null;
+  }
+): Promise<{
+  rate: number;
+  uom: string;
+  gstPercent: number;
+  rateCardId: number;
+  rateCardName: string;
+  calculationType?: string;
+  itemName?: string;
+} | null> {
+  if (!isBoltMode) {
+    const q = new URLSearchParams({ clientId: String(params.clientId) });
+    if (params.brandId) q.set("brandId", String(params.brandId));
+    if (params.productId) q.set("productId", String(params.productId));
+    if (params.projectType) q.set("projectType", params.projectType);
+    const res = await apiFetch(`/api/customer-rate-cards/resolve?${q.toString()}`, token);
+    if (!res.ok) return null;
+    return res.json();
+  }
+
+  const { data, error } = await supabase.rpc("resolve_customer_rate", {
+    p_client_id: params.clientId,
+    p_brand_id: params.brandId ?? null,
+    p_product_id: params.productId ?? null,
+    p_project_type: params.projectType ?? null,
+  });
+
+  if (error || !data) return null;
+  return toCamel(data);
 }
 
 // ─── Storage uploads ─────────────────────────────────────────────────────────

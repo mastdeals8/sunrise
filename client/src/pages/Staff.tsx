@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { isBoltMode } from "../lib/supabase";
-import { fetchUsers, fetchAttendance, fetchAdvances, fetchPayroll } from "../lib/api";
+import { fetchUsers, fetchAttendance, fetchAdvances, fetchPayroll, createUser, updateUser } from "../lib/api";
 import { useAuth } from "../contexts/AuthContext";
 import { useGlobalDate } from "../contexts/GlobalDateContext";
 import { normalizeDisplayName } from "../../../shared/textFormat";
@@ -242,47 +242,25 @@ const StaffPage: React.FC = () => {
         isActive
       };
 
-      let res;
       if (editingStaffId) {
-        // Update
-        res = await fetch(`/api/users/${editingStaffId}`, {
-          method: "PUT",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`
-          },
-          body: JSON.stringify(payload)
-        });
+        await updateUser(token, editingStaffId, payload);
       } else {
-        // Create (Register)
         if (!username || !password) {
           showError("Username and password are required for new staff enrollment.");
           return;
         }
-        res = await fetch("/api/auth/register", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`
-          },
-          body: JSON.stringify({
-            ...payload,
-            username,
-            password
-          })
+        await createUser(token, {
+          ...payload,
+          username,
+          password,
         });
       }
 
-      if (res.ok) {
-        showSuccess(`Staff member successfully ${editingStaffId ? "updated" : "enrolled"}!`);
-        setShowAddForm(false);
-        setEditingStaffId(null);
-        clearStaffForm();
-        fetchData();
-      } else {
-        const err = await res.json();
-        showError(err.message || "Failed to save staff profile.");
-      }
+      showSuccess(`Staff member successfully ${editingStaffId ? "updated" : "enrolled"}!`);
+      setShowAddForm(false);
+      setEditingStaffId(null);
+      clearStaffForm();
+      fetchData();
     } catch (err) {
       showError("Staff database transaction failed.");
     }

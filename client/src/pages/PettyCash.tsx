@@ -3,6 +3,7 @@ import { formatCurrency } from "@/utils/format";
 import { useAuth } from "../contexts/AuthContext";
 import { useGlobalDate } from "../contexts/GlobalDateContext";
 import { supabase, isBoltMode } from "../lib/supabase";
+import { fetchUsers } from "../lib/api";
 import { 
   Coins, 
   Plus, 
@@ -76,7 +77,8 @@ const PettyCashPage: React.FC = () => {
           createdAt: r.created_at,
         }));
         setExpenses(dataE.filter((row: PettyCashExpense) => globalDate.isInRange(row.expenseDate)));
-        setStaffList([]);
+        const staff = await fetchUsers(token);
+        setStaffList(staff);
         return;
       }
 

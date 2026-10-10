@@ -12,6 +12,7 @@ import {
   deleteRateCard,
   importProductsToRateCard,
   batchUpdateRateCardItems,
+  resolveCustomerRate,
   apiFetch,
 } from "../lib/api";
 import {
@@ -585,18 +586,12 @@ export default function CustomerRateCards() {
     setResolving(true);
     setResolvedResult(null);
     try {
-      const params = new URLSearchParams({
-        clientId: String(selectedClientId),
-        productId: String(rProductId),
+      const data = await resolveCustomerRate(token, {
+        clientId: Number(selectedClientId),
+        productId: Number(rProductId),
+        brandId: cardBrandId || null,
       });
-      if (cardBrandId) params.set("brandId", String(cardBrandId));
-      const res = await apiFetch(`/api/customer-rate-cards/resolve?${params.toString()}`, token);
-      if (res.ok) {
-        const data = await res.json();
-        setResolvedResult(data || "NO_MATCH");
-      } else {
-        setResolvedResult("ERROR");
-      }
+      setResolvedResult(data || "NO_MATCH");
     } catch {
       setResolvedResult("ERROR");
     } finally {

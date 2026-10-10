@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useAuth } from "../contexts/AuthContext";
 import { isBoltMode } from "../lib/supabase";
-import { fetchUsers as fetchUsersApi, createUser, apiFetch } from "../lib/api";
+import { fetchUsers as fetchUsersApi, createUser, updateUser, deleteUser, apiFetch } from "../lib/api";
 import {
   Users as UsersIcon,
   Plus,
@@ -167,15 +167,7 @@ const AdminPage: React.FC = () => {
           isActive: form.isActive,
         };
         if (form.password) payload.password = form.password;
-        const res = await apiFetch(`/api/users/${editId}`, token, {
-          method: "PUT",
-          body: JSON.stringify(payload),
-        });
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({ message: "Update failed" }));
-          showMsg("err", err.message || "Update failed");
-          return;
-        }
+        await updateUser(token, editId, payload);
         showMsg("ok", "User updated");
       } else {
         if (!form.password || form.password.length < 4) {
@@ -207,18 +199,9 @@ const AdminPage: React.FC = () => {
 
   const toggleActive = async (u: UserRecord) => {
     try {
-      const res = await fetch(`/api/users/${u.id}`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ isActive: !u.isActive }),
-      });
-      if (res.ok) {
-        showMsg("ok", !u.isActive ? "Activated" : "Deactivated");
-        fetchUsers();
-      }
+      await updateUser(token, u.id, { isActive: !u.isActive });
+      showMsg("ok", !u.isActive ? "Activated" : "Deactivated");
+      fetchUsers();
     } catch (err: any) {
       showMsg("err", err.message || "Failed");
     }
@@ -227,16 +210,9 @@ const AdminPage: React.FC = () => {
   const removeUser = async (u: UserRecord) => {
     if (!confirm(`Delete user "${u.name}"? This cannot be undone.`)) return;
     try {
-      const res = await fetch(`/api/users/${u.id}`, {
-        method: "DELETE",
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (res.ok) {
-        showMsg("ok", "User deleted");
-        fetchUsers();
-      } else {
-        showMsg("err", "Delete failed");
-      }
+      await deleteUser(token, u.id);
+      showMsg("ok", "User deleted");
+      fetchUsers();
     } catch (err: any) {
       showMsg("err", err.message || "Failed");
     }
@@ -249,21 +225,10 @@ const AdminPage: React.FC = () => {
       return;
     }
     try {
-      const res = await fetch(`/api/users/${resetUser.id}`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ password: resetPassword }),
-      });
-      if (res.ok) {
-        showMsg("ok", `Password reset for ${resetUser.username}`);
-        setResetUser(null);
-        setResetPassword("");
-      } else {
-        showMsg("err", "Reset failed");
-      }
+      await updateUser(token, resetUser.id, { password: resetPassword });
+      showMsg("ok", `Password reset for ${resetUser.username}`);
+      setResetUser(null);
+      setResetPassword("");
     } catch (err: any) {
       showMsg("err", err.message || "Failed");
     }

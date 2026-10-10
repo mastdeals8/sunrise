@@ -47,7 +47,7 @@ import ProjectWorkspace from "./components/ProjectWorkspace";
 import WccDcEditor from "./components/WccDcEditor";
 import { useOperationsData, type Invoice } from "./hooks/useOperationsData";
 import { isBoltMode, supabase } from "../../lib/supabase";
-import { createEstimate, updateEstimate, duplicateEstimate, createDeliveryChallan, updateDeliveryChallan, fetchEstimateItems, fetchDeliveryChallansForEstimate, fetchBillingProfiles as apiFetchBillingProfiles, fetchCompanySettings, createInvoice, createPayment, fetchClientLedger, masterDataSave, uploadToStorage, registerExecutionDocument, deleteExecutionDocument, deleteWccPhotoArtifacts, hydrateDeliveryChallanPhotos, normalizeWccPhotos, apiFetch } from "../../lib/api";
+import { createEstimate, updateEstimate, duplicateEstimate, createDeliveryChallan, updateDeliveryChallan, fetchEstimateItems, fetchDeliveryChallansForEstimate, fetchBillingProfiles as apiFetchBillingProfiles, fetchCompanySettings, createInvoice, createPayment, fetchClientLedger, masterDataSave, uploadToStorage, registerExecutionDocument, deleteExecutionDocument, deleteWccPhotoArtifacts, hydrateDeliveryChallanPhotos, normalizeWccPhotos, resolveCustomerRate, apiFetch } from "../../lib/api";
 import { useEstimateBuilder } from "./hooks/useEstimateBuilder";
 import { useInvoiceWorkflow } from "./hooks/useInvoiceWorkflow";
 import { useWccDcEditor } from "./hooks/useWccDcEditor";
@@ -1165,18 +1165,13 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     opts: { productId?: number | null; materialCodeId?: number | null },
   ) => {
     if (!estClientId) return;
-    if (isBoltMode) return; // rate-card resolver not yet migrated; user enters rate manually
     try {
-      const params = new URLSearchParams({ clientId: estClientId });
-      if (estBrandId) params.set("brandId", estBrandId);
-      if (opts.productId) params.set("productId", String(opts.productId));
-      if (opts.materialCodeId) params.set("materialCodeId", String(opts.materialCodeId));
-      if (isAblblFormat(estFormat)) {
-        params.set("projectType", estAbfrlProjectType);
-      }
-      const r = await apiFetch(`/api/customer-rate-cards/resolve?${params.toString()}`, token);
-      if (!r.ok) return;
-      const data = await r.json();
+      const data = await resolveCustomerRate(token, {
+        clientId: Number(estClientId),
+        brandId: estBrandId ? Number(estBrandId) : null,
+        productId: opts.productId ? Number(opts.productId) : null,
+        projectType: isAblblFormat(estFormat) ? estAbfrlProjectType : null,
+      });
       if (!data) return;
       setEstItems(prev => {
         const next = [...prev];
