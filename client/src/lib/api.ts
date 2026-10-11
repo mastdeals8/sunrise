@@ -591,11 +591,22 @@ export async function fetchLedgerSummary(token: string | null) {
 
 // ─── Staff / HR ───────────────────────────────────────────────────────────────
 
-export async function fetchUsers(token: string | null, companyId?: number) {
+export async function fetchUsers(token: string | null, companyId?: number | "all") {
   if (!isBoltMode) {
-    const res = await apiFetch("/api/users", token);
+    const url = companyId && companyId !== "all" ? `/api/users?companyId=${companyId}` : "/api/users";
+    const res = await apiFetch(url, token);
     return res.ok ? res.json() : [];
   }
+  // When explicitly requesting all users (e.g. member assignment dropdowns), query public.users directly.
+  // PostgreSQL RLS automatically scopes rows to those permitted to the caller.
+  if (companyId === "all") {
+    return sbSelect("users", (q) =>
+      q.select("id, username, name, email, role, department, designation, phone, telegram_chat_id, joining_date, basic_salary, daily_wage, is_active, created_at")
+        .eq("is_active", true)
+        .order("name")
+    );
+  }
+
   const targetCompanyId = companyId || getActiveCompanyId();
   try {
     const rows = await sbSelect<any>("company_users", (q) =>
@@ -617,6 +628,10 @@ export async function fetchUsers(token: string | null, companyId?: number) {
       .eq("is_active", true)
       .order("name")
   );
+}
+
+export async function fetchAllUsers(token: string | null) {
+  return fetchUsers(token, "all");
 }
 
 export async function createUser(
@@ -928,17 +943,74 @@ export async function createCompanyWorkspace(token: string | null, data: any) {
 
 export async function fetchCompanyUsers(token: string | null, companyId: number) {
   if (isBoltMode) {
-    return sbSelect<any>("company_users", (q) => q.select("*, users(*)").eq("company_id", companyId));
+    const rows = await sbSelect<any>("company_users", (q) =>
+      q.select("*, users(*)").eq("company_id", companyId).order("id")
+    );
+    return (rows || []).map((r: any) => {
+      const u = r.users || r.user;
+      return {
+        id: r.id,
+        userId: r.userId ?? r.user_id,
+        companyId: r.companyId ?? r.company_id,
+        role: r.role,
+        isDefault: r.isDefault ?? r.is_default,
+        createdAt: r.createdAt ?? r.created_at,
+        user: u ? {
+          id: u.id,
+          name: u.name,
+          username: u.username,
+          email: u.email,
+          role: u.role,
+        } : undefined,
+      };
+    });
   }
   const res = await apiFetch(`/api/companies/${companyId}/users`, token);
   return res.ok ? res.json() : [];
 }
 
-export async function addCompanyUser(token: string | null, companyId: number, data: { userId: number; role: string; isDefault?: boolean }) {
+export async function addCompanyUser(
+  token: string | null,
+  companyId: number,
+  data: { userId: number; role: string; isDefault?: boolean }
+) {
   if (isBoltMode) {
-    const { data: created, error } = await supabase.from("company_users").insert({ ...data, company_id: companyId }).select().single();
+    const targetUserId = data.userId;
+    const targetRole = data.role || "company_user";
+    const isDef = data.isDefault ?? false;
+
+    // Use atomic assign RPC
+    const { data: rpcRes, error: rpcErr } = await supabase.rpc("assign_company_user", {
+      p_company_id: companyId,
+      p_user_id: targetUserId,
+      p_role: targetRole,
+      p_is_default: isDef,
+    });
+    if (!rpcErr && rpcRes) {
+      return toCamel(rpcRes);
+    }
+    if (rpcErr) {
+      console.warn("[api] assign_company_user RPC failed, falling back to direct upsert:", rpcErr.message);
+    }
+
+    const { data: created, error } = await supabase
+      .from("company_users")
+      .upsert({
+        company_id: companyId,
+        user_id: targetUserId,
+        role: targetRole,
+        is_default: isDef,
+      }, { onConflict: "user_id,company_id" })
+      .select("*, users(*)")
+      .single();
+
     if (error) throw error;
-    return toCamel(created);
+    const mapped = toCamel(created);
+    const u = created.users || mapped.users || mapped.user;
+    return {
+      ...mapped,
+      user: u,
+    };
   }
   const res = await apiFetch(`/api/companies/${companyId}/users`, token, {
     method: "POST",
@@ -953,7 +1025,19 @@ export async function addCompanyUser(token: string | null, companyId: number, da
 
 export async function removeCompanyUser(token: string | null, companyId: number, userId: number) {
   if (isBoltMode) {
-    const { error } = await supabase.from("company_users").delete().eq("company_id", companyId).eq("user_id", userId);
+    const { data: rpcRes, error: rpcErr } = await supabase.rpc("remove_company_user", {
+      p_company_id: companyId,
+      p_user_id: userId,
+    });
+    if (!rpcErr && rpcRes) {
+      return true;
+    }
+
+    const { error } = await supabase
+      .from("company_users")
+      .delete()
+      .eq("company_id", companyId)
+      .eq("user_id", userId);
     if (error) throw error;
     return true;
   }

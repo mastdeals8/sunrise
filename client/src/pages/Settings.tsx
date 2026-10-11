@@ -33,6 +33,7 @@ import {
   removeCompanyUser,
   createUser,
   fetchUsers,
+  fetchAllUsers,
 } from "../lib/api";
 
 interface SettingsState {
@@ -274,7 +275,7 @@ const SettingsPage: React.FC = () => {
   const loadAllSystemUsers = async () => {
     if (!isAdmin) return;
     try {
-      const uList = await fetchUsers(token);
+      const uList = await fetchAllUsers(token);
       setAllSystemUsers(uList);
     } catch (err) {
       console.error("Failed to load all users:", err);
@@ -718,10 +719,10 @@ const SettingsPage: React.FC = () => {
                 >
                   <option value="">Select a user…</option>
                   {allSystemUsers
-                    .filter((u) => !companyUsers.some((cu) => cu.userId === u.id))
+                    .filter((u) => !companyUsers.some((cu) => (cu.userId ?? cu.user_id) === u.id))
                     .map((u) => (
                       <option key={u.id} value={u.id}>
-                        {u.name} ({u.username} — {u.role})
+                        {u.name || u.username} ({u.username}{u.email ? ` • ${u.email}` : ""} — {u.role})
                       </option>
                     ))}
                 </select>
@@ -762,34 +763,48 @@ const SettingsPage: React.FC = () => {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {companyUsers.map((cu) => (
-                      <tr key={cu.id} className="hover:bg-slate-50">
-                        <td className="px-4 py-2.5 font-bold text-slate-800">{cu.user?.name || `User #${cu.userId}`}</td>
-                        <td className="px-4 py-2.5 text-slate-500 font-mono">{cu.user?.email || "—"}</td>
-                        <td className="px-4 py-2.5">
-                          <span className={`inline-flex px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
-                            cu.role === "super_admin"
-                              ? "bg-purple-100 text-purple-700"
-                              : cu.role === "company_admin"
-                              ? "bg-amber-100 text-amber-800"
-                              : "bg-slate-100 text-slate-700"
-                          }`}>
-                            {cu.role.replace("_", " ")}
-                          </span>
-                        </td>
-                        <td className="px-4 py-2.5 text-right">
-                          {!(cu.userId === 1 && selectedCompanyId === 1) && isAdmin && (
-                            <button
-                              onClick={() => handleRemoveUserFromCompany(cu.userId)}
-                              className="text-red-600 hover:text-red-800 p-1 rounded hover:bg-red-50"
-                              title="Revoke company access"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
+                    {companyUsers.map((cu) => {
+                      const userObj = cu.user || cu.users;
+                      const memberUserId = cu.userId ?? cu.user_id;
+                      const displayName = userObj?.name || userObj?.username || `User #${memberUserId}`;
+                      const email = userObj?.email || "—";
+                      const role = cu.role || "company_user";
+                      return (
+                        <tr key={cu.id} className="hover:bg-slate-50">
+                          <td className="px-4 py-2.5 font-bold text-slate-800">
+                            <div className="flex items-center gap-1.5">
+                              <span>{displayName}</span>
+                              {userObj?.username && userObj.username !== displayName && (
+                                <span className="text-[10px] text-slate-400 font-normal">(@{userObj.username})</span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="px-4 py-2.5 text-slate-600 font-mono text-[11px]">{email}</td>
+                          <td className="px-4 py-2.5">
+                            <span className={`inline-flex px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
+                              role === "super_admin"
+                                ? "bg-purple-100 text-purple-700"
+                                : role === "company_admin"
+                                ? "bg-amber-100 text-amber-800"
+                                : "bg-slate-100 text-slate-700"
+                            }`}>
+                              {role.replace("_", " ")}
+                            </span>
+                          </td>
+                          <td className="px-4 py-2.5 text-right">
+                            {!(memberUserId === 1 && selectedCompanyId === 1) && isAdmin && (
+                              <button
+                                onClick={() => handleRemoveUserFromCompany(memberUserId)}
+                                className="text-red-600 hover:text-red-800 p-1 rounded hover:bg-red-50 transition-colors"
+                                title="Revoke company access"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
