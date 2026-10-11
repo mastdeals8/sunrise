@@ -82,10 +82,54 @@ function supabaseUserToAppUser(sbUser: any): User {
       sbUser.user_metadata?.full_name ||
       sbUser.email?.split("@")[0] ||
       "User",
-    role: sbUser.user_metadata?.role || "admin",
+    role: sbUser.user_metadata?.role || "staff",
     email: sbUser.email ?? "",
-    isSuperAdmin: true,
+    isSuperAdmin: false,
   };
+}
+
+async function fetchUserProfile(authToken: string | null, sbUser?: any): Promise<User> {
+  if (isBoltMode) {
+    try {
+      const { data: profile, error } = await supabase.rpc("get_current_user_profile");
+      if (!error && profile && profile.id) {
+        return {
+          id: profile.id,
+          username: profile.username || sbUser?.email || "user",
+          name: profile.name || sbUser?.user_metadata?.name || "User",
+          role: profile.role || "staff",
+          email: profile.email || sbUser?.email || "",
+          isSuperAdmin: profile.isSuperAdmin === true,
+          activeCompanyId: profile.activeCompanyId,
+          memberships: profile.memberships || [],
+        };
+      }
+    } catch (e) {
+      console.warn("[AuthContext] get_current_user_profile RPC error:", e);
+    }
+    // Fallback: query public.users directly
+    if (sbUser?.id) {
+      try {
+        const { data: u } = await supabase
+          .from("users")
+          .select("id, username, name, role, email")
+          .eq("auth_user_id", sbUser.id)
+          .maybeSingle();
+        if (u) {
+          const isSuper = u.role === "admin" || u.id === 1;
+          return {
+            id: u.id,
+            username: u.username,
+            name: u.name,
+            role: u.role,
+            email: u.email,
+            isSuperAdmin: isSuper,
+          };
+        }
+      } catch {}
+    }
+  }
+  return supabaseUserToAppUser(sbUser);
 }
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -97,18 +141,27 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [availableCompanies, setAvailableCompanies] = useState<Company[]>([]);
   const [activeCompany, setActiveCompany] = useState<Company | null>(null);
 
-  const loadCompanies = useCallback(async (authToken: string | null) => {
+  const loadCompanies = useCallback(async (authToken: string | null, userProfile?: User | null) => {
     try {
       const comps = await fetchCompanies(authToken);
       if (Array.isArray(comps)) {
         setAvailableCompanies(comps);
         const currentId = getActiveCompanyId();
-        const found = comps.find((c: any) => c.id === currentId) || comps[0];
-        if (found) {
-          setActiveCompany(found);
-          if (found.id !== currentId) {
-            setActiveCompanyId(found.id);
-            setActiveCompanyIdState(found.id);
+        let target = comps.find((c: any) => c.id === currentId);
+        if (!target) {
+          // If current stored company is unauthorized, switch to user's assigned company
+          if (userProfile?.activeCompanyId) {
+            target = comps.find((c: any) => c.id === userProfile.activeCompanyId);
+          }
+          if (!target && comps.length > 0) {
+            target = comps[0];
+          }
+        }
+        if (target) {
+          setActiveCompany(target);
+          if (target.id !== currentId) {
+            setActiveCompanyId(target.id);
+            setActiveCompanyIdState(target.id);
           }
         }
       }
@@ -141,8 +194,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [availableCompanies, token]);
 
   const refreshCompanies = useCallback(async () => {
-    await loadCompanies(token);
-  }, [loadCompanies, token]);
+    await loadCompanies(token, user);
+  }, [loadCompanies, token, user]);
 
   useEffect(() => {
     if (isBoltMode) {
@@ -152,24 +205,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return;
       }
 
-      supabase.auth.getSession().then(({ data }) => {
+      supabase.auth.getSession().then(async ({ data }) => {
         const session = data.session as any;
-        if (session?.user) {
-          const appUser = supabaseUserToAppUser(session.user);
-          setUser(appUser);
+        if (session?.user && session?.access_token) {
           setToken(session.access_token);
-          loadCompanies(session.access_token);
+          const appUser = await fetchUserProfile(session.access_token, session.user);
+          setUser(appUser);
+          await loadCompanies(session.access_token, appUser);
         }
         setLoading(false);
       });
 
       const { data: authListener } = supabase.auth.onAuthStateChange(
-        (_event: any, session: any) => {
-          if (session?.user) {
-            const appUser = supabaseUserToAppUser(session.user);
-            setUser(appUser);
+        async (_event: any, session: any) => {
+          if (session?.user && session?.access_token) {
             setToken(session.access_token);
-            loadCompanies(session.access_token);
+            const appUser = await fetchUserProfile(session.access_token, session.user);
+            setUser(appUser);
+            await loadCompanies(session.access_token, appUser);
           } else {
             setUser(null);
             setToken(null);
@@ -189,7 +242,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         .then((userData) => {
           if (userData) {
             setUser(userData);
-            loadCompanies(null);
+            loadCompanies(null, userData);
           }
         })
         .catch(() => {})
@@ -205,7 +258,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           const userData = await res.json();
           setUser(userData);
           setToken(storedToken);
-          await loadCompanies(storedToken);
+          await loadCompanies(storedToken, userData);
           fetch("/api/auth/session-cookie", {
             method: "POST",
             headers: { Authorization: `Bearer ${storedToken}` },
@@ -229,27 +282,39 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return false;
       }
 
-      let email = username;
-      if (!username.includes("@")) {
-        const { data: resolvedEmail, error: rpcErr } = await supabase
-          .rpc("resolve_login_email", { login_username: username });
-        if (rpcErr || !resolvedEmail) {
-          setBoltAuthError("Invalid username or password.");
-          return false;
-        }
-        email = resolvedEmail as string;
-      }
+      setBoltAuthError(null);
 
-      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-      if (error || !data.user) {
+      // 1. Secure server-side credential verification and auth email resolution
+      const { data: resolvedEmail, error: rpcErr } = await supabase.rpc(
+        "verify_and_resolve_login",
+        { p_identifier: username, p_password: password }
+      );
+
+      if (rpcErr || !resolvedEmail) {
         setBoltAuthError("Invalid username or password.");
         return false;
       }
-      setBoltAuthError(null);
-      const appUser = supabaseUserToAppUser(data.user);
+
+      // 2. Official Supabase password grant with the verified email
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: resolvedEmail as string,
+        password,
+      });
+
+      if (error || !data.user || !data.session) {
+        setBoltAuthError("Invalid username or password.");
+        return false;
+      }
+
+      const accessToken = data.session.access_token;
+      setToken(accessToken);
+
+      // 3. Load full application user profile and authorized company memberships
+      const appUser = await fetchUserProfile(accessToken, data.user);
       setUser(appUser);
-      setToken(data.session?.access_token ?? null);
-      await loadCompanies(data.session?.access_token ?? null);
+
+      // 4. Load authorized companies and enforce company workspace assignment
+      await loadCompanies(accessToken, appUser);
       return true;
     }
 

@@ -143,12 +143,6 @@ const Login: React.FC = () => {
             )}
           </button>
         </form>
-
-        {isLogin && (
-          <div className="mt-6 p-4 rounded-lg bg-orange-50 border border-orange-100 text-slate-600 text-[11px] text-center leading-normal">
-            <span className="font-semibold text-orange-600">💡 Demo Access:</span> Use username <span className="font-mono text-slate-800 bg-slate-100 px-1 py-0.5 rounded">admin</span> and password <span className="font-mono text-slate-800 bg-slate-100 px-1 py-0.5 rounded">admin123</span> to bypass and sign in immediately.
-          </div>
-        )}
       </div>
     </div>
   );
