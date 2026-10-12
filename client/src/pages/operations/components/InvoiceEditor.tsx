@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useAuth } from "../../../contexts/AuthContext";
 import { isBoltMode } from "../../../lib/supabase";
-import { fetchEstimates, fetchEstimateItems, fetchDeliveryChallans, fetchInvoiceById, createInvoice, updateInvoice, fetchExecutionDocuments, openExecutionDocument, fetchNextInvoiceNumber } from "../../../lib/api";
+import { fetchEstimates, fetchEstimateItems, fetchDeliveryChallans, fetchInvoiceById, createInvoice, updateInvoice, refreshInvoiceFromEstimate, fetchExecutionDocuments, openExecutionDocument, fetchNextInvoiceNumber } from "../../../lib/api";
 import { Link } from "wouter";
-import { X, Plus, Trash2, Save, Send, Printer, ChevronLeft } from "lucide-react";
+import { X, Plus, Trash2, Save, Send, Printer, ChevronLeft, RefreshCw } from "lucide-react";
 import { normalizeDisplayName } from "../../../../../shared/textFormat";
 import { estimateItemsToInvoiceLines, invoiceLineToEditorLine } from "../utils/invoiceConversion";
 
@@ -58,6 +58,7 @@ const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ open, invoiceId, estimate
   const [origInvoice, setOrigInvoice] = useState<any>(null);
   const [attachments, setAttachments] = useState<any[]>([]);
   const [selectedAttachments, setSelectedAttachments] = useState<number[]>([]);
+  const [updatingFromEstimate, setUpdatingFromEstimate] = useState(false);
 
   // Load: either an existing invoice OR build a draft from estimate + DC.
   useEffect(() => {
@@ -323,6 +324,55 @@ const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ open, invoiceId, estimate
     } finally { setSaving(false); }
   };
 
+  const currentInvoiceId = invoiceId || origInvoice?.id;
+  const currentEstimateId = linkedEstimate?.id || origInvoice?.estimateId || estimateId;
+  const isDraft = (origInvoice?.status || status) === "draft";
+  const canUpdateFromEstimate = Boolean(currentInvoiceId && currentEstimateId && isDraft);
+
+  const handleUpdateFromEstimate = async () => {
+    if (!token) return;
+    if (!isDraft) {
+      alert(
+        `Cannot update invoice with status "${origInvoice?.status || status}". Only Draft invoices can be updated from the estimate. For approved, submitted, or paid invoices, please use the credit note, revision, or cancellation workflow.`
+      );
+      return;
+    }
+    if (!currentEstimateId) {
+      alert("This invoice does not have a linked estimate.");
+      return;
+    }
+    if (!currentInvoiceId) {
+      alert("Please save this invoice draft first before updating from the estimate.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      "This will replace estimate-derived invoice line items and amounts with the latest estimate. Continue?"
+    );
+    if (!confirmed) return;
+
+    setUpdatingFromEstimate(true);
+    try {
+      const res = await refreshInvoiceFromEstimate(token, Number(currentInvoiceId));
+      if (res && res.invoice) {
+        setOrigInvoice(res.invoice);
+        const lines = Array.isArray(res.invoice.lineItems || res.invoice.line_items)
+          ? (res.invoice.lineItems || res.invoice.line_items)
+          : [];
+        setItems(lines.map(invoiceLineToEditorLine));
+        if (res.estimate) {
+          setLinkedEstimate(res.estimate);
+        }
+        onSaved();
+        alert(res.message || "Invoice successfully updated from latest estimate.");
+      }
+    } catch (err: any) {
+      alert(err.message || "Failed to update invoice from estimate");
+    } finally {
+      setUpdatingFromEstimate(false);
+    }
+  };
+
   if (!open) return null;
 
   return (
@@ -340,10 +390,26 @@ const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ open, invoiceId, estimate
             <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase border ${statusClass(status)}`}>{status}</span>
           </div>
           <div className="flex gap-2 flex-wrap">
-            <button onClick={() => save("draft")} disabled={saving} className="inline-flex items-center gap-1 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded disabled:opacity-50">
+            <button
+              type="button"
+              onClick={handleUpdateFromEstimate}
+              disabled={saving || updatingFromEstimate || !canUpdateFromEstimate}
+              title={
+                !isDraft
+                  ? `Only Draft invoices can be updated from estimate (current status: ${origInvoice?.status || status})`
+                  : !currentEstimateId
+                    ? "This invoice has no linked estimate"
+                    : "Refresh line items and amounts from the latest linked estimate"
+              }
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-800 text-xs font-bold rounded shadow-sm disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${updatingFromEstimate ? "animate-spin" : ""}`} />
+              Update from Estimate
+            </button>
+            <button onClick={() => save("draft")} disabled={saving || updatingFromEstimate} className="inline-flex items-center gap-1 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded disabled:opacity-50">
               <Save className="w-3.5 h-3.5" /> Save Draft
             </button>
-            <button onClick={() => save("approved")} disabled={saving} className="inline-flex items-center gap-1 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded disabled:opacity-50">
+            <button onClick={() => save("approved")} disabled={saving || updatingFromEstimate} className="inline-flex items-center gap-1 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded disabled:opacity-50">
               <Send className="w-3.5 h-3.5" /> Approve
             </button>
             {invoiceId && (
@@ -352,6 +418,7 @@ const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ open, invoiceId, estimate
               </a>
             )}
           </div>
+
         </div>
       </div>
 

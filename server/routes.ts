@@ -30,6 +30,8 @@ import { renderEstimatePdfBuffer } from "./utils/estimatePdfRenderer.js";
 import { ABLBL_LEGAL_NAME, isAblblFormat, normalizeDisplayName, normalizeFormatMode, normalizeGstinPan, nameMatchKey, nameSimilarity, NAME_SIMILAR_THRESHOLD } from "../shared/textFormat";
 import { formatProductDetails } from "../shared/productDetails";
 import { isServiceEstimateItem, resolveServiceProduct, serviceProductLabel } from "../shared/serviceProductDisplay";
+import { computeStoreBreakdown } from "../shared/storeBreakdown";
+import { estimateItemsToInvoiceLines } from "../shared/invoiceConversion";
 
 export async function registerRoutes(app: Express): Promise<Server> {
   if (process.env.BOLT_SAFE_BOOT === "true") {
@@ -6796,8 +6798,141 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // ==========================================
+  // Invoice: Refresh Draft Invoice from latest Estimate
+  // ==========================================
+  app.post("/api/finance/invoices/:id/refresh-from-estimate", authenticateToken, requireRole(["admin", "manager", "accounts"]), async (req: AuthRequest, res: Response) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (isNaN(id) || id <= 0) {
+        return res.status(400).json({ message: "Invalid invoice ID" });
+      }
+
+      // 1. Fetch existing invoice
+      const [inv] = await db.select().from(invoices).where(eq(invoices.id, id)).limit(1);
+      if (!inv) {
+        return res.status(404).json({ message: "Invoice not found" });
+      }
+
+      // Multi-company data isolation
+      if (req.companyId && inv.companyId !== req.companyId) {
+        return res.status(403).json({ message: "Unauthorized company access" });
+      }
+
+      // 2. Safety status check: Never allow overwriting Approved, Submitted or Paid invoices
+      const currentStatus = String(inv.status || "").toLowerCase().trim();
+      if (currentStatus !== "draft") {
+        return res.status(400).json({
+          message: `Cannot update invoice with status "${inv.status}". Only Draft invoices can be updated from the estimate. For approved, submitted, or paid invoices, please use the credit note, revision, or cancellation workflow.`
+        });
+      }
+
+      // 3. Ensure linked estimate exists
+      if (!inv.estimateId) {
+        return res.status(400).json({ message: "This invoice does not have a linked estimate." });
+      }
+
+      const [est] = await db.select().from(estimates).where(eq(estimates.id, inv.estimateId)).limit(1);
+      if (!est) {
+        return res.status(404).json({ message: "Linked estimate could not be loaded or was not found." });
+      }
+
+      // 4. Fetch latest estimate items in register order
+      const rawItems = orderedEstimateItems(await storage.getEstimateItems(est.id));
+      if (!rawItems || rawItems.length === 0) {
+        return res.status(400).json({ message: "Linked estimate has no line items." });
+      }
+
+      // 5. Determine if invoice is store-scoped or full estimate
+      const packetSettings = (inv.packetSettings || {}) as Record<string, any>;
+      const isStoreScoped = Boolean(
+        inv.storeId ||
+        inv.storeCode ||
+        packetSettings.storeId ||
+        packetSettings.source === "store_wise_generator"
+      );
+
+      let targetEstimateItems: any[] = [];
+      if (isStoreScoped) {
+        const allStores = await db.select().from(stores);
+        const allInvs = await db.select().from(invoices).where(eq(invoices.estimateId, est.id));
+        const breakdowns = computeStoreBreakdown(est, rawItems, allStores, allInvs);
+
+        const targetSid = inv.storeId || packetSettings.storeId;
+        const targetScode = String(inv.storeCode || packetSettings.storeCode || "").trim().toLowerCase();
+
+        const matchedBreakdown = breakdowns.find(b =>
+          (targetSid && b.storeId === targetSid) ||
+          (targetScode && b.storeCode && b.storeCode.toLowerCase() === targetScode)
+        );
+
+        if (matchedBreakdown && matchedBreakdown.items && matchedBreakdown.items.length > 0) {
+          targetEstimateItems = matchedBreakdown.items;
+        } else {
+          // Fallback direct filter by storeId or storeCode
+          targetEstimateItems = rawItems.filter(it => {
+            const itSid = it.storeId != null ? Number(it.storeId) : null;
+            const itCode = String(it.storeCode || "").trim().toLowerCase();
+            return (targetSid && itSid === targetSid) || (targetScode && itCode === targetScode);
+          });
+        }
+
+        if (targetEstimateItems.length === 0) {
+          return res.status(400).json({
+            message: `No estimate items found for store "${inv.storeName || inv.storeCode || inv.storeId}" in estimate ${est.estimateNumber}.`
+          });
+        }
+      } else {
+        targetEstimateItems = rawItems;
+      }
+
+      // 6. Convert to canonical invoice line items
+      const lines = estimateItemsToInvoiceLines(targetEstimateItems);
+      if (lines.length === 0) {
+        return res.status(400).json({ message: "Failed to convert estimate items to invoice line items." });
+      }
+
+      // 7. Recalculate subtotals, tax amounts and totals
+      const newSubtotal = lines.reduce((s, it) => s + (Number(it.amount) || 0), 0);
+      const newTaxTotal = lines.reduce((s, it) => s + (Number(it.taxAmount) || 0), 0);
+      const newGrandTotal = +(newSubtotal + newTaxTotal).toFixed(2);
+      const paidAmount = Number(inv.paidAmount || 0);
+      const newBalanceAmount = +(newGrandTotal - paidAmount).toFixed(2);
+
+      // 8. Atomic update using a database transaction
+      const [updatedInvoice] = await db.transaction(async (tx) => {
+        return await tx.update(invoices).set({
+          amount: +newSubtotal.toFixed(2),
+          taxAmount: +newTaxTotal.toFixed(2),
+          totalAmount: newGrandTotal,
+          balanceAmount: newBalanceAmount,
+          lineItems: lines,
+          packetSettings: inv.packetSettings ? {
+            ...packetSettings,
+            ...(packetSettings.itemCount !== undefined ? { itemCount: lines.length } : {})
+          } : inv.packetSettings,
+        }).where(eq(invoices.id, id)).returning();
+      });
+
+      if (!updatedInvoice) {
+        return res.status(500).json({ message: "Atomic transaction failed to update invoice." });
+      }
+
+      res.json({
+        success: true,
+        invoice: updatedInvoice,
+        estimate: est,
+        lineCount: lines.length,
+        message: "Invoice successfully updated from latest estimate."
+      });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message || "Failed to update invoice from estimate" });
+    }
+  });
+
+  // ==========================================
   // Invoice: cancel (soft) — status="cancelled" with reason + audit fields
   // ==========================================
+
   app.post("/api/finance/invoices/:id/cancel", authenticateToken, requireRole(["admin", "manager", "accounts"]), async (req: AuthRequest, res: Response) => {
     try {
       const id = parseInt(req.params.id, 10);

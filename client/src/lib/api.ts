@@ -8,6 +8,8 @@
  * In Bolt mode, writes gracefully fail — the app stays in read-only mode.
  */
 import { supabase, isBoltMode, hasSupabaseConfig } from "./supabase";
+import { computeStoreBreakdown } from "@shared/storeBreakdown";
+import { estimateItemsToInvoiceLines } from "@shared/invoiceConversion";
 
 // ─── Signed URL session cache ─────────────────────────────────────────────────
 // Signed URLs for the private execution-documents bucket are valid for 2 hours
@@ -2119,6 +2121,114 @@ export async function updateInvoice(token: string | null, id: number, payload: R
   if (!res.ok) throw new Error((await res.json()).message ?? "Failed to update invoice");
   return res.json();
 }
+
+export async function refreshInvoiceFromEstimate(
+  token: string | null,
+  invoiceId: number
+): Promise<{ success: boolean; invoice: any; estimate: any; message: string }> {
+  if (!isBoltMode) {
+    const res = await apiFetch(`/api/finance/invoices/${invoiceId}/refresh-from-estimate`, token, {
+      method: "POST",
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data.message || `Failed to update invoice from estimate (HTTP ${res.status})`);
+    }
+    return data;
+  }
+
+  // Bolt mode:
+  const { data: inv, error: invErr } = await supabase
+    .from("invoices")
+    .select("*")
+    .eq("id", invoiceId)
+    .single();
+  if (invErr || !inv) throw new Error(invErr?.message || "Invoice not found");
+
+  const status = String(inv.status || "").toLowerCase().trim();
+  if (status !== "draft") {
+    throw new Error(
+      `Cannot update invoice with status "${inv.status}". Only Draft invoices can be updated from the estimate. For approved, submitted, or paid invoices, please use the credit note, revision, or cancellation workflow.`
+    );
+  }
+
+  const estId = inv.estimate_id ?? inv.estimateId;
+  if (!estId) throw new Error("This invoice does not have a linked estimate.");
+
+  const { data: est, error: estErr } = await supabase
+    .from("estimates")
+    .select("*")
+    .eq("id", estId)
+    .single();
+  if (estErr || !est) throw new Error(estErr?.message || "Linked estimate not found.");
+
+  const { data: rawItems, error: itemsErr } = await supabase
+    .from("estimate_items")
+    .select("*")
+    .eq("estimate_id", estId);
+  if (itemsErr) throw new Error(itemsErr.message || "Failed to load estimate items.");
+  if (!rawItems || rawItems.length === 0) throw new Error("Linked estimate has no line items.");
+
+  const targetSid = inv.store_id ?? inv.storeId ?? inv.packet_settings?.storeId ?? inv.packet_settings?.store_id;
+  const targetScode = String(inv.store_code ?? inv.storeCode ?? inv.packet_settings?.storeCode ?? inv.packet_settings?.store_code ?? "").trim().toLowerCase();
+  const isStoreScoped = Boolean(targetSid || targetScode || inv.packet_settings?.source === "store_wise_generator");
+
+  let targetEstimateItems = rawItems;
+  if (isStoreScoped) {
+    const { data: allStores } = await supabase.from("stores").select("*");
+    const { data: allInvs } = await supabase.from("invoices").select("*").eq("estimate_id", estId);
+    const breakdowns = computeStoreBreakdown(toCamel(est), rawItems.map(toCamel), (allStores || []).map(toCamel), (allInvs || []).map(toCamel));
+    const matched = breakdowns.find(b => (targetSid && b.storeId === targetSid) || (targetScode && b.storeCode.toLowerCase() === targetScode));
+    if (matched && matched.items && matched.items.length > 0) {
+      targetEstimateItems = matched.items;
+    } else {
+      targetEstimateItems = rawItems.filter((it: any) => {
+        const itSid = it.store_id != null ? Number(it.store_id) : it.storeId != null ? Number(it.storeId) : null;
+        const itCode = String(it.store_code || it.storeCode || "").trim().toLowerCase();
+        return (targetSid && itSid === targetSid) || (targetScode && itCode === targetScode);
+      });
+    }
+    if (targetEstimateItems.length === 0) {
+      throw new Error(`No estimate items found for store in estimate ${est.estimate_number || est.estimateNumber}.`);
+    }
+  }
+
+  const lines = estimateItemsToInvoiceLines(targetEstimateItems.map(toCamel));
+  const subtotal = lines.reduce((s, it) => s + (Number(it.amount) || 0), 0);
+  const taxTotal = lines.reduce((s, it) => s + (Number(it.taxAmount) || 0), 0);
+  const grandTotal = +(subtotal + taxTotal).toFixed(2);
+  const paidAmount = Number(inv.paid_amount ?? inv.paidAmount ?? 0);
+  const balanceAmount = +(grandTotal - paidAmount).toFixed(2);
+
+  const updatedPacketSettings = inv.packet_settings || inv.packetSettings || {};
+  if (updatedPacketSettings.itemCount !== undefined) {
+    updatedPacketSettings.itemCount = lines.length;
+  }
+
+  const { data: updatedInv, error: updateErr } = await supabase
+    .from("invoices")
+    .update({
+      amount: +subtotal.toFixed(2),
+      tax_amount: +taxTotal.toFixed(2),
+      total_amount: grandTotal,
+      balance_amount: balanceAmount,
+      line_items: lines,
+      packet_settings: updatedPacketSettings,
+    })
+    .eq("id", invoiceId)
+    .select()
+    .single();
+
+  if (updateErr) throw new Error(updateErr.message || "Failed to update invoice in database.");
+
+  return {
+    success: true,
+    invoice: toCamel(updatedInv),
+    estimate: toCamel(est),
+    message: "Invoice successfully updated from latest estimate.",
+  };
+}
+
 
 // ─── Delivery Challans ────────────────────────────────────────────────────────
 
