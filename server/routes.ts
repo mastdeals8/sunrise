@@ -3,7 +3,7 @@ import express, { type Express, Request, Response, NextFunction } from "express"
 import { storage, sanitizeUser } from "./storage";
 import { hashPassword, comparePassword, generateToken, authenticateToken, authenticateBrowserRequest, requireRole, setSessionCookie, clearSessionCookie, AuthRequest } from "./auth";
 import { insertUserSchema, insertAttendanceSchema, insertTaskSchema, insertPettyCashExpenseSchema, insertInvoiceSchema, insertPaymentSchema, insertChartOfAccountSchema, insertClientSchema, insertClientBillingProfileSchema, insertBrandSchema, insertStoreSchema, insertProductSchema, insertEstimateSchema, insertEstimateItemSchema, insertStaffAdvanceSchema, insertPayrollSchema, insertDeliveryChallanSchema, clients, brands, stores, products, invoices, payments, botSettings, botUploadInbox, webhookLogs, customerRateCards, customerRateItems, estimates, estimateItems, deliveryChallans, executionDocuments, executionStores, fieldAccessLinks, staffAdvances, attendance, projectStoreStatus, users, telegramDeliveries } from "../shared/schema";
-import { db } from "./db";
+import { db, pool } from "./db";
 import { inArray, eq, sql, and, ne } from "drizzle-orm";
 import { z } from "zod";
 import multer from "multer";
@@ -1795,6 +1795,59 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Assign to target company
       await storage.addUserToCompany(user.id, targetCompanyId, targetCompanyRole, true);
+
+      // Provision or link Supabase Auth user identity
+      try {
+        const authSyncRes = await pool.query(
+          `SELECT id FROM auth.users WHERE LOWER(email) = LOWER($1) LIMIT 1`,
+          [email.trim()]
+        );
+        let authUserId: string;
+        if (authSyncRes.rows.length > 0) {
+          authUserId = authSyncRes.rows[0].id;
+          await pool.query(
+            `UPDATE auth.users
+             SET encrypted_password = extensions.crypt($1, extensions.gen_salt('bf', 10)),
+                 email_confirmed_at = COALESCE(email_confirmed_at, now()),
+                 raw_user_meta_data = jsonb_build_object('name', $2, 'username', $3, 'role', $4),
+                 updated_at = now()
+             WHERE id = $5`,
+            [String(password), normalizeDisplayName(name.trim()), username.trim(), role, authUserId]
+          );
+        } else {
+          const insertAuth = await pool.query(
+            `INSERT INTO auth.users (
+               instance_id, id, aud, role, email, encrypted_password, email_confirmed_at,
+               confirmation_token, recovery_token, email_change_token_new, email_change,
+               reauthentication_token, phone_change, phone_change_token, email_change_token_current,
+               raw_app_meta_data, raw_user_meta_data, is_super_admin, created_at, updated_at
+             ) VALUES (
+               '00000000-0000-0000-0000-000000000000', gen_random_uuid(), 'authenticated', 'authenticated',
+               LOWER($1), extensions.crypt($2, extensions.gen_salt('bf', 10)), now(),
+               '', '', '', '', '', '', '', '',
+               '{"provider":"email","providers":["email"]}'::jsonb,
+               jsonb_build_object('name', $3, 'username', $4, 'role', $5),
+               false, now(), now()
+             ) RETURNING id`,
+            [email.trim(), String(password), normalizeDisplayName(name.trim()), username.trim(), role]
+          );
+          authUserId = insertAuth.rows[0].id;
+
+          await pool.query(
+            `INSERT INTO auth.identities (
+               id, user_id, provider_id, identity_data, provider, last_sign_in_at, created_at, updated_at
+             ) VALUES (
+               gen_random_uuid(), $1, $1::text,
+               jsonb_build_object('sub', $1::text, 'email', LOWER($2), 'email_verified', true, 'name', $3, 'username', $4),
+               'email', now(), now(), now()
+             )`,
+            [authUserId, email.trim(), normalizeDisplayName(name.trim()), username.trim()]
+          );
+        }
+        await pool.query(`UPDATE public.users SET auth_user_id = $1 WHERE id = $2`, [authUserId, user.id]);
+      } catch (authErr) {
+        console.warn("[POST /api/users] Supabase auth sync warning:", authErr);
+      }
 
       res.status(201).json({
         user: sanitizeUser(user),
