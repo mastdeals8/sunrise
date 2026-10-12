@@ -208,6 +208,28 @@
   .operations-print-root.has-estimate-preview > :not(.estimate-preview-modal):not(.wcc-modal-backdrop) {
     display: none !important;
   }
+  .bulk-estimate-print-host {
+    display: block !important;
+    position: static !important;
+    width: 100% !important;
+    height: auto !important;
+    overflow: visible !important;
+    opacity: 1 !important;
+    left: auto !important;
+    top: auto !important;
+  }
+  .bulk-estimate-print-sheet {
+    display: block !important;
+    width: 100% !important;
+    height: auto !important;
+    page-break-inside: auto;
+    break-inside: auto;
+  }
+  .bulk-estimate-print-sheet.estimate-page-break,
+  .bulk-estimate-print-sheet + .bulk-estimate-print-sheet {
+    page-break-before: always !important;
+    break-before: page !important;
+  }
   .estimate-print, .estimate-print * { visibility: visible !important; }
   .estimate-print {
     position: static !important;

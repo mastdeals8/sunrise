@@ -14,11 +14,14 @@ import {
 import type { Estimate, Store, Client, Product, Brand } from "../types";
 import EstimateDocument from "../../../components/EstimateDocument";
 import { fetchEstimateItems } from "../../../lib/api";
+import { isBoltMode } from "../../../lib/supabase";
 import {
   getEstimatePdfFilename,
   fetchEstimateCanonicalPdf,
+  renderEstimateElementToPdf,
   packagePdfsIntoZip,
   downloadFileBlob,
+  waitForImages,
 } from "../utils/estimatePdfExport";
 import { PDFDocument } from "pdf-lib";
 
@@ -52,10 +55,10 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
   const [targetFitPages, setTargetFitPages] = useState<number | null>(null);
   const [density, setDensity] = useState<"normal" | "compact">("normal");
 
-  // Preview navigation
+  // Preview navigation & items cache
   const [previewIdx, setPreviewIdx] = useState<number>(0);
-  const [previewItems, setPreviewItems] = useState<any[]>([]);
-  const [previewLoading, setPreviewLoading] = useState<boolean>(false);
+  const [itemsMap, setItemsMap] = useState<Record<number, any[]>>({});
+  const [estimatesLoading, setEstimatesLoading] = useState<boolean>(false);
 
   // Bulk Generation Execution State
   const [isProcessing, setIsProcessing] = useState(false);
@@ -67,7 +70,11 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
   const [successCount, setSuccessCount] = useState(0);
   const [combinedPdfBlobUrl, setCombinedPdfBlobUrl] = useState<string | null>(null);
 
+  // Bulk print execution state
+  const [isPrintingAll, setIsPrintingAll] = useState(false);
+
   const cancelledRef = useRef(false);
+  const bulkPrintHostRef = useRef<HTMLDivElement>(null);
 
   // If opened directly with zip or combined mode from toolbar, trigger that mode
   useEffect(() => {
@@ -76,36 +83,40 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
     }
   }, [mode]);
 
-  // Load items for the currently previewed estimate
+  // Load items for all selected estimates on mount / change
   useEffect(() => {
     if (!mode || selectedEstimates.length === 0) return;
-    const currentEst = selectedEstimates[previewIdx] || selectedEstimates[0];
-    if (!currentEst) return;
-
     let cancelled = false;
-    setPreviewLoading(true);
+    setEstimatesLoading(true);
 
-    fetchEstimateItems(token, currentEst.id)
-      .then((items) => {
-        if (!cancelled) {
-          setPreviewItems(items);
-          setPreviewLoading(false);
+    const loadAll = async () => {
+      const map: Record<number, any[]> = { ...itemsMap };
+      for (const est of selectedEstimates) {
+        if (!map[est.id]) {
+          try {
+            const items = await fetchEstimateItems(token, est.id);
+            if (cancelled) return;
+            map[est.id] = items || [];
+          } catch (err: any) {
+            console.error(`Failed to load items for estimate ${est.id}:`, err);
+            map[est.id] = [];
+          }
         }
-      })
-      .catch((err) => {
-        console.error("Failed to load estimate items for preview:", err);
-        if (!cancelled) {
-          setPreviewItems([]);
-          setPreviewLoading(false);
-        }
-      });
+      }
+      if (!cancelled) {
+        setItemsMap(map);
+        setEstimatesLoading(false);
+      }
+    };
+
+    loadAll();
 
     return () => {
       cancelled = true;
     };
-  }, [previewIdx, selectedEstimates, token, mode]);
+  }, [selectedEstimates, token, mode]);
 
-  // Execute bulk export using the canonical individual PDF renderer
+  // Execute bulk export using the canonical renderer (server Chromium with client DOM fallback)
   const handleStartBulkExport = async (exportMode: "zip" | "combined") => {
     if (selectedEstimates.length === 0) return;
 
@@ -132,25 +143,94 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
       combinedPdfDoc.setCreationDate(new Date());
     }
 
+    // Ensure all items are loaded
+    const map = { ...itemsMap };
+    for (const est of selectedEstimates) {
+      if (!map[est.id]) {
+        try {
+          const items = await fetchEstimateItems(token, est.id);
+          map[est.id] = items || [];
+        } catch (err: any) {
+          map[est.id] = [];
+        }
+      }
+    }
+    setItemsMap(map);
+
+    // Allow DOM a tick to commit
+    await new Promise((r) => setTimeout(r, 100));
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+
     for (let i = 0; i < total; i++) {
       if (cancelledRef.current) break;
 
       const est = selectedEstimates[i];
       setCurrentIndex(i + 1);
       setStatusText(
-        `Rendering estimate ${est.estimateNumber || `Estimate #${est.id}`} (${i + 1} of ${total})...`
+        `Exporting estimate ${est.estimateNumber || `Estimate #${est.id}`} (${i + 1} of ${total})...`
       );
 
       try {
-        const pdfBytes = await fetchEstimateCanonicalPdf(token, est.id, {
-          scale,
-          density,
-          layout: "portrait",
-        });
+        let pdfBytes: Uint8Array | null = null;
+
+        // 1. In full Express mode (when not in Bolt mode), attempt server Playwright renderer
+        if (!isBoltMode) {
+          try {
+            pdfBytes = await fetchEstimateCanonicalPdf(token, est.id, {
+              scale,
+              density,
+              layout: "portrait",
+            });
+          } catch (srvErr: any) {
+            console.warn(`Server PDF generation failed for ${est.estimateNumber}, falling back to client DOM export:`, srvErr);
+          }
+        }
+
+        // 2. In Bolt mode or when server generation was unavailable/failed:
+        // Use client-side canonical EstimateDocument DOM element with html2canvas and pdf-lib
+        if (!pdfBytes) {
+          const sheetEl = document.getElementById(`bulk-estimate-doc-${est.id}`);
+          const docEl =
+            (sheetEl?.querySelector(".estimate-print") as HTMLElement | null) ||
+            (sheetEl as HTMLElement | null);
+
+          if (!docEl) {
+            throw new Error(`Estimate #${est.estimateNumber || est.id} document element failed to render in DOM container`);
+          }
+
+          if (exportMode === "zip") {
+            const singleDoc = await renderEstimateElementToPdf(
+              docEl,
+              undefined,
+              est.estimateNumber || "Estimate",
+              targetFitPages,
+              scale
+            );
+            pdfBytes = await singleDoc.save();
+          } else if (exportMode === "combined" && combinedPdfDoc) {
+            await renderEstimateElementToPdf(
+              docEl,
+              combinedPdfDoc,
+              "Combined Estimates",
+              targetFitPages,
+              scale
+            );
+          }
+        } else {
+          // Server successfully returned pdfBytes
+          if (exportMode === "combined" && combinedPdfDoc) {
+            const singleDoc = await PDFDocument.load(pdfBytes);
+            const copiedPages = await combinedPdfDoc.copyPages(
+              singleDoc,
+              singleDoc.getPageIndices()
+            );
+            copiedPages.forEach((p) => combinedPdfDoc!.addPage(p));
+          }
+        }
 
         if (cancelledRef.current) break;
 
-        if (exportMode === "zip") {
+        if (exportMode === "zip" && pdfBytes) {
           const filename = getEstimatePdfFilename(est, stores);
 
           // Handle collision safely if duplicates exist
@@ -162,19 +242,12 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
           }
 
           zipFiles[uniqueFilename] = pdfBytes;
-        } else if (exportMode === "combined" && combinedPdfDoc) {
-          const singleDoc = await PDFDocument.load(pdfBytes);
-          const copiedPages = await combinedPdfDoc.copyPages(
-            singleDoc,
-            singleDoc.getPageIndices()
-          );
-          copiedPages.forEach((p) => combinedPdfDoc!.addPage(p));
         }
       } catch (renderErr: any) {
         console.error(`Failed to export estimate ${est.estimateNumber}:`, renderErr);
         failedList.push({
           estimate: est,
-          error: renderErr.message || "Canonical PDF generation failed",
+          error: renderErr?.message || String(renderErr) || "Canonical PDF generation failed",
         });
       }
     }
@@ -245,9 +318,111 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
     }
   };
 
-  const handlePrintCurrent = () => {
+  // Bulk Print: prints all selected estimates in register order with each starting on a new page
+  const handlePrintAll = async () => {
+    if (selectedEstimates.length === 0) return;
+    setIsPrintingAll(true);
+    setStatusText("Preparing all selected estimates for printing...");
+
+    // 1. Ensure all estimate items are loaded
+    const missing = selectedEstimates.filter((est) => !itemsMap[est.id]);
+    if (missing.length > 0) {
+      const map = { ...itemsMap };
+      for (const est of missing) {
+        try {
+          const items = await fetchEstimateItems(token, est.id);
+          map[est.id] = items || [];
+        } catch (err) {
+          map[est.id] = [];
+        }
+      }
+      setItemsMap(map);
+    }
+
+    // 2. Wait for React to commit DOM update
+    await new Promise((r) => setTimeout(r, 120));
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+    const host = bulkPrintHostRef.current;
+    if (!host) {
+      setIsPrintingAll(false);
+      alert("Print container not found in DOM");
+      return;
+    }
+
+    // 3. Confirm fonts and images are ready before opening print dialog
+    if (document.fonts && document.fonts.ready) {
+      try {
+        await document.fonts.ready;
+      } catch {}
+    }
+
+    await waitForImages(host);
+
+    // 4. Actively confirm all documents are rendered and have valid dimensions
+    const docEls = host.querySelectorAll(".estimate-print");
+    if (docEls.length < selectedEstimates.length) {
+      await new Promise((r) => setTimeout(r, 200));
+    }
+
+    const oldTitle = document.title;
+    document.title = `Bulk_Estimates_${selectedEstimates.length}_sheets`;
+
+    // Apply canonical print classes matching EstimatePreview
+    const scaleRatio = (Number(scale) || 100) / 100;
+    let style = document.getElementById("estimate-print-options-style") as HTMLStyleElement | null;
+    if (!style) {
+      style = document.createElement("style");
+      style.id = "estimate-print-options-style";
+      document.head.appendChild(style);
+    }
+    style.textContent = `
+      @media print {
+        @page { size: A4 portrait; margin: 8mm; }
+        .estimate-print {
+          --estimate-print-zoom: ${scaleRatio} !important;
+          zoom: ${scaleRatio} !important;
+        }
+      }
+    `;
+    document.body.classList.add("estimate-print-layout-portrait", `estimate-print-mode-${density}`);
+
+    let cleanedUp = false;
+    const cleanup = () => {
+      if (cleanedUp) return;
+      cleanedUp = true;
+      setIsPrintingAll(false);
+      document.title = oldTitle;
+      document.body.classList.remove("estimate-print-layout-portrait", `estimate-print-mode-${density}`);
+      document.getElementById("estimate-print-options-style")?.remove();
+      window.removeEventListener("afterprint", cleanup);
+      window.removeEventListener("focus", focusRestore);
+    };
+
+    const focusRestore = () => {
+      setTimeout(cleanup, 800);
+    };
+
+    window.addEventListener("afterprint", cleanup);
+    window.addEventListener("focus", focusRestore);
+
+    window.print();
+  };
+
+  // Print current previewed estimate
+  const handlePrintCurrent = async () => {
     const cur = selectedEstimates[previewIdx];
     if (!cur) return;
+
+    if (!itemsMap[cur.id]) {
+      try {
+        const items = await fetchEstimateItems(token, cur.id);
+        setItemsMap((prev) => ({ ...prev, [cur.id]: items || [] }));
+      } catch (err) {
+        console.error(`Failed to load items for estimate ${cur.id}:`, err);
+      }
+    }
+
     const oldTitle = document.title;
     const filename = getEstimatePdfFilename(cur, stores).replace(/\.pdf$/i, "");
     document.title = filename;
@@ -271,17 +446,31 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
     `;
     document.body.classList.add("estimate-print-layout-portrait", `estimate-print-mode-${density}`);
 
-    window.print();
-    window.setTimeout(() => {
+    let cleanedUp = false;
+    const cleanup = () => {
+      if (cleanedUp) return;
+      cleanedUp = true;
       document.title = oldTitle;
       document.body.classList.remove("estimate-print-layout-portrait", `estimate-print-mode-${density}`);
       document.getElementById("estimate-print-options-style")?.remove();
-    }, 1000);
+      window.removeEventListener("afterprint", cleanup);
+      window.removeEventListener("focus", focusRestore);
+    };
+
+    const focusRestore = () => {
+      setTimeout(cleanup, 800);
+    };
+
+    window.addEventListener("afterprint", cleanup);
+    window.addEventListener("focus", focusRestore);
+
+    window.print();
   };
 
   const handleFitToPages = (targetPages: number) => {
     setTargetFitPages(targetPages);
-    const totalItems = previewItems.length || 20;
+    const curItems = itemsMap[selectedEstimates[previewIdx]?.id] || [];
+    const totalItems = curItems.length || 20;
     const idealScale = Math.min(
       100,
       Math.max(50, Math.round(((targetPages * 22) / totalItems) * 100))
@@ -293,15 +482,16 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
 
   const currentEst = selectedEstimates[previewIdx] || selectedEstimates[0];
   const scaleRatio = scale / 100;
+  const currentItems = currentEst ? itemsMap[currentEst.id] || [] : [];
   const currentStore = stores.find(
     (s) => s.id === currentEst?.storeId || String(s.id) === String(currentEst?.storeId)
   );
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-slate-900/70 backdrop-blur-xs animate-in fade-in duration-150">
-      <div className="relative w-full max-w-5xl h-[92vh] bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col">
-        {/* Header */}
-        <div className="px-5 py-3.5 border-b border-slate-200 bg-gradient-to-r from-slate-50 to-white flex items-center justify-between">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-slate-900/70 backdrop-blur-xs animate-in fade-in duration-150 estimate-preview-modal">
+      <div className="relative w-full max-w-5xl h-[92vh] bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col estimate-preview-panel">
+        {/* Header (hidden in print) */}
+        <div className="px-5 py-3.5 border-b border-slate-200 bg-gradient-to-r from-slate-50 to-white flex items-center justify-between estimate-preview-chrome">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl bg-orange-600 text-white flex items-center justify-center shadow-xs">
               <Printer className="w-5 h-5" />
@@ -312,7 +502,7 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
               </h2>
               <p className="text-xs text-slate-500">
                 {selectedEstimates.length} estimate
-                {selectedEstimates.length !== 1 ? "s" : ""} selected for bulk processing
+                {selectedEstimates.length !== 1 ? "s" : ""} selected in register order
               </p>
             </div>
           </div>
@@ -330,8 +520,8 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
           </div>
         </div>
 
-        {/* Toolbar: Preview Navigator & Page Setup Controls */}
-        <div className="px-5 py-2.5 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 text-xs">
+        {/* Toolbar: Preview Navigator & Page Setup Controls (hidden in print) */}
+        <div className="px-5 py-2.5 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 text-xs estimate-preview-chrome">
           {/* Estimate navigator */}
           <div className="flex items-center gap-2 bg-white px-2 py-1 rounded-lg border border-slate-200 shadow-2xs">
             <button
@@ -443,20 +633,30 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={handlePrintCurrent}
-              disabled={previewLoading || isProcessing}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-bold rounded-lg transition disabled:opacity-50"
-              title="Print current previewed estimate"
+              onClick={handlePrintAll}
+              disabled={isProcessing}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-orange-600 hover:bg-orange-700 text-white text-xs font-bold rounded-lg shadow-xs transition disabled:opacity-50"
+              title="Print all selected estimates in register order"
             >
               <Printer className="w-3.5 h-3.5" />
-              <span>Print ({scale}%</span>
+              <span>Print All ({selectedEstimates.length})</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handlePrintCurrent}
+              disabled={isProcessing}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-bold rounded-lg transition disabled:opacity-50"
+              title="Print currently previewed estimate only"
+            >
+              <span>Print Current</span>
             </button>
 
             <button
               type="button"
               onClick={() => handleStartBulkExport("zip")}
               disabled={isProcessing}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-orange-600 hover:bg-orange-700 text-white text-xs font-bold rounded-lg shadow-xs transition disabled:opacity-50"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-bold rounded-lg shadow-2xs transition disabled:opacity-50"
               title="Generate individual PDFs and download as ZIP"
             >
               <Download className="w-3.5 h-3.5" />
@@ -476,69 +676,90 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
           </div>
         </div>
 
-        {/* Progress / Status banner during processing or after completion */}
+        {/* Progress / Status banner during processing or after completion (hidden in print) */}
         {(isProcessing || isDone || failures.length > 0) && (
-          <div className="px-5 py-3 border-b border-slate-200 bg-amber-50/70 flex flex-wrap items-center justify-between gap-3 text-xs">
-            <div className="flex items-center gap-2">
-              {isProcessing ? (
-                <Loader2 className="w-4 h-4 text-orange-600 animate-spin" />
-              ) : failures.length > 0 ? (
-                <AlertCircle className="w-4 h-4 text-rose-600" />
-              ) : (
-                <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-              )}
-              <span className="font-medium text-slate-800">
-                {isProcessing
-                  ? statusText
-                  : isDone
-                  ? `Completed: ${successCount} of ${selectedEstimates.length} estimate PDF(s) generated successfully.`
-                  : ""}
-              </span>
-              {failures.length > 0 && (
-                <span className="text-rose-600 font-bold ml-1">
-                  ({failures.length} failed)
+          <div className="px-5 py-3 border-b border-slate-200 bg-amber-50/70 flex flex-col gap-2 text-xs estimate-preview-chrome">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                {isProcessing ? (
+                  <Loader2 className="w-4 h-4 text-orange-600 animate-spin" />
+                ) : failures.length > 0 ? (
+                  <AlertCircle className="w-4 h-4 text-rose-600" />
+                ) : (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                )}
+                <span className="font-medium text-slate-800">
+                  {isProcessing
+                    ? statusText
+                    : isDone
+                    ? `Completed: ${successCount} of ${selectedEstimates.length} estimate PDF(s) generated successfully.`
+                    : ""}
                 </span>
+                {failures.length > 0 && (
+                  <span className="text-rose-600 font-bold ml-1">
+                    ({failures.length} failed)
+                  </span>
+                )}
+              </div>
+
+              {isProcessing && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    cancelledRef.current = true;
+                    setIsProcessing(false);
+                  }}
+                  className="px-2 py-1 bg-white border border-rose-300 text-rose-700 rounded text-[11px] font-bold hover:bg-rose-50"
+                >
+                  Cancel
+                </button>
+              )}
+
+              {combinedPdfBlobUrl && !isProcessing && (
+                <div className="flex items-center gap-2">
+                  <a
+                    href={combinedPdfBlobUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="px-2.5 py-1 bg-slate-800 text-white rounded font-bold hover:bg-slate-700 transition"
+                  >
+                    Open Combined PDF
+                  </a>
+                  <a
+                    href={combinedPdfBlobUrl}
+                    download={`Combined_Estimates_${new Date().toISOString().slice(0, 10)}.pdf`}
+                    className="px-2.5 py-1 bg-orange-600 text-white rounded font-bold hover:bg-orange-700 transition"
+                  >
+                    Download Combined PDF
+                  </a>
+                </div>
               )}
             </div>
 
-            {isProcessing && (
-              <button
-                type="button"
-                onClick={() => {
-                  cancelledRef.current = true;
-                  setIsProcessing(false);
-                }}
-                className="px-2 py-1 bg-white border border-rose-300 text-rose-700 rounded text-[11px] font-bold hover:bg-rose-50"
-              >
-                Cancel
-              </button>
-            )}
-
-            {combinedPdfBlobUrl && !isProcessing && (
-              <div className="flex items-center gap-2">
-                <a
-                  href={combinedPdfBlobUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="px-2.5 py-1 bg-slate-800 text-white rounded font-bold hover:bg-slate-700 transition"
-                >
-                  Open Combined PDF
-                </a>
-                <a
-                  href={combinedPdfBlobUrl}
-                  download={`Combined_Estimates_${new Date().toISOString().slice(0, 10)}.pdf`}
-                  className="px-2.5 py-1 bg-orange-600 text-white rounded font-bold hover:bg-orange-700 transition"
-                >
-                  Download Combined PDF
-                </a>
+            {/* Failure details breakdown: actual exceptions reported per estimate */}
+            {failures.length > 0 && (
+              <div className="mt-1 text-xs text-rose-800 bg-rose-50 border border-rose-200 rounded-lg p-2.5 max-h-36 overflow-y-auto space-y-1">
+                <div className="font-bold text-rose-900">Failure Details:</div>
+                {failures.map(({ estimate, error }, idx) => (
+                  <div key={estimate.id || idx} className="flex items-start gap-1.5 text-[11px]">
+                    <span className="font-semibold text-rose-950 min-w-[120px]">
+                      {estimate.estimateNumber || `#${estimate.id}`}:
+                    </span>
+                    <span className="text-rose-700">{error}</span>
+                  </div>
+                ))}
               </div>
             )}
           </div>
         )}
 
-        {/* Document Preview Viewport */}
-        <div className="flex-1 overflow-auto bg-slate-200/80 p-6 flex justify-center">
-          {previewLoading ? (
+        {/* Viewport for preview (hidden during bulk print) */}
+        <div
+          className={`flex-1 overflow-auto bg-slate-200/80 p-6 flex justify-center estimate-preview-scroll ${
+            isPrintingAll ? "hidden" : ""
+          } estimate-preview-chrome`}
+        >
+          {estimatesLoading && !currentItems.length ? (
             <div className="w-full max-w-[733px] bg-white rounded-lg shadow-md p-16 text-center text-slate-400">
               <Loader2 className="w-8 h-8 animate-spin mx-auto mb-3 text-orange-500" />
               <p className="text-sm font-semibold">Loading estimate items...</p>
@@ -557,7 +778,7 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
               <div data-print-document="true">
                 <EstimateDocument
                   estimate={currentEst}
-                  items={previewItems}
+                  items={currentItems}
                   stores={stores}
                   clients={clients}
                   products={products}
@@ -572,6 +793,68 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
               No estimate selected.
             </div>
           )}
+        </div>
+
+        {/* All Selected Estimates Host:
+            - Fully attached to DOM so fonts, logos, and html2canvas work without detachment
+            - When isPrintingAll is true: rendered visibly in viewport and formatted for Safari print engine
+            - When isPrintingAll is false: positioned off-screen to avoid blocking preview
+        */}
+        <div
+          ref={bulkPrintHostRef}
+          className={`bulk-estimate-print-host estimate-print-mode-${density} ${
+            isPrintingAll ? "flex-1 overflow-auto bg-slate-200/80 p-6 flex flex-col items-center gap-6" : ""
+          }`}
+          style={
+            isPrintingAll
+              ? {
+                  position: "static",
+                  width: "100%",
+                  opacity: 1,
+                  pointerEvents: "auto",
+                  zIndex: 1,
+                }
+              : {
+                  position: "fixed",
+                  left: "-99999px",
+                  top: "-99999px",
+                  width: "733px",
+                  opacity: 0.001,
+                  pointerEvents: "none",
+                  zIndex: -9999,
+                }
+          }
+        >
+          {selectedEstimates.map((est, idx) => (
+            <div
+              key={est.id}
+              id={`bulk-estimate-doc-${est.id}`}
+              className={`bulk-estimate-print-sheet bg-white shadow-xl border border-slate-300 rounded-sm ${
+                idx > 0 ? "estimate-page-break" : ""
+              }`}
+              style={{
+                width: "733px",
+                minHeight: "1036px",
+                breakBefore: idx > 0 ? "page" : "auto",
+                pageBreakBefore: idx > 0 ? "always" : "auto",
+                marginBottom: isPrintingAll ? "24px" : "0",
+                zoom: isPrintingAll ? scaleRatio : 1,
+              }}
+            >
+              <div data-print-document="true">
+                <EstimateDocument
+                  estimate={est}
+                  items={itemsMap[est.id] || []}
+                  stores={stores}
+                  clients={clients}
+                  products={products}
+                  brands={brands}
+                  sellerProfile={sellerProfile}
+                  assetToken={token}
+                />
+              </div>
+            </div>
+          ))}
         </div>
       </div>
     </div>
