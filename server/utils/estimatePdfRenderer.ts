@@ -71,11 +71,46 @@ function getPrintCss(): string {
   return "";
 }
 
+interface MasterDataCache {
+  stores: any[];
+  clients: any[];
+  products: any[];
+  brands: any[];
+  companies: any[];
+  timestamp: number;
+}
+let masterDataCache: MasterDataCache | null = null;
+const MASTER_DATA_TTL = 30 * 1000; // 30s cache
+
+export async function getMasterData(force = false): Promise<MasterDataCache> {
+  const now = Date.now();
+  if (!force && masterDataCache && now - masterDataCache.timestamp < MASTER_DATA_TTL) {
+    return masterDataCache;
+  }
+  const [allStores, allClients, allProducts, allBrands, allCompanies] = await Promise.all([
+    db.select().from(stores),
+    db.select().from(clients),
+    db.select().from(products),
+    db.select().from(brands),
+    db.select().from(companies),
+  ]);
+  masterDataCache = {
+    stores: allStores,
+    clients: allClients,
+    products: allProducts,
+    brands: allBrands,
+    companies: allCompanies,
+    timestamp: now,
+  };
+  return masterDataCache;
+}
+
 export interface RenderEstimatePdfOptions {
   estimateId: number;
   scale?: number;
   density?: "normal" | "compact";
   layout?: "portrait" | "landscape";
+  masterData?: MasterDataCache;
 }
 
 export interface RenderEstimatePdfResult {
@@ -101,20 +136,14 @@ export async function renderEstimatePdfBuffer(
     throw new Error(`Estimate with ID ${estimateId} not found`);
   }
 
-  const [items, allStores, allClients, allProducts, allBrands] = await Promise.all([
+  const [items, masterData] = await Promise.all([
     db.select().from(estimateItems).where(eq(estimateItems.estimateId, estimateId)),
-    db.select().from(stores),
-    db.select().from(clients),
-    db.select().from(products),
-    db.select().from(brands),
+    opts.masterData ? Promise.resolve(opts.masterData) : getMasterData(),
   ]);
 
+  const { stores: allStores, clients: allClients, products: allProducts, brands: allBrands, companies: allCompanies } = masterData;
   const companyId = est.companyId || 1;
-  const [comp] = await db
-    .select()
-    .from(companies)
-    .where(eq(companies.id, companyId))
-    .limit(1);
+  const comp = allCompanies.find((c: any) => c.id === companyId) || allCompanies[0] || {};
 
   const filename = getEstimatePdfFilename(est, allStores);
 
@@ -196,7 +225,8 @@ export async function renderEstimatePdfBuffer(
       route.continue();
     });
 
-    await page.setContent(fullHtml, { waitUntil: "networkidle", timeout: 15000 });
+    await page.setContent(fullHtml, { waitUntil: "load", timeout: 15000 });
+    await page.evaluate(() => (document as any).fonts?.ready).catch(() => {});
 
     const pdfBuffer = await page.pdf({
       format: "A4",
@@ -213,4 +243,32 @@ export async function renderEstimatePdfBuffer(
   } finally {
     await page.close();
   }
+}
+
+/**
+ * Render multiple estimates concurrently with shared master data and browser
+ */
+export async function renderEstimatePdfsBatch(
+  estimateIds: number[],
+  options?: Omit<RenderEstimatePdfOptions, "estimateId"> & { concurrency?: number }
+): Promise<RenderEstimatePdfResult[]> {
+  const masterData = await getMasterData();
+  const concurrency = Math.max(1, Math.min(options?.concurrency || 4, 6));
+  const results: RenderEstimatePdfResult[] = new Array(estimateIds.length);
+  let currentIndex = 0;
+
+  const workers = Array.from({ length: concurrency }, async () => {
+    while (currentIndex < estimateIds.length) {
+      const idx = currentIndex++;
+      const id = estimateIds[idx];
+      results[idx] = await renderEstimatePdfBuffer({
+        ...options,
+        estimateId: id,
+        masterData,
+      });
+    }
+  });
+
+  await Promise.all(workers);
+  return results;
 }

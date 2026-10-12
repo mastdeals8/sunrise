@@ -417,6 +417,65 @@ export async function fetchEstimateItems(token: string | null, estimateId: numbe
   );
 }
 
+export async function fetchEstimateItemsBatch(
+  token: string | null,
+  estimateIds: number[]
+): Promise<Record<number, any[]>> {
+  if (estimateIds.length === 0) return {};
+  const uniqueIds = Array.from(new Set(estimateIds));
+
+  if (!isBoltMode) {
+    try {
+      const res = await apiFetch("/api/operations/estimates/items-batch", token, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: uniqueIds }),
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch {
+      // Fallback to parallel requests
+    }
+  } else {
+    // Bolt mode (Supabase)
+    try {
+      const rows = await sbSelect<any>("estimate_items", (q) =>
+        q.select("*").in("estimate_id", uniqueIds).order("id", { ascending: true })
+      );
+      const grouped: Record<number, any[]> = {};
+      for (const id of uniqueIds) grouped[id] = [];
+      for (const row of rows || []) {
+        const eid = row.estimate_id ?? row.estimateId;
+        if (eid != null) {
+          if (!grouped[eid]) grouped[eid] = [];
+          grouped[eid].push(row);
+        }
+      }
+      return grouped;
+    } catch (sbErr) {
+      console.warn("Supabase in-query failed, falling back to parallel fetch:", sbErr);
+    }
+  }
+
+  // Fallback: parallel chunked fetch
+  const result: Record<number, any[]> = {};
+  const CHUNK_SIZE = 6;
+  for (let i = 0; i < uniqueIds.length; i += CHUNK_SIZE) {
+    const chunk = uniqueIds.slice(i, i + CHUNK_SIZE);
+    await Promise.all(
+      chunk.map(async (id) => {
+        try {
+          result[id] = await fetchEstimateItems(token, id);
+        } catch {
+          result[id] = [];
+        }
+      })
+    );
+  }
+  return result;
+}
+
 export async function fetchDeliveryChallans(token: string | null) {
   if (!isBoltMode) {
     const res = await apiFetch("/api/operations/delivery-challans", token);

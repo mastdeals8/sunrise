@@ -3011,6 +3011,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.post("/api/operations/estimates/items-batch", authenticateBrowserRequest, async (req: AuthRequest, res: Response) => {
+    try {
+      const ids: number[] = Array.isArray(req.body?.ids) ? req.body.ids.map(Number).filter(Boolean) : [];
+      if (ids.length === 0) return res.json({});
+      const rows = await db.select().from(estimateItems).where(inArray(estimateItems.estimateId, ids));
+      const grouped: Record<number, any[]> = {};
+      for (const id of ids) grouped[id] = [];
+      for (const row of rows) {
+        if (!grouped[row.estimateId]) grouped[row.estimateId] = [];
+        grouped[row.estimateId].push(row);
+      }
+      res.json(grouped);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
   app.patch("/api/operations/estimates/:id", authenticateToken, requireRole(["admin", "manager", "accounts"]), async (req: AuthRequest, res: Response) => {
     console.log(`[estimate-update] route hit, id: ${req.params.id}, hasItems: ${Array.isArray(req.body?.items)}`);
     try {

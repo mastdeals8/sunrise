@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import type { Estimate, Store, Client, Product, Brand } from "../types";
 import EstimateDocument from "../../../components/EstimateDocument";
-import { fetchEstimateItems } from "../../../lib/api";
+import { fetchEstimateItems, fetchEstimateItemsBatch } from "../../../lib/api";
 import { isBoltMode } from "../../../lib/supabase";
 import {
   getEstimatePdfFilename,
@@ -63,7 +63,6 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
   // Bulk Generation Execution State
   const [isProcessing, setIsProcessing] = useState(false);
   const [processMode, setProcessMode] = useState<"zip" | "combined" | null>(null);
-  const [currentIndex, setCurrentIndex] = useState(0);
   const [statusText, setStatusText] = useState("");
   const [failures, setFailures] = useState<Array<{ estimate: Estimate; error: string }>>([]);
   const [isDone, setIsDone] = useState(false);
@@ -73,8 +72,20 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
   // Bulk print execution state
   const [isPrintingAll, setIsPrintingAll] = useState(false);
 
+  // Client DOM fallback rendering host for single estimate
+  const [clientExportEst, setClientExportEst] = useState<Estimate | null>(null);
+
   const cancelledRef = useRef(false);
   const bulkPrintHostRef = useRef<HTMLDivElement>(null);
+  const exportSingleHostRef = useRef<HTMLDivElement>(null);
+
+  // In-memory cache of generated PDF bytes across operations with same scale/density
+  const cachedPdfsRef = useRef<Map<number, Uint8Array>>(new Map());
+
+  // Invalidate cached PDFs if scale or density changes
+  useEffect(() => {
+    cachedPdfsRef.current.clear();
+  }, [scale, density, targetFitPages]);
 
   // If opened directly with zip or combined mode from toolbar, trigger that mode
   useEffect(() => {
@@ -83,29 +94,31 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
     }
   }, [mode]);
 
-  // Load items for all selected estimates on mount / change
+  // Fast Batch Load: load items for all selected estimates on mount / change in 1 batch
   useEffect(() => {
     if (!mode || selectedEstimates.length === 0) return;
     let cancelled = false;
     setEstimatesLoading(true);
 
     const loadAll = async () => {
-      const map: Record<number, any[]> = { ...itemsMap };
-      for (const est of selectedEstimates) {
-        if (!map[est.id]) {
-          try {
-            const items = await fetchEstimateItems(token, est.id);
-            if (cancelled) return;
-            map[est.id] = items || [];
-          } catch (err: any) {
-            console.error(`Failed to load items for estimate ${est.id}:`, err);
-            map[est.id] = [];
-          }
-        }
-      }
-      if (!cancelled) {
-        setItemsMap(map);
+      const missingIds = selectedEstimates
+        .filter((e) => !itemsMap[e.id])
+        .map((e) => e.id);
+
+      if (missingIds.length === 0) {
         setEstimatesLoading(false);
+        return;
+      }
+
+      try {
+        const batchResults = await fetchEstimateItemsBatch(token, missingIds);
+        if (!cancelled) {
+          setItemsMap((prev) => ({ ...prev, ...batchResults }));
+          setEstimatesLoading(false);
+        }
+      } catch (err: any) {
+        console.error("Failed to load estimate items in batch:", err);
+        if (!cancelled) setEstimatesLoading(false);
       }
     };
 
@@ -116,7 +129,7 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
     };
   }, [selectedEstimates, token, mode]);
 
-  // Execute bulk export using the canonical renderer (server Chromium with client DOM fallback)
+  // Execute bulk export using controlled concurrency & caching
   const handleStartBulkExport = async (exportMode: "zip" | "combined") => {
     if (selectedEstimates.length === 0) return;
 
@@ -127,78 +140,80 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
     setFailures([]);
     setSuccessCount(0);
     setCombinedPdfBlobUrl(null);
-    setCurrentIndex(0);
 
     const total = selectedEstimates.length;
     const failedList: Array<{ estimate: Estimate; error: string }> = [];
     const zipFiles: Record<string, Uint8Array> = {};
-    let combinedPdfDoc: PDFDocument | null = null;
+    const pdfResultsMap: Map<number, Uint8Array> = new Map();
 
-    if (exportMode === "combined") {
-      combinedPdfDoc = await PDFDocument.create();
-      combinedPdfDoc.setTitle("Combined Estimates");
-      combinedPdfDoc.setAuthor("Sunrise Media");
-      combinedPdfDoc.setCreator("Sunrise Media ERP");
-      combinedPdfDoc.setProducer("Sunrise Media ERP");
-      combinedPdfDoc.setCreationDate(new Date());
-    }
+    const startTime = performance.now();
+    const getElapsedStr = () => ((performance.now() - startTime) / 1000).toFixed(1) + "s";
 
-    // Ensure all items are loaded
-    const map = { ...itemsMap };
-    for (const est of selectedEstimates) {
-      if (!map[est.id]) {
-        try {
-          const items = await fetchEstimateItems(token, est.id);
-          map[est.id] = items || [];
-        } catch (err: any) {
-          map[est.id] = [];
-        }
+    setStatusText(`Preparing ${total} estimate(s)...`);
+
+    // Ensure all items are loaded via batch fetch if not already in memory
+    const missingIds = selectedEstimates.filter((est) => !itemsMap[est.id]).map((est) => est.id);
+    if (missingIds.length > 0) {
+      try {
+        const batchItems = await fetchEstimateItemsBatch(token, missingIds);
+        setItemsMap((prev) => ({ ...prev, ...batchItems }));
+      } catch (err) {
+        console.warn("Batch fetch fallback error:", err);
       }
     }
-    setItemsMap(map);
 
-    // Allow DOM a tick to commit
-    await new Promise((r) => setTimeout(r, 100));
-    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    let completedCount = 0;
 
-    for (let i = 0; i < total; i++) {
-      if (cancelledRef.current) break;
+    // Concurrency limit: 3 for server Playwright, 1 for client DOM to prevent Safari freeze
+    const CONCURRENCY = !isBoltMode ? 3 : 1;
+    let nextIndex = 0;
 
-      const est = selectedEstimates[i];
-      setCurrentIndex(i + 1);
-      setStatusText(
-        `Exporting estimate ${est.estimateNumber || `Estimate #${est.id}`} (${i + 1} of ${total})...`
-      );
+    const exportWorker = async () => {
+      while (nextIndex < total && !cancelledRef.current) {
+        const i = nextIndex++;
+        const est = selectedEstimates[i];
 
-      try {
-        let pdfBytes: Uint8Array | null = null;
+        setStatusText(
+          `Generating PDF ${completedCount + 1} of ${total} (${est.estimateNumber || `#${est.id}`}, ${getElapsedStr()} elapsed)...`
+        );
 
-        // 1. In full Express mode (when not in Bolt mode), attempt server Playwright renderer
-        if (!isBoltMode) {
-          try {
-            pdfBytes = await fetchEstimateCanonicalPdf(token, est.id, {
-              scale,
-              density,
-              layout: "portrait",
-            });
-          } catch (srvErr: any) {
-            console.warn(`Server PDF generation failed for ${est.estimateNumber}, falling back to client DOM export:`, srvErr);
-          }
-        }
+        try {
+          let pdfBytes: Uint8Array | null = null;
 
-        // 2. In Bolt mode or when server generation was unavailable/failed:
-        // Use client-side canonical EstimateDocument DOM element with html2canvas and pdf-lib
-        if (!pdfBytes) {
-          const sheetEl = document.getElementById(`bulk-estimate-doc-${est.id}`);
-          const docEl =
-            (sheetEl?.querySelector(".estimate-print") as HTMLElement | null) ||
-            (sheetEl as HTMLElement | null);
-
-          if (!docEl) {
-            throw new Error(`Estimate #${est.estimateNumber || est.id} document element failed to render in DOM container`);
+          // Check if already generated in this session with same settings
+          if (cachedPdfsRef.current.has(est.id)) {
+            pdfBytes = cachedPdfsRef.current.get(est.id)!;
           }
 
-          if (exportMode === "zip") {
+          // 1. In full Express mode (when not in Bolt mode), attempt server Playwright renderer
+          if (!pdfBytes && !isBoltMode) {
+            try {
+              pdfBytes = await fetchEstimateCanonicalPdf(token, est.id, {
+                scale,
+                density,
+                layout: "portrait",
+              });
+            } catch (srvErr: any) {
+              console.warn(
+                `Server PDF generation failed for ${est.estimateNumber}, falling back to client DOM export:`,
+                srvErr
+              );
+            }
+          }
+
+          // 2. In Bolt mode or when server generation failed:
+          // Mount the estimate into single export container and render via html2canvas & pdf-lib
+          if (!pdfBytes) {
+            setClientExportEst(est);
+            await new Promise((r) => setTimeout(r, 60));
+            await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+            const host = exportSingleHostRef.current;
+            const docEl = host?.querySelector(".estimate-print") as HTMLElement | null;
+            if (!docEl) {
+              throw new Error(`Estimate #${est.estimateNumber || est.id} document element failed to render in DOM container`);
+            }
+
             const singleDoc = await renderEstimateElementToPdf(
               docEl,
               undefined,
@@ -207,115 +222,137 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
               scale
             );
             pdfBytes = await singleDoc.save();
-          } else if (exportMode === "combined" && combinedPdfDoc) {
-            await renderEstimateElementToPdf(
-              docEl,
-              combinedPdfDoc,
-              "Combined Estimates",
-              targetFitPages,
-              scale
-            );
+            setClientExportEst(null);
           }
-        } else {
-          // Server successfully returned pdfBytes
-          if (exportMode === "combined" && combinedPdfDoc) {
-            const singleDoc = await PDFDocument.load(pdfBytes);
-            const copiedPages = await combinedPdfDoc.copyPages(
-              singleDoc,
-              singleDoc.getPageIndices()
-            );
-            copiedPages.forEach((p) => combinedPdfDoc!.addPage(p));
+
+          if (cancelledRef.current) break;
+
+          if (pdfBytes) {
+            cachedPdfsRef.current.set(est.id, pdfBytes);
+            pdfResultsMap.set(est.id, pdfBytes);
           }
+
+          completedCount++;
+          setStatusText(
+            `Generating PDF ${Math.min(completedCount + 1, total)} of ${total} (${getElapsedStr()} elapsed)...`
+          );
+        } catch (renderErr: any) {
+          console.error(`Failed to export estimate ${est.estimateNumber}:`, renderErr);
+          failedList.push({
+            estimate: est,
+            error: renderErr?.message || String(renderErr) || "Canonical PDF generation failed",
+          });
         }
+      }
+    };
 
-        if (cancelledRef.current) break;
+    // Run workers with controlled concurrency
+    const workers = Array.from({ length: Math.min(CONCURRENCY, total) }, () => exportWorker());
+    await Promise.all(workers);
 
-        if (exportMode === "zip" && pdfBytes) {
+    if (cancelledRef.current) {
+      setIsProcessing(false);
+      setClientExportEst(null);
+      return;
+    }
+
+    setClientExportEst(null);
+    setFailures(failedList);
+    const finalSuccessCount = pdfResultsMap.size;
+    setSuccessCount(finalSuccessCount);
+
+    // Assembly phase
+    if (exportMode === "zip" && finalSuccessCount > 0) {
+      setStatusText(`Packaging ${finalSuccessCount} PDF(s) into ZIP archive...`);
+      for (const est of selectedEstimates) {
+        const bytes = pdfResultsMap.get(est.id);
+        if (bytes) {
           const filename = getEstimatePdfFilename(est, stores);
-
-          // Handle collision safely if duplicates exist
           let uniqueFilename = filename;
           let counter = 2;
           while (zipFiles[uniqueFilename]) {
             uniqueFilename = filename.replace(/\.pdf$/i, `_${counter}.pdf`);
             counter++;
           }
-
-          zipFiles[uniqueFilename] = pdfBytes;
+          zipFiles[uniqueFilename] = bytes;
         }
-      } catch (renderErr: any) {
-        console.error(`Failed to export estimate ${est.estimateNumber}:`, renderErr);
-        failedList.push({
-          estimate: est,
-          error: renderErr?.message || String(renderErr) || "Canonical PDF generation failed",
-        });
+      }
+
+      try {
+        const zipBlob = packagePdfsIntoZip(zipFiles);
+        downloadFileBlob(
+          zipBlob,
+          `Estimates_Export_${new Date().toISOString().slice(0, 10)}.zip`
+        );
+        if (showSuccess) {
+          showSuccess(
+            `Successfully exported ${Object.keys(zipFiles).length} estimate PDF(s) in ${getElapsedStr()}.`
+          );
+        }
+      } catch (zipErr: any) {
+        console.error("ZIP creation failed:", zipErr);
+        alert("Failed to create ZIP package: " + zipErr.message);
+      }
+    } else if (exportMode === "combined" && finalSuccessCount > 0) {
+      setStatusText(`Assembling combined PDF for ${finalSuccessCount} estimate(s)...`);
+      try {
+        const combinedDoc = await PDFDocument.create();
+        combinedDoc.setTitle("Combined Estimates");
+        combinedDoc.setAuthor("Sunrise Media");
+        combinedDoc.setCreator("Sunrise Media ERP");
+        combinedDoc.setProducer("Sunrise Media ERP");
+        combinedDoc.setCreationDate(new Date());
+
+        // Merge in register order
+        for (const est of selectedEstimates) {
+          const bytes = pdfResultsMap.get(est.id);
+          if (bytes) {
+            const singleDoc = await PDFDocument.load(bytes);
+            const copiedPages = await combinedDoc.copyPages(
+              singleDoc,
+              singleDoc.getPageIndices()
+            );
+            copiedPages.forEach((p) => combinedDoc.addPage(p));
+          }
+        }
+
+        const combinedBytes = await combinedDoc.save();
+        const blob = new Blob([combinedBytes], { type: "application/pdf" });
+        const blobUrl = URL.createObjectURL(blob);
+        setCombinedPdfBlobUrl(blobUrl);
+
+        // Auto-open print preview via hidden iframe
+        const printIframe = document.createElement("iframe");
+        printIframe.style.position = "fixed";
+        printIframe.style.right = "0";
+        printIframe.style.bottom = "0";
+        printIframe.style.width = "0";
+        printIframe.style.height = "0";
+        printIframe.style.border = "0";
+        printIframe.src = blobUrl;
+        document.body.appendChild(printIframe);
+        printIframe.onload = () => {
+          setTimeout(() => {
+            try {
+              printIframe.contentWindow?.focus();
+              printIframe.contentWindow?.print();
+            } catch (e) {
+              console.warn("Auto-print preview on iframe failed:", e);
+            }
+          }, 300);
+        };
+      } catch (combErr: any) {
+        console.error("Combined PDF failed:", combErr);
+        alert("Failed to build combined PDF: " + combErr.message);
       }
     }
 
-    if (cancelledRef.current) {
-      setIsProcessing(false);
-      return;
-    }
-
-    setFailures(failedList);
-    const completedCount = total - failedList.length;
-    setSuccessCount(completedCount);
+    const totalElapsed = getElapsedStr();
     setIsDone(true);
     setIsProcessing(false);
-
-    if (exportMode === "zip") {
-      if (Object.keys(zipFiles).length > 0) {
-        setStatusText("Packaging PDFs into ZIP archive...");
-        try {
-          const zipBlob = packagePdfsIntoZip(zipFiles);
-          downloadFileBlob(
-            zipBlob,
-            `Estimates_Export_${new Date().toISOString().slice(0, 10)}.zip`
-          );
-          if (showSuccess) {
-            showSuccess(
-              `Successfully exported ${Object.keys(zipFiles).length} estimate PDF(s).`
-            );
-          }
-        } catch (zipErr: any) {
-          console.error("ZIP creation failed:", zipErr);
-          alert("Failed to create ZIP package: " + zipErr.message);
-        }
-      }
-    } else if (exportMode === "combined" && combinedPdfDoc) {
-      if (completedCount > 0) {
-        try {
-          const combinedBytes = await combinedPdfDoc.save();
-          const blob = new Blob([combinedBytes], { type: "application/pdf" });
-          const blobUrl = URL.createObjectURL(blob);
-          setCombinedPdfBlobUrl(blobUrl);
-
-          // Auto-open print preview via iframe
-          const printIframe = document.createElement("iframe");
-          printIframe.style.position = "fixed";
-          printIframe.style.right = "0";
-          printIframe.style.bottom = "0";
-          printIframe.style.width = "0";
-          printIframe.style.height = "0";
-          printIframe.style.border = "0";
-          printIframe.src = blobUrl;
-          document.body.appendChild(printIframe);
-          printIframe.onload = () => {
-            setTimeout(() => {
-              try {
-                printIframe.contentWindow?.focus();
-                printIframe.contentWindow?.print();
-              } catch (e) {
-                console.warn("Auto-print preview on iframe failed:", e);
-              }
-            }, 300);
-          };
-        } catch (combErr: any) {
-          console.error("Combined PDF failed:", combErr);
-          alert("Failed to build combined PDF: " + combErr.message);
-        }
-      }
-    }
+    setStatusText(
+      `Completed: ${finalSuccessCount} of ${total} estimate PDF(s) generated in ${totalElapsed}.`
+    );
   };
 
   // Bulk Print: prints all selected estimates in register order with each starting on a new page
@@ -324,22 +361,18 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
     setIsPrintingAll(true);
     setStatusText("Preparing all selected estimates for printing...");
 
-    // 1. Ensure all estimate items are loaded
-    const missing = selectedEstimates.filter((est) => !itemsMap[est.id]);
-    if (missing.length > 0) {
-      const map = { ...itemsMap };
-      for (const est of missing) {
-        try {
-          const items = await fetchEstimateItems(token, est.id);
-          map[est.id] = items || [];
-        } catch (err) {
-          map[est.id] = [];
-        }
+    // Ensure all estimate items are loaded
+    const missingIds = selectedEstimates.filter((est) => !itemsMap[est.id]).map((est) => est.id);
+    if (missingIds.length > 0) {
+      try {
+        const batchItems = await fetchEstimateItemsBatch(token, missingIds);
+        setItemsMap((prev) => ({ ...prev, ...batchItems }));
+      } catch (err) {
+        console.warn("Batch items fetch for print warning:", err);
       }
-      setItemsMap(map);
     }
 
-    // 2. Wait for React to commit DOM update
+    // Wait for React to commit DOM update
     await new Promise((r) => setTimeout(r, 120));
     await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
 
@@ -350,7 +383,7 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
       return;
     }
 
-    // 3. Confirm fonts and images are ready before opening print dialog
+    // Confirm fonts and images are ready before opening print dialog
     if (document.fonts && document.fonts.ready) {
       try {
         await document.fonts.ready;
@@ -359,7 +392,7 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
 
     await waitForImages(host);
 
-    // 4. Actively confirm all documents are rendered and have valid dimensions
+    // Actively confirm all documents are rendered and have valid dimensions
     const docEls = host.querySelectorAll(".estimate-print");
     if (docEls.length < selectedEstimates.length) {
       await new Promise((r) => setTimeout(r, 200));
@@ -689,11 +722,7 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
                   <CheckCircle2 className="w-4 h-4 text-emerald-600" />
                 )}
                 <span className="font-medium text-slate-800">
-                  {isProcessing
-                    ? statusText
-                    : isDone
-                    ? `Completed: ${successCount} of ${selectedEstimates.length} estimate PDF(s) generated successfully.`
-                    : ""}
+                  {statusText}
                 </span>
                 {failures.length > 0 && (
                   <span className="text-rose-600 font-bold ml-1">
@@ -795,67 +824,83 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
           )}
         </div>
 
-        {/* All Selected Estimates Host:
-            - Fully attached to DOM so fonts, logos, and html2canvas work without detachment
-            - When isPrintingAll is true: rendered visibly in viewport and formatted for Safari print engine
-            - When isPrintingAll is false: positioned off-screen to avoid blocking preview
+        {/* Bulk Print Multi-Sheet Container:
+            - Mounted only when user triggers Print All
+            - Formatted for Safari WebKit & Chrome print engine
         */}
-        <div
-          ref={bulkPrintHostRef}
-          className={`bulk-estimate-print-host estimate-print-mode-${density} ${
-            isPrintingAll ? "flex-1 overflow-auto bg-slate-200/80 p-6 flex flex-col items-center gap-6" : ""
-          }`}
-          style={
-            isPrintingAll
-              ? {
-                  position: "static",
-                  width: "100%",
-                  opacity: 1,
-                  pointerEvents: "auto",
-                  zIndex: 1,
-                }
-              : {
-                  position: "fixed",
-                  left: "-99999px",
-                  top: "-99999px",
+        {isPrintingAll && (
+          <div
+            ref={bulkPrintHostRef}
+            className={`bulk-estimate-print-host estimate-print-mode-${density} flex-1 overflow-auto bg-slate-200/80 p-6 flex flex-col items-center gap-6`}
+            style={{
+              position: "static",
+              width: "100%",
+              opacity: 1,
+              pointerEvents: "auto",
+              zIndex: 1,
+            }}
+          >
+            {selectedEstimates.map((est, idx) => (
+              <div
+                key={est.id}
+                id={`bulk-estimate-doc-${est.id}`}
+                className={`bulk-estimate-print-sheet bg-white shadow-xl border border-slate-300 rounded-sm ${
+                  idx > 0 ? "estimate-page-break" : ""
+                }`}
+                style={{
                   width: "733px",
-                  opacity: 0.001,
-                  pointerEvents: "none",
-                  zIndex: -9999,
-                }
-          }
-        >
-          {selectedEstimates.map((est, idx) => (
-            <div
-              key={est.id}
-              id={`bulk-estimate-doc-${est.id}`}
-              className={`bulk-estimate-print-sheet bg-white shadow-xl border border-slate-300 rounded-sm ${
-                idx > 0 ? "estimate-page-break" : ""
-              }`}
-              style={{
-                width: "733px",
-                minHeight: "1036px",
-                breakBefore: idx > 0 ? "page" : "auto",
-                pageBreakBefore: idx > 0 ? "always" : "auto",
-                marginBottom: isPrintingAll ? "24px" : "0",
-                zoom: isPrintingAll ? scaleRatio : 1,
-              }}
-            >
-              <div data-print-document="true">
-                <EstimateDocument
-                  estimate={est}
-                  items={itemsMap[est.id] || []}
-                  stores={stores}
-                  clients={clients}
-                  products={products}
-                  brands={brands}
-                  sellerProfile={sellerProfile}
-                  assetToken={token}
-                />
+                  minHeight: "1036px",
+                  breakBefore: idx > 0 ? "page" : "auto",
+                  pageBreakBefore: idx > 0 ? "always" : "auto",
+                  marginBottom: "24px",
+                  zoom: scaleRatio,
+                }}
+              >
+                <div data-print-document="true">
+                  <EstimateDocument
+                    estimate={est}
+                    items={itemsMap[est.id] || []}
+                    stores={stores}
+                    clients={clients}
+                    products={products}
+                    brands={brands}
+                    sellerProfile={sellerProfile}
+                    assetToken={token}
+                  />
+                </div>
               </div>
+            ))}
+          </div>
+        )}
+
+        {/* Single off-screen container for client DOM export fallback */}
+        {clientExportEst && (
+          <div
+            ref={exportSingleHostRef}
+            style={{
+              position: "fixed",
+              left: "-99999px",
+              top: "-99999px",
+              width: "733px",
+              opacity: 0.001,
+              pointerEvents: "none",
+              zIndex: -9999,
+            }}
+          >
+            <div data-print-document="true">
+              <EstimateDocument
+                estimate={clientExportEst}
+                items={itemsMap[clientExportEst.id] || []}
+                stores={stores}
+                clients={clients}
+                products={products}
+                brands={brands}
+                sellerProfile={sellerProfile}
+                assetToken={token}
+              />
             </div>
-          ))}
-        </div>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -334,7 +334,7 @@ export function packagePdfsIntoZip(
   } else if (files && typeof files === "object") {
     Object.assign(fileMap, files);
   }
-  const zipBytes = zipSync(fileMap, { level: 6 });
+  const zipBytes = zipSync(fileMap, { level: 1 });
   return new Blob([zipBytes], { type: "application/zip" });
 }
 
