@@ -80,7 +80,7 @@ export function getInvoiceSummaryRows(packet: any, sellerProfile: any, pages?: a
   const store = noOfStoresCount > 1 ? "Multiple" : noOfStoresCount === 1 ? (storeNamesList[0] || "—") : "—";
 
   // 7. Vendor
-  const vendor = String(sellerProfile?.name || sellerProfile?.companyName || "Sunrise Media").trim();
+  const vendor = String(sellerProfile?.displayName || sellerProfile?.tradeName || sellerProfile?.name || sellerProfile?.companyName || "Sunrise Media").trim();
 
   // 9. WCC
   let wccStatus = "Pending";

@@ -40,16 +40,17 @@ const wrapAddress = (value: string) => {
   return lines.length > 3 ? [...lines.slice(0, 2), lines.slice(2).join(" ")].join("\n") : lines.join("\n");
 };
 
-const DocumentLogo: React.FC<{ src: string; companyName: string }> = ({ src, companyName }) => {
+const DocumentLogo: React.FC<{ src: string; companyName: string; isCompany1?: boolean }> = ({ src, companyName, isCompany1 = false }) => {
   const [failed, setFailed] = React.useState(false);
   React.useEffect(() => {
     setFailed(false);
   }, [src]);
 
-  const effectiveSrc = src || "/brand/file-1780929283382-585314307.png";
-  return failed ? (
-    <div style={{ fontWeight: 900, fontSize: "22px", lineHeight: 1.1, textAlign: "right" }}>{companyName}</div>
-  ) : (
+  const effectiveSrc = src || (isCompany1 ? "/brand/file-1780929283382-585314307.png" : "");
+  if (!effectiveSrc || failed) {
+    return <div style={{ fontWeight: 900, fontSize: "20px", lineHeight: 1.1, textAlign: "right", color: "#0f172a", letterSpacing: "0.5px" }}>{companyName.toUpperCase()}</div>;
+  }
+  return (
     <img
       src={effectiveSrc}
       alt={companyName}
@@ -59,7 +60,7 @@ const DocumentLogo: React.FC<{ src: string; companyName: string }> = ({ src, com
   );
 };
 
-const documentLogo = (src: string, companyName: string) => <DocumentLogo src={src} companyName={companyName} />;
+const documentLogo = (src: string, companyName: string, isCompany1?: boolean) => <DocumentLogo src={src} companyName={companyName} isCompany1={isCompany1} />;
 
 const EstimateDocument: React.FC<EstimateDocumentProps> = ({
   estimate: est,
@@ -327,12 +328,21 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
   const dateStr = (est.estimateDate || est.createdAt)
     ? new Date(est.estimateDate || est.createdAt).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }).replace(/ /g, "-")
     : "";
-  const companyName = sellerProfile.name || "Sunrise Media";
+  const isCompany1 = !sellerProfile.companyId || Number(sellerProfile.companyId) === 1;
+  const companyName = sellerProfile.displayName || sellerProfile.tradeName || sellerProfile.name || "Sunrise Media";
   const companyAddress = sellerProfile.address || "";
   const companyEmail = sellerProfile.email || "";
   const companyMobile = sellerProfile.mobile || "";
-  const logoSrc = companyAssetUrl(sellerProfile.logoPath || "/brand/file-1780929283382-585314307.png", token);
-  const signatureStampSrc = companyAssetUrl(sellerProfile.signatureStampPath || "/brand/file-1780897714393-225895475.png", token);
+  const logoSrc = companyAssetUrl(sellerProfile.logoPath || (isCompany1 ? "/brand/file-1780929283382-585314307.png" : ""), token);
+  const signatureSrc = companyAssetUrl(sellerProfile.signaturePath || sellerProfile.signatureStampPath || (isCompany1 ? "/brand/file-1780897714393-225895475.png" : ""), token);
+  const sealSrc = companyAssetUrl(sellerProfile.sealPath, token);
+  const footerBgColor = sellerProfile.footerBgColor || "#f59e0b";
+  const footerTextColor = sellerProfile.footerTextColor || "#ffffff";
+  const headerBgColor = sellerProfile.headerBgColor || "#ffffff";
+  const headerTextColor = sellerProfile.headerTextColor || "#1e293b";
+  const footerAlignment = (sellerProfile.footerAlignment as any) || "center";
+  const docHeaderText = sellerProfile.docHeaderText || sellerProfile.documentHeader || "";
+  const docFooterText = sellerProfile.docFooterText || sellerProfile.documentFooter || "";
   const termsLines = String(sellerProfile.terms || "1. Taxes will be applicable.\n2. 100% Payment after the delivery of the meterial.\n3. Transportation charges As per Actual.\n4. Any additional work / rework will be extra.")
     .split(/\n+/)
     .map((line: string) => line.trim())
@@ -491,36 +501,57 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
   ];
 
   const renderDocumentHeader = () => (
-    <table className="estimate-document-header" style={{ width: "100%", borderCollapse: "collapse" }}>
-      <tbody>
-        <tr style={{ verticalAlign: "top" }}>
-          <td style={{ padding: "8px 12px", fontSize: "11px", lineHeight: 1.45, width: "60%" }}>
-            <div style={{ fontWeight: 700 }}>Billing To</div>
-            <div style={{ fontWeight: 700 }}>M/S : {billingName}</div>
-            {billingAddress && <div style={{ whiteSpace: "pre-wrap" }}>{wrapAddress(billingAddress)}</div>}
-            {billingStateCode && <div>State Code: {billingStateCode}</div>}
-            {billingGstin && <div style={{ fontWeight: 700 }}>GSTN - {billingGstin}</div>}
-            <div style={{ marginTop: "10px", fontWeight: 700 }}>Shipping To</div>
-            <div style={{ fontWeight: 700 }}>M/S : {shippingName}</div>
-            {shippingStoreName && <div style={{ fontWeight: 700 }}>{shippingStoreName}</div>}
-            {effectiveShippingAddress && <div style={{ whiteSpace: "pre-wrap" }}>{wrapAddress(effectiveShippingAddress)}</div>}
-            {shippingGstin && <div style={{ fontWeight: 700 }}>GSTN - {shippingGstin}</div>}
-          </td>
-          <td style={{ padding: "8px 12px", width: "40%", textAlign: "right", fontSize: "11px", verticalAlign: "top" }}>
-            <div style={{ display: "flex", justifyContent: "flex-end" }}>{documentLogo(logoSrc, companyName)}</div>
-            <table style={{ marginTop: "18px", marginLeft: "auto", borderCollapse: "collapse", tableLayout: "fixed", width: "262px" }}>
-              <tbody>
-                {metaRow("Date :", dateStr)}
-                {metaRow("Est - No -", est.estimateNumber, true)}
-                {sellerProfile.gstin && metaRow("GSTN -", sellerProfile.gstin)}
-                {sellerProfile.pan && metaRow("PAN -", sellerProfile.pan)}
-                {est.vendorCode && metaRow("Vendor Code -", est.vendorCode)}
-              </tbody>
-            </table>
-          </td>
-        </tr>
-      </tbody>
-    </table>
+    <>
+      {docHeaderText && (
+        <div
+          className="estimate-document-banner"
+          style={{
+            width: "100%",
+            padding: "4px 8px",
+            backgroundColor: headerBgColor,
+            color: headerTextColor,
+            fontSize: "9.5px",
+            fontWeight: 700,
+            textAlign: "center",
+            borderBottom: "1px solid #000",
+            letterSpacing: "0.5px",
+            textTransform: "uppercase",
+          }}
+        >
+          {docHeaderText}
+        </div>
+      )}
+      <table className="estimate-document-header" style={{ width: "100%", borderCollapse: "collapse" }}>
+        <tbody>
+          <tr style={{ verticalAlign: "top" }}>
+            <td style={{ padding: "8px 12px", fontSize: "11px", lineHeight: 1.45, width: "60%" }}>
+              <div style={{ fontWeight: 700 }}>Billing To</div>
+              <div style={{ fontWeight: 700 }}>M/S : {billingName}</div>
+              {billingAddress && <div style={{ whiteSpace: "pre-wrap" }}>{wrapAddress(billingAddress)}</div>}
+              {billingStateCode && <div>State Code: {billingStateCode}</div>}
+              {billingGstin && <div style={{ fontWeight: 700 }}>GSTN - {billingGstin}</div>}
+              <div style={{ marginTop: "10px", fontWeight: 700 }}>Shipping To</div>
+              <div style={{ fontWeight: 700 }}>M/S : {shippingName}</div>
+              {shippingStoreName && <div style={{ fontWeight: 700 }}>{shippingStoreName}</div>}
+              {effectiveShippingAddress && <div style={{ whiteSpace: "pre-wrap" }}>{wrapAddress(effectiveShippingAddress)}</div>}
+              {shippingGstin && <div style={{ fontWeight: 700 }}>GSTN - {shippingGstin}</div>}
+            </td>
+            <td style={{ padding: "8px 12px", width: "40%", textAlign: "right", fontSize: "11px", verticalAlign: "top" }}>
+              <div style={{ display: "flex", justifyContent: "flex-end" }}>{documentLogo(logoSrc, companyName, isCompany1)}</div>
+              <table style={{ marginTop: "18px", marginLeft: "auto", borderCollapse: "collapse", tableLayout: "fixed", width: "262px" }}>
+                <tbody>
+                  {metaRow("Date :", dateStr)}
+                  {metaRow("Est - No -", est.estimateNumber, true)}
+                  {sellerProfile.gstin && metaRow("GSTN -", sellerProfile.gstin)}
+                  {sellerProfile.pan && metaRow("PAN -", sellerProfile.pan)}
+                  {est.vendorCode && metaRow("Vendor Code -", est.vendorCode)}
+                </tbody>
+              </table>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </>
   );
 
   const renderEstimateTableHead = () => (
@@ -737,13 +768,21 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
             </td>
             <td className="estimate-footer-column estimate-signature-cell" style={{ ...cellBase, padding: "6px 8px", textAlign: "right", verticalAlign: "top" }}>
               <div style={{ fontWeight: 700, fontSize: "9px" }}>For {companyName.toUpperCase()}</div>
-              <div className="estimate-signature-space" style={{ height: "46px", display: "flex", alignItems: "center", justifyContent: "flex-end" }}>
-                {signatureStampSrc && (
+              <div className="estimate-signature-space" style={{ height: "46px", display: "flex", alignItems: "center", justifyContent: "flex-end", gap: "8px" }}>
+                {signatureSrc && (
                   <img
-                    src={signatureStampSrc}
-                    alt="Signature and stamp"
-                    className="estimate-signature-stamp"
-                    style={{ maxHeight: "42px", maxWidth: "140px", objectFit: "contain" }}
+                    src={signatureSrc}
+                    alt="Authorized Signature"
+                    className="estimate-signature"
+                    style={{ maxHeight: "42px", maxWidth: sealSrc && sealSrc !== signatureSrc ? "90px" : "140px", objectFit: "contain" }}
+                  />
+                )}
+                {sealSrc && sealSrc !== signatureSrc && (
+                  <img
+                    src={sealSrc}
+                    alt="Company Seal"
+                    className="estimate-seal"
+                    style={{ maxHeight: "42px", maxWidth: "80px", objectFit: "contain" }}
                   />
                 )}
               </div>
@@ -752,10 +791,24 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
           </tr>
         </tbody>
       </table>
-      <div className="estimate-brand-footer" style={{ width: "100%", boxSizing: "border-box", backgroundColor: "#f59e0b", color: "#fff", textAlign: "center", padding: "5px 8px", letterSpacing: "0.3px", border: "1px solid #f59e0b", borderTop: "none" }}>
+      <div
+        className="estimate-brand-footer"
+        style={{
+          width: "100%",
+          boxSizing: "border-box",
+          backgroundColor: footerBgColor,
+          color: footerTextColor,
+          textAlign: footerAlignment,
+          padding: "5px 8px",
+          letterSpacing: "0.3px",
+          border: `1px solid ${footerBgColor}`,
+          borderTop: "none",
+        }}
+      >
         <div className="estimate-brand-footer-title" style={{ fontSize: "14px", fontWeight: 900, letterSpacing: "1.5px", lineHeight: 1.1 }}>{companyName.toUpperCase()}</div>
         {companyAddress && <div style={{ fontSize: "8px", marginTop: "2px", lineHeight: 1.25 }}>{companyAddress}</div>}
         {(companyMobile || companyEmail) && <div style={{ fontSize: "8px", marginTop: "1px", lineHeight: 1.25 }}>{[companyMobile, companyEmail].filter(Boolean).join("  ·  ")}</div>}
+        {docFooterText && <div style={{ fontSize: "8px", marginTop: "2px", lineHeight: 1.25, whiteSpace: "pre-line" }}>{docFooterText}</div>}
       </div>
     </div>
   );

@@ -1246,6 +1246,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
     defaultDcPrefix: "SM/DC",
     logoPath: "/brand/file-1780929283382-585314307.png",
     signatureStampPath: "/brand/file-1780897714393-225895475.png",
+    signaturePath: "/brand/file-1780897714393-225895475.png",
+    sealPath: "/brand/file-1780897714393-225895475.png",
+    footerBgColor: "#f59e0b",
+    footerTextColor: "#ffffff",
+    headerBgColor: "#ffffff",
+    headerTextColor: "#1e293b",
+    footerAlignment: "center",
+    brandingOptions: {},
+    legalName: "Sunrise Media",
+    tradeName: "Sunrise Media",
+    displayName: "Sunrise Media",
     terms: "1. Taxes will be applicable.\n2. 100% Payment after the delivery of the meterial.\n3. Transportation charges As per Actual.\n4. Any additional work / rework will be extra.",
   };
   type SellerProfile = typeof SUNRISE_DEFAULT_SELLER;
@@ -1296,10 +1307,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   const cleanCompanyAssetRef = (value: any) => {
     const raw = cleanSetting(value);
     if (!raw) return "";
-    const prefix = "/uploads/company-assets/";
-    if (!raw.startsWith(prefix)) return "";
-    const filename = path.basename(raw);
-    return filename && raw === `${prefix}${filename}` ? raw : "";
+    if (raw.startsWith("http://") || raw.startsWith("https://")) return raw;
+    if (raw.startsWith("/brand/") || raw.startsWith("/uploads/company-assets/") || raw.startsWith("/api/company-assets/")) return raw;
+    if (/^[a-zA-Z0-9_\-\.\/]+$/.test(raw)) return raw;
+    return "";
   };
   const readSettingWithLegacy = async (canonicalKey: string) => {
     const direct = await storage.getAppSetting(canonicalKey).catch(() => null);
@@ -1320,6 +1331,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     if (cId !== 1 && company) {
       return {
         name: company.displayName || company.tradeName || company.name || "Company Workspace",
+        legalName: company.legalName || company.name || "",
+        tradeName: company.tradeName || company.name || "",
+        displayName: company.displayName || company.tradeName || company.name || "",
         gstin: company.gstin || "",
         pan: company.pan || "",
         state: company.state || "",
@@ -1340,7 +1354,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         defaultInvoicePrefix: company.invoicePrefix || "INV",
         defaultDcPrefix: company.dcPrefix || "DC",
         logoPath: company.logoPath || "",
-        signatureStampPath: company.signatureStampPath || "",
+        signaturePath: company.signaturePath || company.signatureStampPath || "",
+        sealPath: company.sealPath || company.signatureStampPath || "",
+        signatureStampPath: company.signatureStampPath || company.signaturePath || "",
+        footerBgColor: company.footerBgColor || "#f59e0b",
+        footerTextColor: company.footerTextColor || "#ffffff",
+        headerBgColor: company.headerBgColor || "#ffffff",
+        headerTextColor: company.headerTextColor || "#1e293b",
+        footerAlignment: company.footerAlignment || "center",
+        brandingOptions: company.brandingOptions || {},
         terms: company.termsAndConditions || "",
         documentHeader: company.docHeaderText || "",
         documentFooter: company.docFooterText || "",
@@ -1351,6 +1373,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const out: any = { ...SUNRISE_DEFAULT_SELLER, companyId: 1 };
     if (company) {
       if (company.name) out.name = company.name;
+      if (company.legalName) out.legalName = company.legalName;
+      if (company.tradeName) out.tradeName = company.tradeName;
+      if (company.displayName) out.displayName = company.displayName;
       if (company.gstin) out.gstin = company.gstin;
       if (company.pan) out.pan = company.pan;
       if (company.state) out.state = company.state;
@@ -1371,7 +1396,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (company.invoicePrefix) out.defaultInvoicePrefix = company.invoicePrefix;
       if (company.dcPrefix) out.defaultDcPrefix = company.dcPrefix;
       if (company.logoPath) out.logoPath = company.logoPath;
+      if (company.signaturePath) out.signaturePath = company.signaturePath;
+      if (company.sealPath) out.sealPath = company.sealPath;
       if (company.signatureStampPath) out.signatureStampPath = company.signatureStampPath;
+      if (company.footerBgColor) out.footerBgColor = company.footerBgColor;
+      if (company.footerTextColor) out.footerTextColor = company.footerTextColor;
+      if (company.headerBgColor) out.headerBgColor = company.headerBgColor;
+      if (company.headerTextColor) out.headerTextColor = company.headerTextColor;
+      if (company.footerAlignment) out.footerAlignment = company.footerAlignment;
+      if (company.brandingOptions) out.brandingOptions = company.brandingOptions;
       if (company.termsAndConditions) out.terms = company.termsAndConditions;
       if (company.docHeaderText) out.documentHeader = company.docHeaderText;
       if (company.docFooterText) out.documentFooter = company.docFooterText;
@@ -5320,6 +5353,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if ("name" in req.body) compUpdates.name = String(req.body.name ?? "");
       if ("legalName" in req.body) compUpdates.legalName = String(req.body.legalName ?? "");
       if ("tradeName" in req.body) compUpdates.tradeName = String(req.body.tradeName ?? "");
+      if ("displayName" in req.body) compUpdates.displayName = String(req.body.displayName ?? "");
       if ("gstin" in req.body) compUpdates.gstin = String(req.body.gstin ?? "");
       if ("pan" in req.body) compUpdates.pan = String(req.body.pan ?? "");
       if ("state" in req.body) compUpdates.state = String(req.body.state ?? "");
@@ -5343,7 +5377,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if ("defaultInvoicePrefix" in req.body) compUpdates.invoicePrefix = String(req.body.defaultInvoicePrefix ?? "");
       if ("defaultDcPrefix" in req.body) compUpdates.dcPrefix = String(req.body.defaultDcPrefix ?? "");
       if ("logoPath" in req.body) compUpdates.logoPath = cleanCompanyAssetRef(req.body.logoPath);
+      if ("signaturePath" in req.body) compUpdates.signaturePath = cleanCompanyAssetRef(req.body.signaturePath);
+      if ("sealPath" in req.body) compUpdates.sealPath = cleanCompanyAssetRef(req.body.sealPath);
       if ("signatureStampPath" in req.body) compUpdates.signatureStampPath = cleanCompanyAssetRef(req.body.signatureStampPath);
+      if (compUpdates.signaturePath && !compUpdates.signatureStampPath) {
+        compUpdates.signatureStampPath = compUpdates.signaturePath;
+      }
+      if ("footerBgColor" in req.body) compUpdates.footerBgColor = String(req.body.footerBgColor || "#f59e0b").trim();
+      if ("footerTextColor" in req.body) compUpdates.footerTextColor = String(req.body.footerTextColor || "#ffffff").trim();
+      if ("headerBgColor" in req.body) compUpdates.headerBgColor = String(req.body.headerBgColor || "#ffffff").trim();
+      if ("headerTextColor" in req.body) compUpdates.headerTextColor = String(req.body.headerTextColor || "#1e293b").trim();
+      if ("footerAlignment" in req.body) compUpdates.footerAlignment = String(req.body.footerAlignment || "center").trim();
+      if ("brandingOptions" in req.body) compUpdates.brandingOptions = typeof req.body.brandingOptions === "object" ? req.body.brandingOptions : {};
 
       await storage.updateCompany(cId, compUpdates);
 

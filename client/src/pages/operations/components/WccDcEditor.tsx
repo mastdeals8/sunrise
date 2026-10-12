@@ -594,14 +594,16 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
           const authPersonVal = metadata?.authPerson || targetStore?.contactPerson || "";
           const shortageNotesVal = metadata?.shortageNotes || "";
           const storeCodeVal = metadata?.storeCode || targetStore?.storeCode || (targetStore?.id ? String(targetStore.id) : "");
-          const companyName = sellerProfile.name || "Sunrise Media";
+          const isCompany1 = !sellerProfile?.companyId || Number(sellerProfile?.companyId) === 1;
+          const companyName = sellerProfile.displayName || sellerProfile.tradeName || sellerProfile.name || (isCompany1 ? "Sunrise Media" : "Company Workspace");
           const companyAddress = sellerProfile.address || "";
           const companyEmail = sellerProfile.email || "";
           const companyMobile = sellerProfile.mobile || "";
           const companyGstin = sellerProfile.gstin || "";
           const companyPan = sellerProfile.pan || "";
-          const logoSrc = companyAssetUrl(sellerProfile.logoPath, token);
-          const signatureStampSrc = companyAssetUrl(sellerProfile.signatureStampPath, token);
+          const logoSrc = companyAssetUrl(sellerProfile.logoPath || (isCompany1 ? "/brand/file-1780929283382-585314307.png" : ""), token);
+          const signatureStampSrc = companyAssetUrl(sellerProfile.signaturePath || sellerProfile.signatureStampPath || (isCompany1 ? "/brand/file-1780897714393-225895475.png" : ""), token);
+          const sealSrc = companyAssetUrl(sellerProfile.sealPath, token);
           // Bottom checklist persisted on dc.metadata.checklist. Falls back to
           // the live editor state when previewing an unsaved DC.
           const checklist = (metadata?.checklist as { window?: boolean; inStore?: boolean; nso?: boolean; repairing?: boolean; materialTransfer?: boolean } | undefined) || wccChecklist;
@@ -1049,7 +1051,14 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
                   </div>
                   <div className="space-y-10 text-right">
                     <p className="font-bold">For {companyName.toUpperCase()}</p>
-                    <div className="h-[22mm] flex items-center justify-end">
+                    <div className="h-[22mm] flex items-center justify-end gap-2">
+                      {sealSrc && (
+                        <img
+                          src={sealSrc}
+                          alt="Seal"
+                          className="max-h-[20mm] max-w-[28mm] object-contain"
+                        />
+                      )}
                       {signatureStampSrc && (
                         <img
                           src={signatureStampSrc}

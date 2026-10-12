@@ -62,16 +62,17 @@ const useDataUrl = (url: string): { dataUrl: string; ready: boolean } => {
   return { dataUrl: dataUrl || url, ready };
 };
 
-const InvoiceLogo: React.FC<{ src: string; companyName: string; maxWidth?: number }> = ({ src, companyName, maxWidth = 185 }) => {
+const InvoiceLogo: React.FC<{ src: string; companyName: string; maxWidth?: number; isCompany1?: boolean }> = ({ src, companyName, maxWidth = 185, isCompany1 = false }) => {
   const [failed, setFailed] = useState(false);
   useEffect(() => {
     setFailed(false);
   }, [src]);
 
-  const effectiveSrc = src || "/brand/logo.png";
-  return failed ? (
-    <div style={{ fontWeight: 900, fontSize: "18px", lineHeight: 1.1 }}>{companyName}</div>
-  ) : (
+  const effectiveSrc = src || (isCompany1 ? "/brand/logo.png" : "");
+  if (!effectiveSrc || failed) {
+    return <div style={{ fontWeight: 900, fontSize: "18px", lineHeight: 1.1, color: "#0f172a", letterSpacing: "0.5px" }}>{companyName.toUpperCase()}</div>;
+  }
+  return (
     <img
       src={effectiveSrc}
       alt={companyName}
@@ -128,22 +129,33 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({
   const sgst = useSavedComponents ? componentTax.sgst : (isIgst ? 0 : totalTax - cgst);
   const grandTotal = Number(inv.totalAmount || subtotal + cgst + sgst + igst);
 
-  const companyName = sellerProfile?.name || sellerProfile?.companyName || "Sunrise Media";
+  const isCompany1 = !sellerProfile?.companyId || Number(sellerProfile?.companyId) === 1;
+  const companyName = sellerProfile?.displayName || sellerProfile?.tradeName || sellerProfile?.name || sellerProfile?.companyName || "Sunrise Media";
   const companyAddress = sellerProfile?.address || "";
   const companyEmail = sellerProfile?.email || "";
   const companyMobile = sellerProfile?.mobile || "";
-  const sellerGstin = sellerProfile?.gstin || "27ABZFS5736R1ZR";
+  const sellerGstin = sellerProfile?.gstin || (isCompany1 ? "27ABZFS5736R1ZR" : "");
 
-  const logoUrl = companyAssetUrl(sellerProfile?.logoPath || "/brand/file-1780929283382-585314307.png", token);
+  const logoUrl = companyAssetUrl(sellerProfile?.logoPath || (isCompany1 ? "/brand/file-1780929283382-585314307.png" : ""), token);
   const { dataUrl: logoDataUrl, ready: logoReady } = useDataUrl(logoUrl);
-  const sigUrl = companyAssetUrl(sellerProfile?.signatureStampPath || "/brand/file-1780897714393-225895475.png", token);
+  const sigUrl = companyAssetUrl(sellerProfile?.signaturePath || sellerProfile?.signatureStampPath || (isCompany1 ? "/brand/file-1780897714393-225895475.png" : ""), token);
   const { dataUrl: sigDataUrl, ready: sigReady } = useDataUrl(sigUrl);
+  const sealUrl = companyAssetUrl(sellerProfile?.sealPath, token);
+  const { dataUrl: sealDataUrl, ready: sealReady } = useDataUrl(sealUrl);
+
+  const footerBgColor = sellerProfile?.footerBgColor || "#f59e0b";
+  const footerTextColor = sellerProfile?.footerTextColor || "#ffffff";
+  const headerBgColor = sellerProfile?.headerBgColor || "#ffffff";
+  const headerTextColor = sellerProfile?.headerTextColor || "#1e293b";
+  const footerAlignment = (sellerProfile?.footerAlignment as any) || "center";
+  const docHeaderText = sellerProfile?.docHeaderText || sellerProfile?.documentHeader || "";
+  const docFooterText = sellerProfile?.docFooterText || sellerProfile?.documentFooter || "";
 
   useEffect(() => {
-    if (logoReady && sigReady) {
+    if (logoReady && sigReady && sealReady) {
       document.documentElement.setAttribute("data-invoice-images-ready", "true");
     }
-  }, [logoReady, sigReady]);
+  }, [logoReady, sigReady, sealReady]);
 
   const billingName = est?.billingLegalNameSnapshot || inv.partyName || client?.name || "";
   const billingAddress = est?.billingAddressSnapshot || client?.address || "";
@@ -363,10 +375,29 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({
       {/* Top Header: Logo, GST/UIN, TAX INVOICE title, Bill To, Ship To, Metadata */}
       <table className="invoice-document-header" style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
         <tbody>
+          {/* Header banner if configured */}
+          {docHeaderText && (
+            <tr>
+              <td
+                colSpan={3}
+                style={{
+                  border: "1px solid #000",
+                  padding: "4px 8px",
+                  textAlign: "center",
+                  fontSize: "11px",
+                  fontWeight: 700,
+                  backgroundColor: headerBgColor !== "#ffffff" ? headerBgColor : "#f8fafc",
+                  color: headerTextColor,
+                }}
+              >
+                {docHeaderText}
+              </td>
+            </tr>
+          )}
           {/* Logo row - spans all 3 columns */}
           <tr>
             <td colSpan={3} style={{ border: "1px solid #000", padding: "6px 10px" }}>
-              <InvoiceLogo src={logoDataUrl} companyName={companyName} maxWidth={200} />
+              <InvoiceLogo src={logoDataUrl} companyName={companyName} maxWidth={200} isCompany1={isCompany1} />
             </td>
           </tr>
           {/* GST/UIN row - spans all 3 columns */}
@@ -550,12 +581,19 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({
                 <div style={{ fontSize: "8.5px", lineHeight: 1.4 }}>IFSC No. : {sellerProfile?.bankIfsc || "HDFC0001794"}</div>
               </td>
               <td style={{ ...cellBase, padding: "6px 8px", textAlign: "center", verticalAlign: "bottom" }}>
-                <div style={{ height: "44px", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <div style={{ height: "46px", display: "flex", alignItems: "center", justifyContent: "center", gap: "8px" }}>
+                  {sealDataUrl && (
+                    <img
+                      src={sealDataUrl}
+                      alt="Company seal"
+                      style={{ maxHeight: "42px", maxWidth: "60px", objectFit: "contain" }}
+                    />
+                  )}
                   {sigDataUrl && (
                     <img
                       src={sigDataUrl}
                       alt="Signature and stamp"
-                      style={{ maxHeight: "42px", maxWidth: "130px", objectFit: "contain" }}
+                      style={{ maxHeight: "42px", maxWidth: sealDataUrl ? "80px" : "130px", objectFit: "contain" }}
                     />
                   )}
                 </div>
@@ -565,10 +603,29 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({
             </tr>
           </tbody>
         </table>
-        <div className="invoice-brand-footer" style={{ backgroundColor: "#f59e0b", color: "#fff", textAlign: "center", padding: "6px 8px", letterSpacing: "0.3px", border: "1px solid #000", borderTop: "none", boxSizing: "border-box", width: "100%" }}>
-          <div style={{ fontSize: "14px", fontWeight: 900, letterSpacing: "1.5px", lineHeight: 1.1 }}>{companyName.toUpperCase()}</div>
-          {companyAddress && <div style={{ fontSize: "8.5px", marginTop: "2px", lineHeight: 1.25 }}>{companyAddress}</div>}
-          {(companyMobile || companyEmail) && <div style={{ fontSize: "8.5px", marginTop: "1px", lineHeight: 1.25 }}>{[companyMobile, companyEmail].filter(Boolean).join("  \u00b7  ")}</div>}
+        <div
+          className="invoice-brand-footer"
+          style={{
+            backgroundColor: footerBgColor,
+            color: footerTextColor,
+            textAlign: footerAlignment,
+            padding: "6px 10px",
+            letterSpacing: "0.3px",
+            border: "1px solid #000",
+            borderTop: "none",
+            boxSizing: "border-box",
+            width: "100%",
+          }}
+        >
+          {docFooterText ? (
+            <div style={{ fontSize: "10px", fontWeight: 700, lineHeight: 1.3 }}>{docFooterText}</div>
+          ) : (
+            <>
+              <div style={{ fontSize: "14px", fontWeight: 900, letterSpacing: "1.5px", lineHeight: 1.1 }}>{companyName.toUpperCase()}</div>
+              {companyAddress && <div style={{ fontSize: "8.5px", marginTop: "2px", lineHeight: 1.25 }}>{companyAddress}</div>}
+              {(companyMobile || companyEmail) && <div style={{ fontSize: "8.5px", marginTop: "1px", lineHeight: 1.25 }}>{[companyMobile, companyEmail].filter(Boolean).join("  \u00b7  ")}</div>}
+            </>
+          )}
         </div>
       </div>
     </div>

@@ -21,6 +21,7 @@ import { INDIA_STATES, getStateCode } from "@/utils/indiaLocations";
 import { isBoltMode } from "../lib/supabase";
 import {
   fetchCompanySettings,
+  saveCompanySettings,
   uploadToStorage,
   saveAssetSetting,
   upsertAppSettings,
@@ -44,6 +45,7 @@ interface SettingsState {
   companyAddress: string;
   companyGstin: string;
   companyPan: string;
+  companyState: string;
   companyStateCode: string;
   companyMobile: string;
   companyEmail: string;
@@ -60,10 +62,17 @@ interface SettingsState {
   defaultLocalTransport: string;
   defaultOutstationTransportRate: string;
   companyLogoPath: string;
+  signaturePath: string;
+  sealPath: string;
   signatureStampPath: string;
   terms: string;
   docHeaderText: string;
   docFooterText: string;
+  footerBgColor: string;
+  footerTextColor: string;
+  headerBgColor: string;
+  headerTextColor: string;
+  footerAlignment: string;
 }
 
 const empty: SettingsState = {
@@ -74,6 +83,7 @@ const empty: SettingsState = {
   companyAddress: "",
   companyGstin: "",
   companyPan: "",
+  companyState: "Maharashtra",
   companyStateCode: "27",
   companyMobile: "",
   companyEmail: "",
@@ -90,10 +100,17 @@ const empty: SettingsState = {
   defaultLocalTransport: "1000",
   defaultOutstationTransportRate: "18",
   companyLogoPath: "",
+  signaturePath: "",
+  sealPath: "",
   signatureStampPath: "",
   terms: "1. Taxes will be applicable.\n2. 100% Payment after the delivery of the material.\n3. Transportation charges As per Actual.\n4. Any additional work / rework will be extra.",
   docHeaderText: "",
   docFooterText: "",
+  footerBgColor: "#f59e0b",
+  footerTextColor: "#ffffff",
+  headerBgColor: "#ffffff",
+  headerTextColor: "#1e293b",
+  footerAlignment: "center",
 };
 
 function getCurrentFyLabel(): string {
@@ -152,6 +169,7 @@ interface SettingsAssetFieldProps {
   hint: string;
   disabled: boolean;
   onUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  onRemove?: () => void;
 }
 
 const SettingsAssetField: React.FC<SettingsAssetFieldProps> = ({
@@ -160,27 +178,60 @@ const SettingsAssetField: React.FC<SettingsAssetFieldProps> = ({
   hint,
   disabled,
   onUpload,
+  onRemove,
 }) => (
-  <div className="border border-slate-200 rounded-lg p-3.5 bg-white shadow-2xs">
-    <div className="flex items-start justify-between gap-3">
-      <div className="min-w-0">
+  <div className="border border-slate-200 rounded-lg p-3.5 bg-white shadow-2xs flex flex-col justify-between">
+    <div>
+      <div className="flex items-center justify-between gap-2">
         <label className="text-xs font-bold uppercase text-slate-700">{label}</label>
-        <p className="text-xs text-slate-500 mt-0.5">{hint}</p>
-        <div className="mt-2 flex items-center gap-2">
+        {value && onRemove && !disabled && (
+          <button
+            type="button"
+            onClick={onRemove}
+            className="text-[11px] font-semibold text-red-600 hover:text-red-700 flex items-center gap-1 hover:underline cursor-pointer"
+          >
+            <Trash2 className="w-3 h-3" />
+            Remove
+          </button>
+        )}
+      </div>
+      <p className="text-xs text-slate-500 mt-0.5">{hint}</p>
+      <div className="mt-2.5 flex items-center gap-3">
+        {value ? (
+          <div className="relative group">
+            <img
+              src={value}
+              alt={label}
+              className="h-12 w-auto max-w-40 object-contain border border-slate-200 rounded bg-slate-50 p-1.5 shadow-2xs"
+            />
+          </div>
+        ) : (
+          <div className="h-12 w-28 border border-dashed border-slate-300 rounded bg-slate-50/50 flex items-center justify-center text-[10px] text-slate-400 italic">
+            No image
+          </div>
+        )}
+        <div className="min-w-0 flex-1">
           {value ? (
-            <img src={value} alt={label} className="h-10 w-auto max-w-32 object-contain border border-slate-200 rounded bg-slate-50 p-1" />
+            <p className="text-[10px] text-slate-400 truncate font-mono" title={value}>{value}</p>
           ) : (
-            <span className="text-[11px] text-slate-400 italic">No image uploaded</span>
+            <p className="text-[11px] text-slate-400">Allowed: PNG, JPG, WEBP, SVG (max 5MB)</p>
           )}
-          <p className="text-[10px] text-slate-400 truncate font-mono max-w-xs">{value}</p>
         </div>
       </div>
-      <label className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border text-xs font-semibold shrink-0 transition-colors ${!disabled ? "cursor-pointer bg-slate-50 hover:bg-orange-50 hover:text-orange-600 hover:border-orange-200 text-slate-700 border-slate-200 shadow-2xs" : "cursor-not-allowed bg-slate-50 text-slate-400 border-slate-200"}`}>
+    </div>
+    <div className="mt-3 pt-2.5 border-t border-slate-100 flex justify-end">
+      <label
+        className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border text-xs font-semibold shrink-0 transition-colors ${
+          !disabled
+            ? "cursor-pointer bg-slate-50 hover:bg-orange-50 hover:text-orange-600 hover:border-orange-200 text-slate-700 border-slate-200 shadow-2xs"
+            : "cursor-not-allowed bg-slate-50 text-slate-400 border-slate-200"
+        }`}
+      >
         <Upload className="w-3.5 h-3.5" />
-        Upload
+        {value ? "Change Image" : "Upload Image"}
         <input
           type="file"
-          accept="image/png,image/jpeg,image/webp"
+          accept="image/png,image/jpeg,image/webp,image/svg+xml"
           className="hidden"
           disabled={disabled}
           onChange={onUpload}
@@ -224,13 +275,14 @@ const SettingsPage: React.FC = () => {
       const data = await fetchCompanySettings(token, cId);
       if (data) {
         setForm({
-          companyName: String(data.name ?? empty.companyName),
+          companyName: String(data.companyName ?? data.name ?? empty.companyName),
           legalName: String(data.legalName ?? data.name ?? empty.legalName),
           tradeName: String(data.tradeName ?? data.name ?? empty.tradeName),
           displayName: String(data.displayName ?? data.name ?? empty.displayName),
           companyAddress: String(data.address ?? empty.companyAddress),
           companyGstin: String(data.gstin ?? empty.companyGstin),
           companyPan: String(data.pan ?? empty.companyPan),
+          companyState: String(data.state ?? empty.companyState),
           companyStateCode: String(data.stateCode ?? empty.companyStateCode),
           companyMobile: String(data.mobile ?? empty.companyMobile),
           companyEmail: String(data.email ?? empty.companyEmail),
@@ -247,10 +299,17 @@ const SettingsPage: React.FC = () => {
           defaultLocalTransport: String(data.defaultLocalTransport ?? empty.defaultLocalTransport),
           defaultOutstationTransportRate: String(data.defaultOutstationTransportRate ?? empty.defaultOutstationTransportRate),
           companyLogoPath: String(data.logoPath ?? empty.companyLogoPath),
-          signatureStampPath: String(data.signatureStampPath ?? empty.signatureStampPath),
+          signaturePath: String(data.signaturePath ?? data.signatureStampPath ?? empty.signaturePath),
+          sealPath: String(data.sealPath ?? empty.sealPath),
+          signatureStampPath: String(data.signatureStampPath ?? data.signaturePath ?? empty.signatureStampPath),
           terms: String(data.terms ?? empty.terms),
           docHeaderText: String(data.documentHeader ?? empty.docHeaderText),
           docFooterText: String(data.documentFooter ?? empty.docFooterText),
+          footerBgColor: String(data.footerBgColor || empty.footerBgColor),
+          footerTextColor: String(data.footerTextColor || empty.footerTextColor),
+          headerBgColor: String(data.headerBgColor || empty.headerBgColor),
+          headerTextColor: String(data.headerTextColor || empty.headerTextColor),
+          footerAlignment: String(data.footerAlignment || empty.footerAlignment),
         });
       }
     } catch (err) {
@@ -303,6 +362,7 @@ const SettingsPage: React.FC = () => {
         address: form.companyAddress,
         gstin: form.companyGstin,
         pan: form.companyPan,
+        state: form.companyState,
         stateCode: form.companyStateCode,
         mobile: form.companyMobile,
         email: form.companyEmail,
@@ -319,45 +379,21 @@ const SettingsPage: React.FC = () => {
         defaultLocalTransport: form.defaultLocalTransport,
         defaultOutstationTransportRate: form.defaultOutstationTransportRate,
         logoPath: form.companyLogoPath,
-        signatureStampPath: form.signatureStampPath,
+        signaturePath: form.signaturePath,
+        sealPath: form.sealPath,
+        signatureStampPath: form.signatureStampPath || form.signaturePath,
         terms: form.terms,
         documentHeader: form.docHeaderText,
         documentFooter: form.docFooterText,
+        footerBgColor: form.footerBgColor,
+        footerTextColor: form.footerTextColor,
+        headerBgColor: form.headerBgColor,
+        headerTextColor: form.headerTextColor,
+        footerAlignment: form.footerAlignment,
       };
 
-      if (isBoltMode) {
-        await upsertAppSettings(token, {
-          "company.name": form.companyName,
-          "company.address": form.companyAddress,
-          "company.gstin": form.companyGstin,
-          "company.pan": form.companyPan,
-          "company.stateCode": form.companyStateCode,
-          "company.mobile": form.companyMobile,
-          "company.email": form.companyEmail,
-          "bank.name": form.bankName,
-          "bank.accountNumber": form.bankAccountNumber,
-          "bank.ifsc": form.bankIfsc,
-          "bank.branch": form.bankBranch,
-          "defaults.gstPercent": form.defaultGstPercent,
-          "defaults.packingPercent": form.defaultPacking,
-          "defaults.implementationPercent": form.defaultImplementation,
-          "defaults.localTransport": form.defaultLocalTransport,
-          "defaults.outstationTransportRate": form.defaultOutstationTransportRate,
-          "defaults.terms": form.terms || null,
-          "company.logoPath": form.companyLogoPath || null,
-          "company.signatureStampPath": form.signatureStampPath || null,
-        });
-      } else {
-        const res = await apiFetch("/api/company-settings", token, {
-          method: "PUT",
-          headers: { "X-Company-Id": String(selectedCompanyId) },
-          body: JSON.stringify(payload),
-        });
-        if (!res.ok) {
-          const e = await res.json().catch(() => ({}));
-          throw new Error(e.message || "Save failed");
-        }
-      }
+      // Save company settings specifically against selectedCompanyId
+      await saveCompanySettings(token, selectedCompanyId, payload);
 
       if (tallyStartingNumber !== "" && selectedCompanyId === 1) {
         const startNum = parseInt(String(tallyStartingNumber), 10);
@@ -366,32 +402,53 @@ const SettingsPage: React.FC = () => {
         }
       }
 
+      // Reload saved values from database to guarantee persistence
+      await loadSettings(selectedCompanyId);
       await refreshCompanies();
+
       setMsg({ kind: "ok", text: "Company settings and document branding saved successfully." });
-      setTimeout(() => setMsg(null), 3000);
+      setTimeout(() => setMsg(null), 4000);
     } catch (err: any) {
       setMsg({ kind: "err", text: err.message || "Save failed" });
-      setTimeout(() => setMsg(null), 4000);
+      setTimeout(() => setMsg(null), 5000);
     } finally {
       setSaving(false);
     }
   };
 
-  const uploadAsset = async (e: React.ChangeEvent<HTMLInputElement>, key: "companyLogoPath" | "signatureStampPath") => {
+  const uploadAsset = async (
+    e: React.ChangeEvent<HTMLInputElement>,
+    key: "companyLogoPath" | "signaturePath" | "sealPath"
+  ) => {
     if (!isAdmin) return;
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
+
+    // Validate size (max 5MB)
+    if (file.size > 5 * 1024 * 1024) {
+      setMsg({ kind: "err", text: "File too large. Maximum allowed size is 5MB." });
+      setTimeout(() => setMsg(null), 4000);
+      return;
+    }
+
+    // Validate type
+    const validTypes = ["image/png", "image/jpeg", "image/webp", "image/svg+xml"];
+    if (!validTypes.includes(file.type)) {
+      setMsg({ kind: "err", text: "Invalid file type. Allowed formats: PNG, JPG, WEBP, SVG." });
+      setTimeout(() => setMsg(null), 4000);
+      return;
+    }
+
     setMsg(null);
     try {
       let filePath: string;
       if (isBoltMode) {
         const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-        const storagePath = `${key === "companyLogoPath" ? "logo" : "stamp"}/${Date.now()}-${safeName}`;
+        const folder = key === "companyLogoPath" ? "logo" : key === "signaturePath" ? "signature" : "seal";
+        const storagePath = `company-${selectedCompanyId}/${folder}/${Date.now()}-${safeName}`;
         const { displayUrl } = await uploadToStorage("company-assets", storagePath, file);
         filePath = displayUrl;
-        const settingKey = key === "companyLogoPath" ? "company.logoPath" : "company.signatureStampPath";
-        await saveAssetSetting(token, settingKey, filePath);
       } else {
         const body = new FormData();
         body.append("file", file);
@@ -406,13 +463,28 @@ const SettingsPage: React.FC = () => {
         const data = await res.json();
         filePath = String(data.filePath || "");
       }
-      setForm(prev => ({ ...prev, [key]: filePath }));
-      setMsg({ kind: "ok", text: "Image uploaded. Click Save Settings to apply changes." });
-      setTimeout(() => setMsg(null), 3000);
+      setForm((prev) => ({
+        ...prev,
+        [key]: filePath,
+        ...(key === "signaturePath" ? { signatureStampPath: filePath } : {}),
+      }));
+      setMsg({ kind: "ok", text: "Image uploaded! Click 'Save Company Settings' to apply changes." });
+      setTimeout(() => setMsg(null), 3500);
     } catch (err: any) {
       setMsg({ kind: "err", text: err.message || "Upload failed" });
       setTimeout(() => setMsg(null), 4000);
     }
+  };
+
+  const removeAsset = (key: "companyLogoPath" | "signaturePath" | "sealPath") => {
+    if (!isAdmin) return;
+    setForm((prev) => ({
+      ...prev,
+      [key]: "",
+      ...(key === "signaturePath" ? { signatureStampPath: "" } : {}),
+    }));
+    setMsg({ kind: "ok", text: "Image removed. Click 'Save Company Settings' to apply changes." });
+    setTimeout(() => setMsg(null), 3000);
   };
 
   const handleCreateCompany = async (e: React.FormEvent) => {
@@ -822,68 +894,115 @@ const SettingsPage: React.FC = () => {
                 Live Document Branding Preview ({form.companyName})
               </h3>
               <span className="text-[10px] font-black uppercase tracking-wider text-orange-800 bg-orange-100 px-2.5 py-1 rounded-full border border-orange-200">
-                Official Document Header & Footer Mockup
+                Canonical Document Header & Footer Mockup
               </span>
             </div>
 
             {/* Document Header Preview Card */}
-            <div className="bg-white border border-slate-300 rounded-lg p-5 shadow-xs font-sans">
+            <div className="bg-white border border-slate-300 rounded-lg overflow-hidden shadow-xs font-sans">
               {form.docHeaderText ? (
-                <div className="text-center font-bold text-xs uppercase tracking-widest text-slate-500 border-b border-slate-100 pb-2 mb-3">
+                <div
+                  className="py-1.5 px-4 font-bold text-xs uppercase tracking-widest text-center transition-colors border-b border-slate-200"
+                  style={{ backgroundColor: form.headerBgColor, color: form.headerTextColor }}
+                >
                   {form.docHeaderText}
                 </div>
               ) : null}
 
-              <div className="flex justify-between items-start gap-4">
-                <div className="flex items-start gap-3">
-                  {form.companyLogoPath ? (
-                    <img src={form.companyLogoPath} alt="Logo" className="h-12 w-auto max-w-40 object-contain" />
-                  ) : (
-                    <div className="h-12 w-32 border border-dashed border-slate-300 rounded flex items-center justify-center text-[10px] text-slate-400 font-bold uppercase">
-                      Logo Preview
-                    </div>
-                  )}
-                  <div>
-                    <h2 className="text-lg font-black text-slate-900 leading-tight uppercase tracking-tight">
-                      {form.displayName || form.companyName || "COMPANY NAME"}
-                    </h2>
-                    {form.legalName && form.legalName !== form.companyName && (
-                      <p className="text-[11px] text-slate-500 font-medium">({form.legalName})</p>
+              <div className="p-5">
+                <div className="flex justify-between items-start gap-4">
+                  <div className="flex items-start gap-3">
+                    {form.companyLogoPath ? (
+                      <img src={form.companyLogoPath} alt="Logo" className="h-12 w-auto max-w-40 object-contain" />
+                    ) : (
+                      <div className="h-12 w-32 border border-dashed border-slate-300 rounded flex items-center justify-center text-[10px] text-slate-400 font-bold uppercase">
+                        {form.companyName.toUpperCase()}
+                      </div>
                     )}
-                    <p className="text-xs text-slate-600 max-w-md mt-0.5 leading-snug">
-                      {form.companyAddress || <span className="text-slate-400 italic">No address configured</span>}
-                    </p>
-                    <p className="text-[11px] text-slate-500 mt-1">
-                      {form.companyMobile && `Mobile: ${form.companyMobile} `}
-                      {form.companyEmail && `| Email: ${form.companyEmail}`}
-                    </p>
+                    <div>
+                      <h2 className="text-lg font-black text-slate-900 leading-tight uppercase tracking-tight">
+                        {form.displayName || form.companyName || "COMPANY NAME"}
+                      </h2>
+                      {form.legalName && form.legalName !== form.companyName && (
+                        <p className="text-[11px] text-slate-500 font-medium">({form.legalName})</p>
+                      )}
+                      <p className="text-xs text-slate-600 max-w-md mt-0.5 leading-snug">
+                        {form.companyAddress || <span className="text-slate-400 italic">No address configured</span>}
+                      </p>
+                      <p className="text-[11px] text-slate-500 mt-1">
+                        {form.companyMobile && `Mobile: ${form.companyMobile} `}
+                        {form.companyEmail && `| Email: ${form.companyEmail}`}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="text-right text-xs space-y-1 font-mono">
+                    <div className="bg-slate-50 border border-slate-200 rounded p-2 text-left">
+                      <p className="font-bold text-slate-800">GSTIN: <span className="text-orange-600 font-black">{form.companyGstin || "PENDING"}</span></p>
+                      <p className="text-slate-600">PAN: {form.companyPan || "—"}</p>
+                      <p className="text-slate-600">State: {form.companyState || "—"} ({form.companyStateCode || "—"})</p>
+                    </div>
                   </div>
                 </div>
 
-                <div className="text-right text-xs space-y-1 font-mono">
-                  <div className="bg-slate-50 border border-slate-200 rounded p-2 text-left">
-                    <p className="font-bold text-slate-800">GSTIN: <span className="text-orange-600 font-black">{form.companyGstin || "PENDING"}</span></p>
-                    <p className="text-slate-600">PAN: {form.companyPan || "—"}</p>
-                    <p className="text-slate-600">State Code: {form.companyStateCode || "—"}</p>
+                {/* Bank Details Strip */}
+                <div className="mt-4 pt-3 border-t border-slate-200 flex flex-wrap justify-between items-center text-[11px] text-slate-600 bg-slate-50/70 p-2.5 rounded">
+                  <div>
+                    <span className="font-bold text-slate-700">Bank:</span> {form.bankName || "—"} | <span className="font-bold text-slate-700">A/C:</span> {form.bankAccountNumber || "—"}
+                  </div>
+                  <div>
+                    <span className="font-bold text-slate-700">IFSC:</span> {form.bankIfsc || "—"} | <span className="font-bold text-slate-700">Branch:</span> {form.bankBranch || "—"}
+                  </div>
+                </div>
+
+                {/* Signatures & Seal Preview Strip */}
+                <div className="mt-4 pt-3 border-t border-slate-200 flex justify-end items-center gap-6">
+                  <div className="text-center">
+                    <div className="h-10 w-28 flex items-center justify-center border border-dashed border-slate-200 rounded bg-slate-50 p-1">
+                      {form.signaturePath ? (
+                        <img src={form.signaturePath} alt="Signature" className="max-h-8 max-w-full object-contain" />
+                      ) : (
+                        <span className="text-[9px] text-slate-400 italic">No signature</span>
+                      )}
+                    </div>
+                    <span className="text-[9px] font-bold uppercase text-slate-500 mt-0.5 block">Signature</span>
+                  </div>
+
+                  <div className="text-center">
+                    <div className="h-10 w-20 flex items-center justify-center border border-dashed border-slate-200 rounded bg-slate-50 p-1">
+                      {form.sealPath ? (
+                        <img src={form.sealPath} alt="Seal" className="max-h-8 max-w-full object-contain" />
+                      ) : (
+                        <span className="text-[9px] text-slate-400 italic">No seal</span>
+                      )}
+                    </div>
+                    <span className="text-[9px] font-bold uppercase text-slate-500 mt-0.5 block">Company Seal</span>
                   </div>
                 </div>
               </div>
 
-              {/* Bank Details Strip */}
-              <div className="mt-4 pt-3 border-t border-slate-200 flex flex-wrap justify-between items-center text-[11px] text-slate-600 bg-slate-50/70 p-2.5 rounded">
-                <div>
-                  <span className="font-bold text-slate-700">Bank:</span> {form.bankName || "—"} | <span className="font-bold text-slate-700">A/C:</span> {form.bankAccountNumber || "—"}
-                </div>
-                <div>
-                  <span className="font-bold text-slate-700">IFSC:</span> {form.bankIfsc || "—"} | <span className="font-bold text-slate-700">Branch:</span> {form.bankBranch || "—"}
-                </div>
+              {/* Document Brand Footer Strip */}
+              <div
+                className="py-2 px-4 transition-all"
+                style={{
+                  backgroundColor: form.footerBgColor,
+                  color: form.footerTextColor,
+                  textAlign: (form.footerAlignment as any) || "center",
+                }}
+              >
+                <div className="font-black text-xs uppercase tracking-wider">{form.companyName}</div>
+                {form.companyAddress && <div className="text-[10px] mt-0.5 opacity-90">{form.companyAddress}</div>}
+                {(form.companyMobile || form.companyEmail) && (
+                  <div className="text-[9px] mt-0.5 opacity-85">
+                    {[form.companyMobile, form.companyEmail].filter(Boolean).join("  ·  ")}
+                  </div>
+                )}
+                {form.docFooterText && (
+                  <div className="text-[9px] mt-1 pt-1 border-t border-white/20 font-medium whitespace-pre-line">
+                    {form.docFooterText}
+                  </div>
+                )}
               </div>
-
-              {form.docFooterText && (
-                <div className="mt-3 pt-2 border-t border-slate-100 text-center text-[10px] text-slate-400 font-medium">
-                  {form.docFooterText}
-                </div>
-              )}
             </div>
           </div>
 
@@ -902,10 +1021,11 @@ const SettingsPage: React.FC = () => {
               <div>
                 <label className="text-xs font-bold uppercase text-slate-600">State / State Code</label>
                 <select
-                  value={INDIA_STATES.find(s => s.code === form.companyStateCode)?.name || ""}
+                  value={INDIA_STATES.find(s => s.code === form.companyStateCode)?.name || form.companyState || ""}
                   onChange={(e) => {
-                    const code = getStateCode(e.target.value);
-                    setForm({ ...form, companyStateCode: code });
+                    const stName = e.target.value;
+                    const code = getStateCode(stName);
+                    setForm({ ...form, companyState: stName, companyStateCode: code });
                   }}
                   className="w-full border border-slate-200 rounded-md px-3 py-2 text-sm mt-1 focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 outline-hidden font-medium bg-white"
                   disabled={!isAdmin}
@@ -924,41 +1044,154 @@ const SettingsPage: React.FC = () => {
             </div>
           </div>
 
-          {/* Document Header & Footer (Pasteable Text) */}
+          {/* Document Images (Logo, Signature, Seal) */}
+          <div className="glass-panel p-5">
+            <h3 className="font-bold text-slate-900 flex items-center gap-2 mb-3">
+              <ImageIcon className="w-5 h-5 text-orange-600" />
+              Company Branding Assets (Logo, Signature & Seal)
+            </h3>
+            <p className="text-xs text-slate-500 mb-4">
+              Each workspace maintains its own independent branding assets. Uploaded files are stored persistently and rendered across all estimate, invoice, DC, and packet documents.
+            </p>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <SettingsAssetField
+                label="Company Logo"
+                value={form.companyLogoPath}
+                hint="Main header logo on Estimates, Invoices, Delivery Challans, and Packets."
+                disabled={!isAdmin}
+                onUpload={(e) => uploadAsset(e, "companyLogoPath")}
+                onRemove={() => removeAsset("companyLogoPath")}
+              />
+              <SettingsAssetField
+                label="Authorized Signature"
+                value={form.signaturePath}
+                hint="Authorized signatory signature image for official documents."
+                disabled={!isAdmin}
+                onUpload={(e) => uploadAsset(e, "signaturePath")}
+                onRemove={() => removeAsset("signaturePath")}
+              />
+              <SettingsAssetField
+                label="Company Seal / Stamp"
+                value={form.sealPath}
+                hint="Official company round stamp or seal for authentication."
+                disabled={!isAdmin}
+                onUpload={(e) => uploadAsset(e, "sealPath")}
+                onRemove={() => removeAsset("sealPath")}
+              />
+            </div>
+          </div>
+
+          {/* Document Header & Footer (Styling, Colors & Text) */}
           <div className="glass-panel p-5">
             <h3 className="font-bold text-slate-900 flex items-center gap-2 mb-3">
               <FileText className="w-5 h-5 text-orange-600" />
-              Document Header & Footer (Pasteable Text)
+              Document Header & Footer Configuration & Colors
             </h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <SettingsField
                 label="Document Header Text"
                 value={form.docHeaderText}
                 onChange={updateField("docHeaderText")}
-                rows={3}
-                placeholder="Top-of-page document header text or notice (e.g. TAX INVOICE / ESTIMATE OF WORK)"
+                rows={2}
+                placeholder="Top-of-page document header text (e.g. TAX INVOICE / ESTIMATE OF WORK)"
                 disabled={!isAdmin}
               />
               <SettingsField
                 label="Document Footer Text"
                 value={form.docFooterText}
                 onChange={updateField("docFooterText")}
-                rows={3}
+                rows={2}
                 placeholder="Bottom-of-page footer text, registration notes or jurisdiction notice"
                 disabled={!isAdmin}
               />
-            </div>
-          </div>
 
-          {/* Document Images */}
-          <div className="glass-panel p-5">
-            <h3 className="font-bold text-slate-900 flex items-center gap-2 mb-3">
-              <ImageIcon className="w-5 h-5 text-orange-600" />
-              Document Logos & Signatures
-            </h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <SettingsAssetField label="Company Logo" value={form.companyLogoPath} hint="Rendered on estimate, invoice, DC, and packet PDFs." disabled={!isAdmin} onUpload={(e) => uploadAsset(e, "companyLogoPath")} />
-              <SettingsAssetField label="Signature & Stamp Image" value={form.signatureStampPath} hint="Transparent PNG with signature and stamp for official invoices." disabled={!isAdmin} onUpload={(e) => uploadAsset(e, "signatureStampPath")} />
+              {/* Color & Alignment Controls */}
+              <div className="border border-slate-200 rounded-lg p-3.5 bg-white shadow-2xs">
+                <label className="text-xs font-bold uppercase text-slate-700 block mb-2">Footer Background & Text Color</label>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <span className="text-[11px] text-slate-500 font-medium block mb-1">Footer Background</span>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="color"
+                        value={form.footerBgColor || "#f59e0b"}
+                        onChange={(e) => updateField("footerBgColor")(e.target.value)}
+                        className="h-8 w-10 p-0.5 rounded border border-slate-200 cursor-pointer"
+                        disabled={!isAdmin}
+                      />
+                      <input
+                        type="text"
+                        value={form.footerBgColor}
+                        onChange={(e) => updateField("footerBgColor")(e.target.value)}
+                        placeholder="#f59e0b"
+                        className="w-full text-xs font-mono font-bold border border-slate-200 rounded px-2 py-1.5"
+                        disabled={!isAdmin}
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <span className="text-[11px] text-slate-500 font-medium block mb-1">Footer Text Color</span>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="color"
+                        value={form.footerTextColor || "#ffffff"}
+                        onChange={(e) => updateField("footerTextColor")(e.target.value)}
+                        className="h-8 w-10 p-0.5 rounded border border-slate-200 cursor-pointer"
+                        disabled={!isAdmin}
+                      />
+                      <input
+                        type="text"
+                        value={form.footerTextColor}
+                        onChange={(e) => updateField("footerTextColor")(e.target.value)}
+                        placeholder="#ffffff"
+                        className="w-full text-xs font-mono font-bold border border-slate-200 rounded px-2 py-1.5"
+                        disabled={!isAdmin}
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="border border-slate-200 rounded-lg p-3.5 bg-white shadow-2xs">
+                <label className="text-xs font-bold uppercase text-slate-700 block mb-2">Header Colors & Footer Alignment</label>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <span className="text-[11px] text-slate-500 font-medium block mb-1">Header Background</span>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="color"
+                        value={form.headerBgColor || "#ffffff"}
+                        onChange={(e) => updateField("headerBgColor")(e.target.value)}
+                        className="h-8 w-10 p-0.5 rounded border border-slate-200 cursor-pointer"
+                        disabled={!isAdmin}
+                      />
+                      <input
+                        type="text"
+                        value={form.headerBgColor}
+                        onChange={(e) => updateField("headerBgColor")(e.target.value)}
+                        placeholder="#ffffff"
+                        className="w-full text-xs font-mono font-bold border border-slate-200 rounded px-2 py-1.5"
+                        disabled={!isAdmin}
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <span className="text-[11px] text-slate-500 font-medium block mb-1">Footer Alignment</span>
+                    <select
+                      value={form.footerAlignment || "center"}
+                      onChange={(e) => updateField("footerAlignment")(e.target.value)}
+                      className="w-full border border-slate-200 rounded px-2.5 py-1.5 text-xs font-medium bg-white mt-0.5"
+                      disabled={!isAdmin}
+                    >
+                      <option value="center">Center</option>
+                      <option value="left">Left Aligned</option>
+                      <option value="right">Right Aligned</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
 

@@ -885,6 +885,10 @@ export async function fetchCompanySettings(token: string | null, companyId?: num
   if (comp) {
     return {
       name: comp.display_name || comp.trade_name || comp.name || "Company Workspace",
+      companyName: comp.name || "",
+      legalName: comp.legal_name || comp.name || "",
+      tradeName: comp.trade_name || comp.name || "",
+      displayName: comp.display_name || comp.trade_name || comp.name || "",
       gstin: comp.gstin || "",
       pan: comp.pan || "",
       state: comp.state || "",
@@ -905,10 +909,20 @@ export async function fetchCompanySettings(token: string | null, companyId?: num
       defaultInvoicePrefix: comp.invoice_prefix || "INV",
       defaultDcPrefix: comp.dc_prefix || "DC",
       logoPath: comp.logo_path || "",
-      signatureStampPath: comp.signature_stamp_path || "",
+      signaturePath: comp.signature_path || comp.signature_stamp_path || "",
+      sealPath: comp.seal_path || comp.signature_stamp_path || "",
+      signatureStampPath: comp.signature_stamp_path || comp.signature_path || "",
+      footerBgColor: comp.footer_bg_color || "#f59e0b",
+      footerTextColor: comp.footer_text_color || "#ffffff",
+      headerBgColor: comp.header_bg_color || "#ffffff",
+      headerTextColor: comp.header_text_color || "#1e293b",
+      footerAlignment: comp.footer_alignment || "center",
+      brandingOptions: comp.branding_options || {},
       terms: comp.terms_and_conditions || "",
       documentHeader: comp.doc_header_text || "",
       documentFooter: comp.doc_footer_text || "",
+      docHeaderText: comp.doc_header_text || "",
+      docFooterText: comp.doc_footer_text || "",
       companyId: comp.id,
     };
   }
@@ -947,6 +961,104 @@ export async function fetchCompanySettings(token: string | null, companyId?: num
     }
   }
   return out;
+}
+
+export async function saveCompanySettings(
+  token: string | null,
+  companyId: number,
+  data: Record<string, any>
+) {
+  if (isBoltMode) {
+    let savedSuccessfully = false;
+    let savedResult: any = null;
+
+    // 1. Try atomic service-role edge function save
+    try {
+      const res = await edgeFetch("settings-save", token, {
+        method: "POST",
+        body: JSON.stringify({ companyId, ...data }),
+      });
+      if (res.ok) {
+        const json = await res.json().catch(() => ({}));
+        if (json.company) {
+          savedSuccessfully = true;
+          savedResult = toCamel(json.company);
+        }
+      }
+    } catch (edgeErr) {
+      console.warn("settings-save edge function save attempt:", edgeErr);
+    }
+
+    // 2. Direct Supabase update (works with authenticated RLS)
+    if (!savedSuccessfully) {
+      const updatePayload: Record<string, any> = {
+        updated_at: new Date().toISOString(),
+      };
+      if ("companyName" in data || "name" in data) updatePayload.name = data.companyName ?? data.name;
+      if ("legalName" in data) updatePayload.legal_name = data.legalName;
+      if ("tradeName" in data) updatePayload.trade_name = data.tradeName;
+      if ("displayName" in data) updatePayload.display_name = data.displayName;
+      if ("companyAddress" in data || "address" in data) updatePayload.address = data.companyAddress ?? data.address;
+      if ("companyGstin" in data || "gstin" in data) updatePayload.gstin = data.companyGstin ?? data.gstin;
+      if ("companyPan" in data || "pan" in data) updatePayload.pan = data.companyPan ?? data.pan;
+      if ("companyState" in data || "state" in data) updatePayload.state = data.companyState ?? data.state;
+      if ("companyStateCode" in data || "stateCode" in data) updatePayload.state_code = data.companyStateCode ?? data.stateCode;
+      if ("companyMobile" in data || "mobile" in data) updatePayload.mobile = data.companyMobile ?? data.mobile;
+      if ("companyEmail" in data || "email" in data) updatePayload.email = data.companyEmail ?? data.email;
+      if ("bankName" in data) updatePayload.bank_name = data.bankName;
+      if ("bankAccountNumber" in data) updatePayload.bank_account_number = data.bankAccountNumber;
+      if ("bankIfsc" in data) updatePayload.bank_ifsc = data.bankIfsc;
+      if ("bankBranch" in data) updatePayload.bank_branch = data.bankBranch;
+      if ("defaultGstPercent" in data) updatePayload.default_gst_percent = parseFloat(data.defaultGstPercent) || 18;
+      if ("defaultPacking" in data) updatePayload.default_packing_percent = parseFloat(data.defaultPacking) || 0;
+      if ("defaultImplementation" in data) updatePayload.default_implementation_percent = parseFloat(data.defaultImplementation) || 0;
+      if ("defaultLocalTransport" in data) updatePayload.default_local_transport = parseFloat(data.defaultLocalTransport) || 0;
+      if ("defaultOutstationTransportRate" in data) updatePayload.default_outstation_transport_rate = parseFloat(data.defaultOutstationTransportRate) || 0;
+      if ("defaultEstimatePrefix" in data || "estimatePrefix" in data) updatePayload.estimate_prefix = data.defaultEstimatePrefix ?? data.estimatePrefix;
+      if ("defaultInvoicePrefix" in data || "invoicePrefix" in data) updatePayload.invoice_prefix = data.defaultInvoicePrefix ?? data.invoicePrefix;
+      if ("defaultDcPrefix" in data || "dcPrefix" in data) updatePayload.dc_prefix = data.defaultDcPrefix ?? data.dcPrefix;
+      if ("companyLogoPath" in data || "logoPath" in data) updatePayload.logo_path = data.companyLogoPath ?? data.logoPath ?? null;
+      if ("signaturePath" in data) updatePayload.signature_path = data.signaturePath || null;
+      if ("sealPath" in data) updatePayload.seal_path = data.sealPath || null;
+      if ("signatureStampPath" in data) updatePayload.signature_stamp_path = data.signatureStampPath || null;
+      if (updatePayload.signature_path && !updatePayload.signature_stamp_path) {
+        updatePayload.signature_stamp_path = updatePayload.signature_path;
+      }
+      if ("terms" in data) updatePayload.terms_and_conditions = data.terms;
+      if ("docHeaderText" in data || "documentHeader" in data) updatePayload.doc_header_text = data.docHeaderText ?? data.documentHeader;
+      if ("docFooterText" in data || "documentFooter" in data) updatePayload.doc_footer_text = data.docFooterText ?? data.documentFooter;
+      if ("footerBgColor" in data) updatePayload.footer_bg_color = data.footerBgColor;
+      if ("footerTextColor" in data) updatePayload.footer_text_color = data.footerTextColor;
+      if ("headerBgColor" in data) updatePayload.header_bg_color = data.headerBgColor;
+      if ("headerTextColor" in data) updatePayload.header_text_color = data.headerTextColor;
+      if ("footerAlignment" in data) updatePayload.footer_alignment = data.footerAlignment;
+      if ("brandingOptions" in data) updatePayload.branding_options = data.brandingOptions;
+
+      const { data: updated, error } = await supabase
+        .from("companies")
+        .update(updatePayload)
+        .eq("id", companyId)
+        .select()
+        .single();
+
+      if (error) throw new Error(error.message);
+      savedResult = toCamel(updated);
+    }
+
+    return savedResult;
+  }
+
+  // Express mode:
+  const res = await apiFetch("/api/company-settings", token, {
+    method: "PUT",
+    headers: { "X-Company-Id": String(companyId) },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.message || "Failed to save company settings");
+  }
+  return res.json();
 }
 
 // ─── Multi-Company Workspaces API ─────────────────────────────────────────────
