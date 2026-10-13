@@ -94,7 +94,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ value, onChange, categories, 
       <Field label="Calculation rule">
         <select value={value.calculationType} onChange={(e) => set("calculationType", e.target.value)} className="input-compact font-bold">
           <option value="sqft">sqft: (W*H*Q / 144) * Rate</option>
-          <option value="running_inch">running inch: (H*Letters*Q) * Rate</option>
+          <option value="running_inch">running inch: (H*Q) * Rate</option>
           <option value="fixed">fixed amount: Rate</option>
           <option value="percentage">percentage of base</option>
           <option value="per_km">per km: KM * Rate</option>

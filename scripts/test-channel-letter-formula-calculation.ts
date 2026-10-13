@@ -17,75 +17,74 @@ function assert(desc: string, condition: boolean, extra?: string) {
 
 async function runTests() {
   console.log("==================================================================");
-  console.log("    CHANNEL LETTER WITH LED FORMULA CALCULATION REGRESSION TESTS   ");
+  console.log("    CHANNEL LETTER WITH LED: Height × Qty × Rate REGRESSION TESTS ");
   console.log("==================================================================");
 
   // -------------------------------------------------------------------------
-  // TEST 1: Channel Letter with LED exact formula: (H × Letters × Q) × Rate
+  // TEST 1: Required formula: Amount = Height × Qty × Rate (W optional / 0 / blank)
   // -------------------------------------------------------------------------
-  console.log("\n>>> [TEST 1] CHANNEL LETTER WITH LED FORMULA: (H × Letters × Q) × Rate");
+  console.log("\n>>> [TEST 1] REQUIRED FORMULA: Amount = Height × Qty × Rate");
 
-  // Case A: 1 set of 12 letters, H = 4 inches, Rate = 300, GST = 18%
-  // Formula: (4 × 12 × 1) × 300 = 14,400.00
-  // CGST 9% = 1,296.00, SGST 9% = 1,296.00, Total = 16,992.00
+  // Case 1A: W = blank (0 / NaN), H = 4, Qty = 12, Rate = 300 -> Amount = 14400.00
   {
-    const res = calculateRowValues("running_inch", 12, 4, 1, 300, 18, "CGST+SGST", "inch");
-    assert("calculateRowValues: W=12, H=4, Q=1, Rate=300 -> Amount = 14400.00", res.amount === "14400.00", `Got ${res.amount}`);
-    assert("calculateRowValues: CGST is 1296.00", res.cgstAmount === "1296.00", `Got ${res.cgstAmount}`);
-    assert("calculateRowValues: SGST is 1296.00", res.sgstAmount === "1296.00", `Got ${res.sgstAmount}`);
-    assert("calculateRowValues: Total is 16992.00", res.totalAmount === "16992.00", `Got ${res.totalAmount}`);
-    assert("calculateRowValues: validationError is undefined", res.validationError === undefined);
+    const resBlankW = calculateRowValues("running_inch", Number(""), 4, 12, 300, 18, "CGST+SGST", "inch");
+    assert("calculateRowValues: W=blank, H=4, Qty=12, Rate=300 -> Amount = 14400.00", resBlankW.amount === "14400.00", `Got ${resBlankW.amount}`);
+    assert("calculateRowValues: CGST is 1296.00", resBlankW.cgstAmount === "1296.00", `Got ${resBlankW.cgstAmount}`);
+    assert("calculateRowValues: SGST is 1296.00", resBlankW.sgstAmount === "1296.00", `Got ${resBlankW.sgstAmount}`);
+    assert("calculateRowValues: Total is 16992.00", resBlankW.totalAmount === "16992.00", `Got ${resBlankW.totalAmount}`);
+    assert("calculateRowValues: validationError is undefined", resBlankW.validationError === undefined);
+
+    const resEstBlankW = calculateEstimateRowValues("running_inch", Number(""), 4, 12, 300, 18, "CGST+SGST", "inch");
+    assert("calculateEstimateRowValues: W=blank, H=4, Qty=12, Rate=300 -> Amount = 14400.00", resEstBlankW.amount === "14400.00", `Got ${resEstBlankW.amount}`);
+    assert("calculateEstimateRowValues: Total is 16992.00", resEstBlankW.totalAmount === "16992.00", `Got ${resEstBlankW.totalAmount}`);
+    assert("calculateEstimateRowValues: validationError is undefined", resEstBlankW.validationError === undefined);
   }
 
+  // Case 1B: W = 0, H = 4, Qty = 12, Rate = 300 -> Amount = 14400.00
   {
-    const resEst = calculateEstimateRowValues("running_inch", 12, 4, 1, 300, 18, "CGST+SGST", "inch");
-    assert("calculateEstimateRowValues: W=12, H=4, Q=1, Rate=300 -> Amount = 14400.00", resEst.amount === "14400.00", `Got ${resEst.amount}`);
-    assert("calculateEstimateRowValues: Total is 16992.00", resEst.totalAmount === "16992.00", `Got ${resEst.totalAmount}`);
-    assert("calculateEstimateRowValues: validationError is undefined", resEst.validationError === undefined);
+    const resZeroW = calculateRowValues("running_inch", 0, 4, 12, 300, 18, "CGST+SGST", "inch");
+    assert("calculateRowValues: W=0, H=4, Qty=12, Rate=300 -> Amount = 14400.00", resZeroW.amount === "14400.00", `Got ${resZeroW.amount}`);
+    assert("calculateRowValues: validationError is undefined", resZeroW.validationError === undefined);
+
+    const resEstZeroW = calculateEstimateRowValues("running_inch", 0, 4, 12, 300, 18, "CGST+SGST", "inch");
+    assert("calculateEstimateRowValues: W=0, H=4, Qty=12, Rate=300 -> Amount = 14400.00", resEstZeroW.amount === "14400.00", `Got ${resEstZeroW.amount}`);
+    assert("calculateEstimateRowValues: validationError is undefined", resEstZeroW.validationError === undefined);
   }
 
-  // Case B: unit = "running_inch" also works identically
+  // Case 1C: Unit = "running_inch" also works identically
   {
-    const resUnit = calculateRowValues("running_inch", 8, 4, 1, 300, 18, "CGST+SGST", "running_inch");
-    assert("running_inch with unit='running_inch': W=8, H=4, Q=1, Rate=300 -> Amount = 9600.00", resUnit.amount === "9600.00", `Got ${resUnit.amount}`);
-    assert("running_inch with unit='running_inch': Total is 11328.00", resUnit.totalAmount === "11328.00", `Got ${resUnit.totalAmount}`);
-  }
-
-  // Case C: Multiplier quantity (Q = 2 sets of 12 letters)
-  // (4 × 12 × 2) × 300 = 28,800.00
-  {
-    const resMulti = calculateEstimateRowValues("running_inch", 12, 4, 2, 300, 18, "CGST+SGST", "inch");
-    assert("Multi-qty running inch: W=12, H=4, Q=2, Rate=300 -> Amount = 28800.00", resMulti.amount === "28800.00", `Got ${resMulti.amount}`);
-  }
-
-  // -------------------------------------------------------------------------
-  // TEST 2: Missing formula input validation (No silent fallback to Qty × Rate)
-  // -------------------------------------------------------------------------
-  console.log("\n>>> [TEST 2] MISSING FORMULA INPUT: NO SILENT FALLBACK TO QTY × RATE");
-
-  // Screenshot reproduction: W = 0, H = 4, Qty = 12, Rate = 300
-  // Previous bug: silently calculated Qty × Rate = 12 × 300 = 3600.00, Total = 4248.00!
-  // Correct behavior: Amount = 0.00, validationError is flagged!
-  {
-    const resMissingW = calculateRowValues("running_inch", 0, 4, 12, 300, 18, "CGST+SGST", "inch");
-    assert("W=0 does NOT fall back to Qty*Rate (3600); Amount is 0.00", resMissingW.amount === "0.00", `Got ${resMissingW.amount}`);
-    assert("W=0 Total is 0.00", resMissingW.totalAmount === "0.00", `Got ${resMissingW.totalAmount}`);
-    assert("W=0 flags clear validation message", typeof resMissingW.validationError === "string" && resMissingW.validationError.includes("Letters"), `Got ${resMissingW.validationError}`);
-
-    const resEstMissingW = calculateEstimateRowValues("running_inch", 0, 4, 12, 300, 18, "CGST+SGST", "inch");
-    assert("calculateEstimateRowValues W=0 Amount is 0.00", resEstMissingW.amount === "0.00", `Got ${resEstMissingW.amount}`);
-    assert("calculateEstimateRowValues W=0 flags validation message", Boolean(resEstMissingW.validationError));
-  }
-
-  // Missing H (Height): W = 12, H = 0, Qty = 1, Rate = 300
-  {
-    const resMissingH = calculateRowValues("running_inch", 12, 0, 1, 300, 18, "CGST+SGST", "inch");
-    assert("H=0 does NOT fall back to Qty*Rate; Amount is 0.00", resMissingH.amount === "0.00", `Got ${resMissingH.amount}`);
-    assert("H=0 flags clear validation message", Boolean(resMissingH.validationError));
+    const resUnit = calculateRowValues("running_inch", 0, 8, 2, 300, 18, "CGST+SGST", "running_inch");
+    assert("unit='running_inch': H=8, Qty=2, Rate=300 -> Amount = 4800.00", resUnit.amount === "4800.00", `Got ${resUnit.amount}`);
+    assert("unit='running_inch': Total is 5664.00", resUnit.totalAmount === "5664.00", `Got ${resUnit.totalAmount}`);
   }
 
   // -------------------------------------------------------------------------
-  // TEST 3: Existing Qty × Rate rule (piece-based products)
+  // TEST 2: Missing H (Height) validation: No silent fallback
+  // -------------------------------------------------------------------------
+  console.log("\n>>> [TEST 2] MISSING H VALIDATION: NO SILENT FALLBACK");
+
+  // H = 0, Qty = 12, Rate = 300
+  // Must NOT fall back to Qty × Rate = 12 × 300 = 3600; Amount must be 0.00 and validationError flagged
+  {
+    const resZeroH = calculateRowValues("running_inch", 0, 0, 12, 300, 18, "CGST+SGST", "inch");
+    assert("H=0 does NOT fall back to Qty*Rate (3600); Amount is 0.00", resZeroH.amount === "0.00", `Got ${resZeroH.amount}`);
+    assert("H=0 Total is 0.00", resZeroH.totalAmount === "0.00", `Got ${resZeroH.totalAmount}`);
+    assert("H=0 flags clear validation message containing Height", typeof resZeroH.validationError === "string" && resZeroH.validationError.includes("Height"), `Got ${resZeroH.validationError}`);
+
+    const resEstZeroH = calculateEstimateRowValues("running_inch", 0, 0, 12, 300, 18, "CGST+SGST", "inch");
+    assert("calculateEstimateRowValues H=0 Amount is 0.00", resEstZeroH.amount === "0.00", `Got ${resEstZeroH.amount}`);
+    assert("calculateEstimateRowValues H=0 flags validation message", Boolean(resEstZeroH.validationError));
+  }
+
+  // H = blank (NaN), Qty = 12, Rate = 300
+  {
+    const resBlankH = calculateRowValues("running_inch", 0, Number(""), 12, 300, 18, "CGST+SGST", "inch");
+    assert("H=blank does NOT fall back to Qty*Rate; Amount is 0.00", resBlankH.amount === "0.00", `Got ${resBlankH.amount}`);
+    assert("H=blank flags clear validation message", Boolean(resBlankH.validationError));
+  }
+
+  // -------------------------------------------------------------------------
+  // TEST 3: Existing Qty × Rate rules (piece-based products) unchanged
   // -------------------------------------------------------------------------
   console.log("\n>>> [TEST 3] EXISTING QTY × RATE RULES UNCHANGED");
 
@@ -115,7 +114,7 @@ async function runTests() {
   }
 
   // -------------------------------------------------------------------------
-  // TEST 4: Other calculation rules: sqft, feet, percentage
+  // TEST 4: Other calculation rules: sqft, feet, percentage unchanged
   // -------------------------------------------------------------------------
   console.log("\n>>> [TEST 4] OTHER CALCULATION RULES UNCHANGED");
 
@@ -146,10 +145,10 @@ async function runTests() {
   const affected = await pool.query(
     "SELECT id, estimate_id, sl, item_name, product_id, width, height, quantity, unit, calculation_type, rate, total_price, total_amount FROM estimate_items WHERE calculation_type = 'running_inch' AND width = 0"
   );
-  assert("Database audit correctly identifies affected zero-width running inch rows", affected.rows.length >= 1);
+  assert("Database audit correctly identifies zero-width running inch rows", affected.rows.length >= 1);
   if (affected.rows.length > 0) {
     const row = affected.rows[0];
-    console.log(`    -> Affected record: Estimate #${row.estimate_id}, Row #${row.sl} ("${row.item_name}"), saved total_price: ₹${row.total_price}`);
+    console.log(`    -> Historical record: Estimate #${row.estimate_id}, Row #${row.sl} ("${row.item_name}"), saved total_price: ₹${row.total_price}`);
   }
 
   await pool.end();

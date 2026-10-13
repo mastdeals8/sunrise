@@ -14,8 +14,10 @@ export const calculateEstimateRowValues = (
   // Smart amount calculation (auto-detect billing mode):
   //   - percentage   → caller-handled rate (service products)
   //   - running_inch (calcType === 'running_inch' or unit === 'running_inch' / 'r_inch')
-  //       Formula: (H × Letters × Q) × Rate = Width(Letters) × Height(H) × Qty × Rate
-  //       If width <= 0 or height <= 0: amount is 0 and validationError is flagged
+  //       Formula: Height × Qty × Rate
+  //       H = letter height in inches, Qty = number of letters/units, Rate = price per running inch.
+  //       W is optional (can remain blank or 0) and does not affect the calculation.
+  //       If height <= 0: amount is 0 and validationError is flagged
   //   - feet / ft    → W × H × Q × Rate (dimensions already in feet)
   //   - piece / job  → Q × Rate (nos, job, pcs, or zero dimensions)
   //   - inch / sqft  → ((W × H × Q) / 144) × Rate (convert inch dimensions to sqft)
@@ -28,13 +30,14 @@ export const calculateEstimateRowValues = (
     const isPiece = !isRunningInch && (normUnit === "nos" || normUnit === "job" || normUnit === "pcs" || normUnit === "unit" || (width === 0 && height === 0));
 
     if (isRunningInch) {
-      if (width <= 0 || height <= 0) {
+      if (height <= 0) {
         amount = 0;
-        validationError = "Running inch requires W (Letters) > 0 and H (Height) > 0";
+        validationError = "Running inch requires H (Letter Height) > 0";
       } else {
-        // Formula: (H × Letters × Q) × Rate
-        // where height = H, width = Letters, qty = Q
-        amount = width * height * qty * rate;
+        // Formula: Height × Qty × Rate
+        // H = letter height in inches, Qty = number of letters/units, Rate = price per running inch.
+        // W is optional (can remain blank or 0) and does not affect the calculation.
+        amount = height * qty * rate;
       }
     } else if (isPiece) {
       amount = qty * rate;

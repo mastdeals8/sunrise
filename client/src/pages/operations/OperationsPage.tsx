@@ -1859,11 +1859,11 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
       }
 
       const invalidRunningInch = dedupedItems.find(
-        row => !isServiceLineType(row.lineType) && (row.calculationType === "running_inch" || String(row.unit || "").toLowerCase().trim() === "running_inch") && (Number(row.width || 0) <= 0 || Number(row.height || 0) <= 0)
+        row => !isServiceLineType(row.lineType) && (row.calculationType === "running_inch" || String(row.unit || "").toLowerCase().trim() === "running_inch") && (Number(row.height || 0) <= 0 || Number(row.quantity || 0) <= 0)
       );
       if (invalidRunningInch) {
-        const missing = Number(invalidRunningInch.width || 0) <= 0 ? "Letters (column W / Letters)" : "H (Height)";
-        alert(`Row ${invalidRunningInch.sl} (${invalidRunningInch.itemName || "Item"}): Running inch formula (H × Letters × Q) requires ${missing} to be greater than 0.`);
+        const missing = Number(invalidRunningInch.height || 0) <= 0 ? "H (Letter Height)" : "Qty";
+        alert(`Row ${invalidRunningInch.sl} (${invalidRunningInch.itemName || "Item"}): Running inch formula (Height × Qty × Rate) requires ${missing} to be greater than 0.`);
         isSavingEstimateRef.current = false;
         setIsSaving(false);
         return;
@@ -1913,7 +1913,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
             const isRunningInch = item.calculationType === "running_inch" || normUnit === "running_inch" || normUnit === "r_inch";
             const isPiece = !isRunningInch && (normUnit === "nos" || normUnit === "job" || normUnit === "pcs" || normUnit === "unit" || (w === 0 && h === 0));
 
-            if (isRunningInch) return (w > 0 && h > 0) ? w * h * q : 0;
+            if (isRunningInch) return (h > 0 && q > 0) ? h * q : 0;
             if (isPiece) return q;
             if (isFeet) return w * h * q;
             const area = (w * h * q) / 144;

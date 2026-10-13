@@ -5,7 +5,7 @@
 //
 // Behavior contract:
 // - percentage   : amount = rate (caller handles base-amount multiplication)
-// - running_inch : width(letterHeight) * height(letters) * qty * rate
+// - running_inch : height(letterHeight) * qty * rate (W is optional)
 // - everything else (sqft / fixed / manual / nos / job / per_km):
 //     if (W × H × Q) / 144 > 0 → amount = T.Sqft × rate (area-based)
 //     else                       → amount = qty * rate    (piece-based)
@@ -48,13 +48,14 @@ export const calculateRowValues = (
     const isPiece = !isRunningInch && (normUnit === "nos" || normUnit === "job" || normUnit === "pcs" || normUnit === "unit" || (width === 0 && height === 0));
 
     if (isRunningInch) {
-      if (width <= 0 || height <= 0) {
+      if (height <= 0) {
         amount = 0;
-        validationError = "Running inch requires W (Letters) > 0 and H (Height) > 0";
+        validationError = "Running inch requires H (Letter Height) > 0";
       } else {
-        // Formula: (H × Letters × Q) × Rate
-        // where height = H, width = Letters, qty = Q
-        amount = width * height * qty * rate;
+        // Formula: Height × Qty × Rate
+        // H = letter height in inches, Qty = number of letters/units, Rate = price per running inch.
+        // W is optional (can remain blank or 0) and does not affect the calculation.
+        amount = height * qty * rate;
       }
     } else if (isPiece) {
       amount = qty * rate;

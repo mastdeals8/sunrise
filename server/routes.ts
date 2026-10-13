@@ -3598,7 +3598,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const headR = printableRows.length;
       printableRows.push([
         "SL", "ELEMENT", "HSN", "Standard / Non", "PRODUCT DETAILS",
-        "W / Letters", "H", "Qty", "T.Sqft", "Rate", "Amount",
+        "W", "H", "Qty", "T.Sqft", "Rate", "Amount",
         "GST %", "GST Amount", "Total",
       ]);
       styleRange(headR, 0, LAST_COL_X, S_HEADER);

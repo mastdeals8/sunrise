@@ -778,7 +778,7 @@ const BASE_ESTIMATE_COLUMNS: EstimateGridColumn[] = [
   { id: "materialCode", label: "Material Code", width: 118, minWidth: 92, optional: "materialCode" },
   { id: "hsn", label: "HSN", width: 74, minWidth: 60 },
   { id: "standard", label: "Standard", width: 88, minWidth: 72, optional: "standard" },
-  { id: "width", label: "W / Letters", width: 88, minWidth: 65 },
+  { id: "width", label: "W", width: 62, minWidth: 50 },
   { id: "height", label: "H", width: 62, minWidth: 50 },
   { id: "quantity", label: "Qty", width: 64, minWidth: 54 },
   { id: "sqft", label: "T.Sqft", width: 76, minWidth: 62 },
@@ -2532,7 +2532,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                   const q = Number(row.quantity) || 0;
                   const isRunningInch = row.calculationType === "running_inch" || String(row.unit || "").toLowerCase().trim() === "running_inch";
                   const sqft = isRunningInch
-                    ? (w > 0 && h > 0 ? w * h * q : 0)
+                    ? (h > 0 && q > 0 ? h * q : 0)
                     : (w * h * q) / 144;
                   acc.qty += q;
                   acc.sqft += sqft;
@@ -3065,7 +3065,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                     const field = column.id;
                     const editing = isEditingCell(rowIndex, column.id);
                     const isRunningInch = item.calculationType === "running_inch" || String(item.unit || "").toLowerCase().trim() === "running_inch";
-                    const isMissing = isRunningInch && Number(item[field] || 0) <= 0;
+                    const isMissing = isRunningInch && field === "height" && Number(item.height || 0) <= 0;
                     return (
                       <td
                         key={column.id}
@@ -3077,8 +3077,8 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                         title={
                           isRunningInch
                             ? field === "width"
-                              ? "Letters / Running length (Formula: H × Letters × Q × Rate)"
-                              : "Letter Height in inches (Formula: H × Letters × Q × Rate)"
+                              ? "Optional (W not required for running inch)"
+                              : "Letter Height in inches (Formula: Height × Qty × Rate)"
                             : undefined
                         }
                       >
@@ -3086,12 +3086,12 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                           cellKey={getCellKey(rowIndex, column.id)}
                           value={String(item[field] ?? "")}
                           readOnly={!editing}
-                          placeholder={isRunningInch ? (field === "width" ? "Letters" : "H") : undefined}
+                          placeholder={isRunningInch ? (field === "height" ? "H" : undefined) : undefined}
                           title={
                             isRunningInch
                               ? field === "width"
-                                ? "Letters / Running length (Formula: H × Letters × Q × Rate)"
-                                : "Letter Height in inches (Formula: H × Letters × Q × Rate)"
+                                ? "Optional (W not required for running inch)"
+                                : "Letter Height in inches (Formula: Height × Qty × Rate)"
                               : undefined
                           }
                           onFocus={() => {
@@ -3110,19 +3110,19 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                   if (column.id === "rate") return renderTextInput(item, rowIndex, column, "rate", item.rate || "", { align: "right", inputMode: "decimal", fontWeight: service ? 700 : undefined });
                   if (column.id === "amount") {
                     const isRunningInch = item.calculationType === "running_inch" || String(item.unit || "").toLowerCase().trim() === "running_inch";
-                    const isMissingFormulaInput = isRunningInch && (Number(item.width) <= 0 || Number(item.height) <= 0);
+                    const isMissingFormulaInput = isRunningInch && Number(item.height || 0) <= 0;
                     if (isMissingFormulaInput) {
                       return (
                         <td
                           key={column.id}
                           className={cellClassName(rowIndex, column, "right")}
                           style={{ ...cellStyle(column), backgroundColor: "#fef2f2" }}
-                          title="Running inch formula (H × Letters × Q) requires Letters > 0 and H > 0"
+                          title="Running inch formula (Height × Qty × Rate) requires Height (H) > 0"
                         >
                           <span style={{ color: "#dc2626", fontWeight: 700, fontSize: 11, display: "inline-flex", alignItems: "center", gap: 3 }}>
                             0.00
                             <span style={{ fontSize: 9, background: "#fee2e2", border: "1px solid #f87171", borderRadius: 3, padding: "0 3px", color: "#b91c1c" }}>
-                              {Number(item.width) <= 0 ? "Letters missing" : "H missing"}
+                              H missing
                             </span>
                           </span>
                         </td>
@@ -3451,14 +3451,14 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                           const h = Number(r.height) || 0;
                           const q = Number(r.quantity) || 0;
                           const isRunningInch = r.calculationType === "running_inch" || String(r.unit || "").toLowerCase().trim() === "running_inch";
-                          const sqft = isRunningInch ? (w > 0 && h > 0 ? w * h * q : 0) : (w * h * q) / 144;
+                          const sqft = isRunningInch ? (h > 0 && q > 0 ? h * q : 0) : (w * h * q) / 144;
                           return s + sqft;
                         }, 0).toFixed(2)}</b></span>
                         <span>Material Value <b>{formatCurrency(grandMaterial)}</b></span>
                         <span>Estimate Total <b>{formatCurrency(grandTotal)}</b></span>
                       </div>
 
-                      {estItems.some((r: any) => (r.calculationType === "running_inch" || String(r.unit || "").toLowerCase().trim() === "running_inch") && (Number(r.width || 0) <= 0 || Number(r.height || 0) <= 0)) && (
+                      {estItems.some((r: any) => (r.calculationType === "running_inch" || String(r.unit || "").toLowerCase().trim() === "running_inch") && Number(r.height || 0) <= 0) && (
                         <div style={{
                           background: "#fef2f2",
                           border: "1px solid #fca5a5",
@@ -3474,7 +3474,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                         }}>
                           <span style={{ fontWeight: 700, fontSize: 13 }}>⚠️ Formula Input Missing:</span>
                           <span>
-                            Channel Letter / Running inch row(s) require both <strong>Letters (column W / Letters) &gt; 0</strong> and <strong>H (Height) &gt; 0</strong> to calculate amount via <code>(H × Letters × Q) × Rate</code>. Please enter the number of letters in column <strong>W / Letters</strong>.
+                            Channel Letter / Running inch row(s) require <strong>H (Letter Height) &gt; 0</strong> to calculate amount via <code>Height × Qty × Rate</code>.
                           </span>
                         </div>
                       )}
@@ -3878,7 +3878,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                                 const isPiece = !isRunningInch && (normUnit === "nos" || normUnit === "job" || normUnit === "pcs" || normUnit === "unit" || (w === 0 && h === 0));
 
                                 const tsqft = isRunningInch
-                                  ? (w > 0 && h > 0 ? w * h * q : 0)
+                                  ? (h > 0 && q > 0 ? h * q : 0)
                                   : isPiece
                                     ? 0
                                     : isFeet
