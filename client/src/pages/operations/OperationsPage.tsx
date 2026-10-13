@@ -1862,7 +1862,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
         row => !isServiceLineType(row.lineType) && (row.calculationType === "running_inch" || String(row.unit || "").toLowerCase().trim() === "running_inch") && (Number(row.width || 0) <= 0 || Number(row.height || 0) <= 0)
       );
       if (invalidRunningInch) {
-        const missing = Number(invalidRunningInch.width || 0) <= 0 ? "W (Letters)" : "H (Height)";
+        const missing = Number(invalidRunningInch.width || 0) <= 0 ? "Letters (column W / Letters)" : "H (Height)";
         alert(`Row ${invalidRunningInch.sl} (${invalidRunningInch.itemName || "Item"}): Running inch formula (H × Letters × Q) requires ${missing} to be greater than 0.`);
         isSavingEstimateRef.current = false;
         setIsSaving(false);

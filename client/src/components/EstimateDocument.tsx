@@ -584,7 +584,8 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
         </td>
         <td style={{ ...headCell, textAlign: "left", paddingLeft: "6px" }}>Product Details</td>
         <td style={headCell}>
-          <div style={{ whiteSpace: "nowrap" }}>(W)</div>
+          <div style={{ whiteSpace: "nowrap" }}>W /</div>
+          <div style={{ whiteSpace: "nowrap" }}>Letters</div>
         </td>
         <td style={headCell}>
           <div style={{ whiteSpace: "nowrap" }}>(H)</div>
