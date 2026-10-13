@@ -23,6 +23,7 @@ export interface RowCalcResult {
   igstPercent: string;
   igstAmount: string;
   totalAmount: string;
+  validationError?: string;
 }
 
 export const calculateRowValues = (
@@ -36,19 +37,27 @@ export const calculateRowValues = (
   unit?: string,
 ): RowCalcResult => {
   let amount = 0;
+  let validationError: string | undefined = undefined;
 
   if (calcType === "percentage") {
     amount = rate; // Will be computed relative to subtotal later or entered manually
   } else {
     const normUnit = String(unit || "").toLowerCase().trim();
     const isFeet = normUnit === "feet" || normUnit === "ft";
-    const isPiece = normUnit === "nos" || normUnit === "job" || normUnit === "pcs" || normUnit === "unit" || (width === 0 && height === 0);
-    const isRunningInch = normUnit === "running_inch" || (calcType === "running_inch" && normUnit !== "inch" && normUnit !== "sqft");
+    const isRunningInch = calcType === "running_inch" || normUnit === "running_inch" || normUnit === "r_inch";
+    const isPiece = !isRunningInch && (normUnit === "nos" || normUnit === "job" || normUnit === "pcs" || normUnit === "unit" || (width === 0 && height === 0));
 
-    if (isPiece) {
+    if (isRunningInch) {
+      if (width <= 0 || height <= 0) {
+        amount = 0;
+        validationError = "Running inch requires W (Letters) > 0 and H (Height) > 0";
+      } else {
+        // Formula: (H × Letters × Q) × Rate
+        // where height = H, width = Letters, qty = Q
+        amount = width * height * qty * rate;
+      }
+    } else if (isPiece) {
       amount = qty * rate;
-    } else if (isRunningInch) {
-      amount = width * height * qty * rate;
     } else if (isFeet) {
       const sqft = width * height * qty;
       amount = sqft * rate;
@@ -84,5 +93,6 @@ export const calculateRowValues = (
     igstPercent: igstPercent.toString(),
     igstAmount: igstAmount.toFixed(2),
     totalAmount: totalAmount.toFixed(2),
+    validationError,
   };
 };

@@ -548,18 +548,20 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     const productRowsCalculated = rows.map(row => {
       if (isServiceLineType(row.lineType)) return { ...row };
       const selectedProd = products.find(p => p.id === Number(row.productId));
+      const effectiveCalcType = selectedProd?.calculationType || row.calculationType;
+      const effectiveUnit = selectedProd?.unit || row.unit;
       const gstPct = selectedProd ? selectedProd.gstPercent : defaultGstPct;
       const calc = calculateEstimateRowValues(
-        row.calculationType,
+        effectiveCalcType,
         Number(row.width) || 0,
         Number(row.height) || 0,
         Number(row.quantity) || 0,
         Number(row.rate) || 0,
         gstPct,
         gstTypeValue,
-        row.unit,
+        effectiveUnit,
       );
-      return { ...row, ...calc };
+      return { ...row, calculationType: effectiveCalcType, unit: effectiveUnit, ...calc };
     });
 
     const materialBaseByStore = productRowsCalculated.reduce<Record<string, number>>((acc, row) => {
@@ -1855,6 +1857,18 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
       if (dedupedItems.length !== estItems.length) {
         console.warn(`[save] Removed ${estItems.length - dedupedItems.length} duplicate special charge row(s) before saving`);
       }
+
+      const invalidRunningInch = dedupedItems.find(
+        row => !isServiceLineType(row.lineType) && (row.calculationType === "running_inch" || String(row.unit || "").toLowerCase().trim() === "running_inch") && (Number(row.width || 0) <= 0 || Number(row.height || 0) <= 0)
+      );
+      if (invalidRunningInch) {
+        const missing = Number(invalidRunningInch.width || 0) <= 0 ? "W (Letters)" : "H (Height)";
+        alert(`Row ${invalidRunningInch.sl} (${invalidRunningInch.itemName || "Item"}): Running inch formula (H × Letters × Q) requires ${missing} to be greater than 0.`);
+        isSavingEstimateRef.current = false;
+        setIsSaving(false);
+        return;
+      }
+
       const normalizedItems = recalculateEstimateRows(dedupedItems);
       const formattedItems = normalizedItems.map(item => {
         const selectedProduct = item.productId
@@ -1896,11 +1910,12 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
             const q = Number(item.quantity) || 1;
             const normUnit = String(item.unit || "").toLowerCase().trim();
             const isFeet = normUnit === "feet" || normUnit === "ft";
-            const isPiece = normUnit === "nos" || normUnit === "job" || normUnit === "pcs" || normUnit === "unit" || (w === 0 && h === 0);
-            const isRunningInch = normUnit === "running_inch" || (item.calculationType === "running_inch" && normUnit !== "inch" && normUnit !== "sqft");
+            const isRunningInch = item.calculationType === "running_inch" || normUnit === "running_inch" || normUnit === "r_inch";
+            const isPiece = !isRunningInch && (normUnit === "nos" || normUnit === "job" || normUnit === "pcs" || normUnit === "unit" || (w === 0 && h === 0));
 
+            if (isRunningInch) return (w > 0 && h > 0) ? w * h * q : 0;
             if (isPiece) return q;
-            if (isRunningInch || isFeet) return w * h * q;
+            if (isFeet) return w * h * q;
             const area = (w * h * q) / 144;
             return area > 0 ? area : q;
           })(),

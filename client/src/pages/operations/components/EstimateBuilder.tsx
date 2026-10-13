@@ -639,10 +639,12 @@ const SmartSizeInput: React.FC<{
   onChange: (value: string) => void;
   readOnly?: boolean;
   cellKey?: string;
+  placeholder?: string;
+  title?: string;
   onFocus?: () => void;
   onDoubleClick?: () => void;
   onKeyDown?: (event: React.KeyboardEvent<HTMLInputElement>) => void;
-}> = ({ value, onChange, readOnly = false, cellKey, onFocus, onDoubleClick, onKeyDown }) => {
+}> = ({ value, onChange, readOnly = false, cellKey, placeholder, title, onFocus, onDoubleClick, onKeyDown }) => {
   const [open, setOpen] = React.useState(false);
   const suggestion = nearestStandardSize(value);
   const inputRef = React.useRef<HTMLInputElement | null>(null);
@@ -684,6 +686,8 @@ const SmartSizeInput: React.FC<{
         data-cell-key={cellKey}
         value={value}
         readOnly={readOnly}
+        placeholder={placeholder}
+        title={title}
         onFocus={() => {
           onFocus?.();
           if (!readOnly) setOpen(true);
@@ -2526,8 +2530,9 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                   const w = Number(row.width) || 0;
                   const h = Number(row.height) || 0;
                   const q = Number(row.quantity) || 0;
-                  const sqft = row.calculationType === "running_inch"
-                    ? w * h * q
+                  const isRunningInch = row.calculationType === "running_inch" || String(row.unit || "").toLowerCase().trim() === "running_inch";
+                  const sqft = isRunningInch
+                    ? (w > 0 && h > 0 ? w * h * q : 0)
                     : (w * h * q) / 144;
                   acc.qty += q;
                   acc.sqft += sqft;
@@ -3059,12 +3064,36 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                   if (column.id === "width" || column.id === "height") {
                     const field = column.id;
                     const editing = isEditingCell(rowIndex, column.id);
+                    const isRunningInch = item.calculationType === "running_inch" || String(item.unit || "").toLowerCase().trim() === "running_inch";
+                    const isMissing = isRunningInch && Number(item[field] || 0) <= 0;
                     return (
-                      <td key={column.id} className={cellClassName(rowIndex, column, "right")} style={cellStyle(column)}>
+                      <td
+                        key={column.id}
+                        className={`${cellClassName(rowIndex, column, "right")} ${isMissing ? "bg-amber-50" : ""}`}
+                        style={{
+                          ...cellStyle(column),
+                          ...(isMissing ? { borderColor: "#f59e0b", backgroundColor: "#fffbeb" } : {}),
+                        }}
+                        title={
+                          isRunningInch
+                            ? field === "width"
+                              ? "Letters / Running length (Formula: H × Letters × Q × Rate)"
+                              : "Letter Height in inches (Formula: H × Letters × Q × Rate)"
+                            : undefined
+                        }
+                      >
                         <SmartSizeInput
                           cellKey={getCellKey(rowIndex, column.id)}
                           value={String(item[field] ?? "")}
                           readOnly={!editing}
+                          placeholder={isRunningInch ? (field === "width" ? "Letters" : "H") : undefined}
+                          title={
+                            isRunningInch
+                              ? field === "width"
+                                ? "Letters / Running length (Formula: H × Letters × Q × Rate)"
+                                : "Letter Height in inches (Formula: H × Letters × Q × Rate)"
+                              : undefined
+                          }
                           onFocus={() => {
                             selectSingleRow(rowIndex);
                             setActiveCell({ rowIndex, columnId: column.id });
@@ -3079,7 +3108,28 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                   if (column.id === "quantity") return renderTextInput(item, rowIndex, column, "quantity", item.quantity || "", { align: "right", inputMode: "numeric" });
                   if (column.id === "sqft") return renderReadOnlyCell(rowIndex, column, (service ? (Number(item.quantity) || 0) : tsqft).toFixed(2), "right");
                   if (column.id === "rate") return renderTextInput(item, rowIndex, column, "rate", item.rate || "", { align: "right", inputMode: "decimal", fontWeight: service ? 700 : undefined });
-                  if (column.id === "amount") return renderReadOnlyCell(rowIndex, column, (Number(item.amount) || 0).toFixed(2), "right");
+                  if (column.id === "amount") {
+                    const isRunningInch = item.calculationType === "running_inch" || String(item.unit || "").toLowerCase().trim() === "running_inch";
+                    const isMissingFormulaInput = isRunningInch && (Number(item.width) <= 0 || Number(item.height) <= 0);
+                    if (isMissingFormulaInput) {
+                      return (
+                        <td
+                          key={column.id}
+                          className={cellClassName(rowIndex, column, "right")}
+                          style={{ ...cellStyle(column), backgroundColor: "#fef2f2" }}
+                          title="Running inch formula (H × Letters × Q) requires W (Letters) > 0 and H > 0"
+                        >
+                          <span style={{ color: "#dc2626", fontWeight: 700, fontSize: 11, display: "inline-flex", alignItems: "center", gap: 3 }}>
+                            0.00
+                            <span style={{ fontSize: 9, background: "#fee2e2", border: "1px solid #f87171", borderRadius: 3, padding: "0 3px", color: "#b91c1c" }}>
+                              {Number(item.width) <= 0 ? "W missing" : "H missing"}
+                            </span>
+                          </span>
+                        </td>
+                      );
+                    }
+                    return renderReadOnlyCell(rowIndex, column, (Number(item.amount) || 0).toFixed(2), "right");
+                  }
                   if (column.id === "gstPercent") return renderReadOnlyCell(rowIndex, column, `${estGstType === "IGST" ? Number(item.igstPercent) || 0 : Number(item.sgstPercent) || 0}%`, "right");
                   if (column.id === "gstAmount") return renderReadOnlyCell(rowIndex, column, (estGstType === "IGST" ? Number(item.igstAmount) || 0 : Number(item.sgstAmount) || 0).toFixed(2), "right");
                   if (column.id === "cgstPercent") return renderReadOnlyCell(rowIndex, column, estGstType === "IGST" ? "" : `${Number(item.cgstPercent) || 0}%`, "right");
@@ -3400,12 +3450,34 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                           const w = Number(r.width) || 0;
                           const h = Number(r.height) || 0;
                           const q = Number(r.quantity) || 0;
-                          const sqft = r.calculationType === "running_inch" ? w * h * q : (w * h * q) / 144;
+                          const isRunningInch = r.calculationType === "running_inch" || String(r.unit || "").toLowerCase().trim() === "running_inch";
+                          const sqft = isRunningInch ? (w > 0 && h > 0 ? w * h * q : 0) : (w * h * q) / 144;
                           return s + sqft;
                         }, 0).toFixed(2)}</b></span>
                         <span>Material Value <b>{formatCurrency(grandMaterial)}</b></span>
                         <span>Estimate Total <b>{formatCurrency(grandTotal)}</b></span>
                       </div>
+
+                      {estItems.some((r: any) => (r.calculationType === "running_inch" || String(r.unit || "").toLowerCase().trim() === "running_inch") && (Number(r.width || 0) <= 0 || Number(r.height || 0) <= 0)) && (
+                        <div style={{
+                          background: "#fef2f2",
+                          border: "1px solid #fca5a5",
+                          borderRadius: 6,
+                          padding: "8px 12px",
+                          marginTop: 8,
+                          marginBottom: 8,
+                          color: "#991b1b",
+                          fontSize: 12,
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 8,
+                        }}>
+                          <span style={{ fontWeight: 700, fontSize: 13 }}>⚠️ Formula Input Missing:</span>
+                          <span>
+                            Channel Letter / Running inch row(s) require both <strong>W (Letters) &gt; 0</strong> and <strong>H (Height) &gt; 0</strong> to calculate amount via <code>(H × Letters × Q) × Rate</code>. Please enter the number of letters in column <strong>W</strong>.
+                          </span>
+                        </div>
+                      )}
 
                       {(storePickerOpen || (eIsAbfrl && activeStoreIds.length === 0 && storeEntryBlocked)) && (
                         <div className="eb-store-picker-panel">
@@ -3802,14 +3874,16 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                                 const q = Number(item.quantity) || 0;
                                 const normUnit = String(item.unit || "").toLowerCase().trim();
                                 const isFeet = normUnit === "feet" || normUnit === "ft";
-                                const isPiece = normUnit === "nos" || normUnit === "job" || normUnit === "pcs" || normUnit === "unit" || (w === 0 && h === 0);
-                                const isRunningInch = normUnit === "running_inch" || (item.calculationType === "running_inch" && normUnit !== "inch" && normUnit !== "sqft");
+                                const isRunningInch = item.calculationType === "running_inch" || normUnit === "running_inch" || normUnit === "r_inch";
+                                const isPiece = !isRunningInch && (normUnit === "nos" || normUnit === "job" || normUnit === "pcs" || normUnit === "unit" || (w === 0 && h === 0));
 
-                                const tsqft = isPiece
-                                  ? 0
-                                  : isRunningInch || isFeet
-                                    ? w * h * q
-                                    : (w * h * q) / 144;
+                                const tsqft = isRunningInch
+                                  ? (w > 0 && h > 0 ? w * h * q : 0)
+                                  : isPiece
+                                    ? 0
+                                    : isFeet
+                                      ? w * h * q
+                                      : (w * h * q) / 144;
                                 return (
                                   <tr
                                     key={`r-${idx}`}

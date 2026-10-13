@@ -9,10 +9,13 @@ export const calculateEstimateRowValues = (
   unit?: string,
 ) => {
   let amount = 0;
+  let validationError: string | undefined = undefined;
 
   // Smart amount calculation (auto-detect billing mode):
   //   - percentage   → caller-handled rate (service products)
-  //   - running_inch (unit === 'running_inch' or linear measure) → W × H × Q × Rate
+  //   - running_inch (calcType === 'running_inch' or unit === 'running_inch' / 'r_inch')
+  //       Formula: (H × Letters × Q) × Rate = Width(Letters) × Height(H) × Qty × Rate
+  //       If width <= 0 or height <= 0: amount is 0 and validationError is flagged
   //   - feet / ft    → W × H × Q × Rate (dimensions already in feet)
   //   - piece / job  → Q × Rate (nos, job, pcs, or zero dimensions)
   //   - inch / sqft  → ((W × H × Q) / 144) × Rate (convert inch dimensions to sqft)
@@ -21,13 +24,20 @@ export const calculateEstimateRowValues = (
   } else {
     const normUnit = String(unit || "").toLowerCase().trim();
     const isFeet = normUnit === "feet" || normUnit === "ft";
-    const isPiece = normUnit === "nos" || normUnit === "job" || normUnit === "pcs" || normUnit === "unit" || (width === 0 && height === 0);
-    const isRunningInch = normUnit === "running_inch" || (calcType === "running_inch" && normUnit !== "inch" && normUnit !== "sqft");
+    const isRunningInch = calcType === "running_inch" || normUnit === "running_inch" || normUnit === "r_inch";
+    const isPiece = !isRunningInch && (normUnit === "nos" || normUnit === "job" || normUnit === "pcs" || normUnit === "unit" || (width === 0 && height === 0));
 
-    if (isPiece) {
+    if (isRunningInch) {
+      if (width <= 0 || height <= 0) {
+        amount = 0;
+        validationError = "Running inch requires W (Letters) > 0 and H (Height) > 0";
+      } else {
+        // Formula: (H × Letters × Q) × Rate
+        // where height = H, width = Letters, qty = Q
+        amount = width * height * qty * rate;
+      }
+    } else if (isPiece) {
       amount = qty * rate;
-    } else if (isRunningInch) {
-      amount = width * height * qty * rate;
     } else if (isFeet) {
       const sqft = width * height * qty;
       amount = sqft * rate;
@@ -62,7 +72,8 @@ export const calculateEstimateRowValues = (
     sgstAmount: sgstAmount.toFixed(2),
     igstPercent: igstPercent.toString(),
     igstAmount: igstAmount.toFixed(2),
-    totalAmount: totalAmount.toFixed(2)
+    totalAmount: totalAmount.toFixed(2),
+    validationError,
   };
 };
 

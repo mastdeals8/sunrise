@@ -230,6 +230,7 @@ export interface EstimateItemInput {
   // Letter signage helper — running-inch breakdown ("27,26,26,26,28,27,27")
   // typed into the row. The total updates `width` automatically when set.
   letterSizes?: string;
+  validationError?: string;
 }
 
 export type OpTab =

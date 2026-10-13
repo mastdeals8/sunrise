@@ -82,7 +82,8 @@ const ProductForm: React.FC<ProductFormProps> = ({ value, onChange, categories, 
       <Field label="Unit (UOM)">
         <select value={value.unit} onChange={(e) => set("unit", e.target.value)} className="input-compact font-bold">
           <option value="sqft">sqft</option>
-          <option value="inch">running inch</option>
+          <option value="running_inch">running inch</option>
+          <option value="inch">running inch (inch)</option>
           <option value="nos">nos</option>
           <option value="job">job</option>
           <option value="km">km</option>
