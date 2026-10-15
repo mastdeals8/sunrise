@@ -485,13 +485,22 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
           const targetStore = stores.find(s => s.id === est.storeId);
           const sortedItems = orderedEstimateItems(items);
           const storeGrouping = (est.storeGrouping as Record<string, any>) || {};
-          const storeKeys = orderedStoreKeysFromItems(sortedItems, storeGrouping);
+          let storeKeys = orderedStoreKeysFromItems(sortedItems, storeGrouping);
+          if (storeKeys.length === 0) {
+            const distinctStoreIds = Array.from(new Set(sortedItems.map(it => it.storeId).filter(Boolean).map(String)));
+            if (distinctStoreIds.length > 1) {
+              storeKeys = distinctStoreIds;
+            }
+          }
           const subject = est.subject || est.title || "Estimate Work";
           const sectionDefs = storeKeys.length > 0
             ? storeKeys.map((sidKey, index) => {
                 const groupData = storeGrouping[sidKey] || [];
                 const itemSls = Array.isArray(groupData) ? groupData : (groupData.itemSls || []);
-                const storeItems = sortedItems.filter(it => itemSls.includes(it.sl || 0));
+                const storeItems = sortedItems.filter(it => 
+                  (itemSls.length > 0 && itemSls.includes(it.sl || 0)) ||
+                  String(it.storeId) === String(sidKey)
+                );
                 const materialItems = storeItems.filter(it => !isServiceItem(it));
                 const serviceItems = storeItems.filter(isServiceItem);
                 const store = stores.find(s => s.id === Number(sidKey));
@@ -517,52 +526,79 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
                 transportDescription: "",
               }];
 
-          return sectionDefs.flatMap(section => {
+          const allRows: any[] = [];
+          sectionDefs.forEach(section => {
             const materialBase = section.materialItems.reduce((sum, item) => sum + Number(item.totalPrice || 0), 0);
-            const rows = materialBase > 0 ? [{
-              srNo: section.srNo,
-              vendorCode: est.vendorCode || "",
-              activityName: subject,
-              storeCode: section.storeCode,
-              qty: 1,
-              beforeGst: materialBase,
-              estimateNo: est.estimateNumber,
-            }] : [];
-
-            if (section.serviceItems.length > 0) {
-              section.serviceItems.forEach(item => {
-                rows.push({
-                  srNo: section.srNo,
-                  vendorCode: est.vendorCode || "",
-                  activityName: serviceProductLabel(item, products),
-                  storeCode: section.storeCode,
-                  qty: 1,
-                  beforeGst: Number(item.totalPrice || 0),
-                  estimateNo: est.estimateNumber,
-                });
-              });
-              return rows;
-            }
-
-            const syntheticServices = [
-              { label: serviceProductLabel({ lineType: "packing", rate: section.packingPercent, calculationType: "percentage" }, products), amount: materialBase * (section.packingPercent / 100), show: section.packingPercent > 0 },
-              { label: serviceProductLabel({ lineType: "installation", rate: section.implementationPercent, calculationType: "percentage" }, products), amount: materialBase * (section.implementationPercent / 100), show: section.implementationPercent > 0 },
-              { label: serviceProductLabel({ lineType: "transport", itemName: section.transportDescription }, products), amount: section.transportAmount, show: section.transportAmount > 0 },
-            ];
-            syntheticServices.forEach(service => {
-              if (!service.show || service.amount <= 0) return;
-              rows.push({
-                srNo: section.srNo,
+            if (materialBase > 0) {
+              allRows.push({
                 vendorCode: est.vendorCode || "",
-                activityName: service.label,
+                activityName: subject,
                 storeCode: section.storeCode,
                 qty: 1,
-                beforeGst: service.amount,
-                estimateNo: est.estimateNumber,
+                beforeGst: materialBase,
+                estimateNo: est.estimateNumber || "",
+              });
+            }
+
+            const hasPacking = section.serviceItems.some(it => (it.lineType || "").toLowerCase() === "packing");
+            const hasInstallation = section.serviceItems.some(it => (it.lineType || "").toLowerCase() === "installation");
+            const hasTransport = section.serviceItems.some(it => (it.lineType || "").toLowerCase() === "transport");
+
+            section.serviceItems.forEach(item => {
+              allRows.push({
+                vendorCode: est.vendorCode || "",
+                activityName: serviceProductLabel(item, products),
+                storeCode: section.storeCode,
+                qty: Number(item.quantity) || 1,
+                beforeGst: Number(item.totalPrice || 0),
+                estimateNo: est.estimateNumber || "",
               });
             });
-            return rows;
+
+            if (!hasPacking && section.packingPercent > 0) {
+              const amt = materialBase * (section.packingPercent / 100);
+              if (amt > 0) {
+                allRows.push({
+                  vendorCode: est.vendorCode || "",
+                  activityName: serviceProductLabel({ lineType: "packing", rate: section.packingPercent, calculationType: "percentage" }, products),
+                  storeCode: section.storeCode,
+                  qty: 1,
+                  beforeGst: amt,
+                  estimateNo: est.estimateNumber || "",
+                });
+              }
+            }
+
+            if (!hasInstallation && section.implementationPercent > 0) {
+              const amt = materialBase * (section.implementationPercent / 100);
+              if (amt > 0) {
+                allRows.push({
+                  vendorCode: est.vendorCode || "",
+                  activityName: serviceProductLabel({ lineType: "installation", rate: section.implementationPercent, calculationType: "percentage" }, products),
+                  storeCode: section.storeCode,
+                  qty: 1,
+                  beforeGst: amt,
+                  estimateNo: est.estimateNumber || "",
+                });
+              }
+            }
+
+            if (!hasTransport && section.transportAmount > 0) {
+              allRows.push({
+                vendorCode: est.vendorCode || "",
+                activityName: serviceProductLabel({ lineType: "transport", itemName: section.transportDescription }, products),
+                storeCode: section.storeCode,
+                qty: 1,
+                beforeGst: section.transportAmount,
+                estimateNo: est.estimateNumber || "",
+              });
+            }
           });
+
+          return allRows.map((r, idx) => ({
+            ...r,
+            srNo: idx + 1,
+          }));
         };
 
         const summaryNumber = (n: number) =>
@@ -573,6 +609,9 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
           const rows = buildSummaryRows(selectedEstimate, selectedEstimateItems || []);
           const headers = ["Sr No", "Vendor Code", "Element / Product Details", "Store Code", "Qty", "Before GST Net Price", "Estimate No"];
           const totalBeforeGst = rows.reduce((sum, row) => sum + row.beforeGst, 0);
+          const subject = selectedEstimate.subject || selectedEstimate.title || "Estimate Work";
+          const estimateNo = selectedEstimate.estimateNumber || "";
+
           const escapeHtml = (value: any) => String(value ?? "").replace(/[&<>"']/g, ch => ({
             "&": "&amp;",
             "<": "&lt;",
@@ -580,38 +619,76 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
             "\"": "&quot;",
             "'": "&#039;",
           }[ch] || ch));
+
           const htmlRows = rows.map(row => `
             <tr>
-              <td style="border:1px solid #000;padding:6px 8px;text-align:center">${row.srNo}</td>
-              <td style="border:1px solid #000;padding:6px 8px">${escapeHtml(row.vendorCode)}</td>
-              <td style="border:1px solid #000;padding:6px 8px">${escapeHtml(row.activityName)}</td>
-              <td style="border:1px solid #000;padding:6px 8px">${escapeHtml(row.storeCode)}</td>
-              <td style="border:1px solid #000;padding:6px 8px;text-align:right">${summaryNumber(row.qty)}</td>
-              <td style="border:1px solid #000;padding:6px 8px;text-align:right">${summaryNumber(row.beforeGst)}</td>
-              <td style="border:1px solid #000;padding:6px 8px">${escapeHtml(row.estimateNo)}</td>
+              <td style="border:1px solid #000;padding:6px 10px;text-align:center;white-space:nowrap">${row.srNo}</td>
+              <td style="border:1px solid #000;padding:6px 10px;text-align:center;white-space:nowrap">${escapeHtml(row.vendorCode)}</td>
+              <td style="border:1px solid #000;padding:6px 10px;text-align:left">${escapeHtml(row.activityName)}</td>
+              <td style="border:1px solid #000;padding:6px 10px;text-align:center;white-space:nowrap">${escapeHtml(row.storeCode)}</td>
+              <td style="border:1px solid #000;padding:6px 10px;text-align:right;white-space:nowrap">${summaryNumber(row.qty)}</td>
+              <td style="border:1px solid #000;padding:6px 10px;text-align:right;white-space:nowrap">₹ ${summaryNumber(row.beforeGst)}</td>
+              <td style="border:1px solid #000;padding:6px 10px;text-align:left;white-space:nowrap">${escapeHtml(row.estimateNo)}</td>
             </tr>`).join("");
-          const html = `<table style="border-collapse:collapse;table-layout:fixed;width:100%;font-family:Arial,sans-serif;font-size:12px">
-            <thead><tr>${headers.map(h => `<th style="border:1px solid #000;padding:6px 8px;background:#f1f5f9">${escapeHtml(h)}</th>`).join("")}</tr></thead>
-            <tbody>${htmlRows}<tr><td colspan="5" style="border:1px solid #000;padding:6px 8px;text-align:right;font-weight:700">Total Before GST</td><td style="border:1px solid #000;padding:6px 8px;text-align:right;font-weight:700">₹ ${summaryNumber(totalBeforeGst)}</td><td style="border:1px solid #000;padding:6px 8px"></td></tr></tbody>
-          </table>`;
-          const tsvRows = [
+
+          const html = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;color:#1f2937">
+  <p style="margin:0 0 16px 0">Dear Sir,</p>
+  <p style="margin:0 0 16px 0">Please find the attached estimate for: ${escapeHtml(subject)} as requested.</p>
+  <p style="margin:0 0 16px 0">Kindly review and process the PO. We shall commence production once the PO is received.</p>
+  <table cellpadding="6" cellspacing="0" style="border-collapse:collapse;margin:16px 0;border:1px solid #000;font-family:Arial,Helvetica,sans-serif;font-size:12px;color:#000;width:auto;min-width:650px">
+    <thead>
+      <tr style="background:#f1f5f9">
+        <th style="border:1px solid #000;padding:6px 10px;text-align:center;font-weight:700;white-space:nowrap">Sr No</th>
+        <th style="border:1px solid #000;padding:6px 10px;text-align:center;font-weight:700;white-space:nowrap">Vendor Code</th>
+        <th style="border:1px solid #000;padding:6px 10px;text-align:left;font-weight:700">Element / Product Details</th>
+        <th style="border:1px solid #000;padding:6px 10px;text-align:center;font-weight:700;white-space:nowrap">Store Code</th>
+        <th style="border:1px solid #000;padding:6px 10px;text-align:right;font-weight:700;white-space:nowrap">Qty</th>
+        <th style="border:1px solid #000;padding:6px 10px;text-align:right;font-weight:700;white-space:nowrap">Before GST Net Price</th>
+        <th style="border:1px solid #000;padding:6px 10px;text-align:left;font-weight:700;white-space:nowrap">Estimate No</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${htmlRows}
+      <tr style="font-weight:700;background:#f8fafc">
+        <td colspan="5" style="border:1px solid #000;padding:6px 10px;text-align:right;font-weight:700">Total Before GST</td>
+        <td style="border:1px solid #000;padding:6px 10px;text-align:right;font-weight:700;white-space:nowrap">₹ ${summaryNumber(totalBeforeGst)}</td>
+        <td style="border:1px solid #000;padding:6px 10px;text-align:left;white-space:nowrap">${escapeHtml(estimateNo)}</td>
+      </tr>
+    </tbody>
+  </table>
+  <p style="margin:16px 0 0 0">Thank you,<br />Kunal Lunkad<br />Sunrise Media</p>
+</div>`;
+
+          const tsvTable = [
             headers.join("\t"),
-            ...rows.map(row => [row.srNo, row.vendorCode, row.activityName, row.storeCode, summaryNumber(row.qty), summaryNumber(row.beforeGst), row.estimateNo].join("\t")),
-            ["", "", "", "", "Total Before GST", `₹ ${summaryNumber(totalBeforeGst)}`, ""].join("\t"),
+            ...rows.map(row => [row.srNo, row.vendorCode, row.activityName, row.storeCode, summaryNumber(row.qty), `₹ ${summaryNumber(row.beforeGst)}`, row.estimateNo].join("\t")),
+            ["", "", "", "", "Total Before GST", `₹ ${summaryNumber(totalBeforeGst)}`, estimateNo].join("\t"),
           ].join("\n");
+
+          const plainText = `Dear Sir,
+
+Please find the attached estimate for: ${subject} as requested.
+
+Kindly review and process the PO. We shall commence production once the PO is received.
+
+${tsvTable}
+
+Thank you,
+Kunal Lunkad
+Sunrise Media`;
 
           try {
             if (navigator.clipboard && "ClipboardItem" in window) {
               await navigator.clipboard.write([
                 new ClipboardItem({
                   "text/html": new Blob([html], { type: "text/html" }),
-                  "text/plain": new Blob([tsvRows], { type: "text/plain" }),
+                  "text/plain": new Blob([plainText], { type: "text/plain" }),
                 }),
               ]);
             } else {
-              await navigator.clipboard.writeText(tsvRows);
+              await navigator.clipboard.writeText(plainText);
             }
-            setCopyStatus("Summary copied");
+            setCopyStatus("Email summary copied!");
             window.setTimeout(() => setCopyStatus(""), 2500);
           } catch {
             setCopyStatus("Copy failed");
