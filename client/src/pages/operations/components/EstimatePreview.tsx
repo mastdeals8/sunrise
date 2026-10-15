@@ -1,7 +1,7 @@
 import React from "react";
 import { isBoltMode } from "../../../lib/supabase";
 import { fetchExecutionStores, createInvoice, uploadToStorage, registerExecutionDocument, openExecutionDocument, submitEstimate } from "../../../lib/api";
-import { TriangleAlert as AlertTriangle, Archive, Briefcase, Camera, CircleCheck as CheckCircle2, ChevronRight, Copy, Download, CreditCard as Edit3, Eye, File, FileCheck2, FilePlus, FileSpreadsheet, FileText, FileUp, Image as ImageIcon, Paperclip, Pen, Plus, Printer, ScanLine, SlidersHorizontal, Store as StoreIcon, Upload, X } from "lucide-react";
+import { TriangleAlert as AlertTriangle, Archive, Briefcase, Camera, CircleCheck as CheckCircle2, ChevronRight, Copy, Download, CreditCard as Edit3, Eye, File, FileCheck2, FilePlus, FileSpreadsheet, FileText, FileUp, History, Image as ImageIcon, Paperclip, Pen, Plus, Printer, ScanLine, SlidersHorizontal, Store as StoreIcon, Upload, X } from "lucide-react";
 import { isAblblFormat } from "../../../../../shared/textFormat";
 import { isServiceEstimateItem, serviceProductLabel } from "../../../../../shared/serviceProductDisplay";
 import { formatCurrency } from "../utils/formatters";
@@ -10,6 +10,7 @@ import { exportEstimateToExcel } from "../utils/exportHelpers";
 import { estimateItemsToInvoiceLines } from "../utils/invoiceConversion";
 import type { Brand, Client, Estimate, EstimateItem, Product, Store } from "../types";
 import EstimateDocument from "../../../components/EstimateDocument";
+import { EstimateRevisionsModal } from "./EstimateRevisionsModal";
 
 interface EstimatePreviewProps {
   clients: Client[];
@@ -335,6 +336,7 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
 		        const [activeProjectTab, setActiveProjectTab] = React.useState<ProjectTab>(initialProjectTab);
 	        const [copyStatus, setCopyStatus] = React.useState("");
           const [showEstimateDocument, setShowEstimateDocument] = React.useState(false);
+          const [showRevisionHistory, setShowRevisionHistory] = React.useState(false);
           const [openDocSections, setOpenDocSections] = React.useState<string[]>(["PO", "Photos", "WCC", "Signed WCC", "Transport", "Extra", "Delivery Challan"]);
           const [documentStoreFilter, setDocumentStoreFilter] = React.useState("all");
           const [documentTypeFilter, setDocumentTypeFilter] = React.useState("all");
@@ -1065,6 +1067,17 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
 
               {/* Exports panel */}
               <div className={`flex gap-1 flex-wrap ${isPageWorkspace ? "w-full justify-end" : "justify-end"}`}>
+                  {selectedEstimate && (
+                    <button
+                      type="button"
+                      onClick={() => setShowRevisionHistory(true)}
+                      className="inline-flex items-center gap-1.5 py-1 px-3 bg-amber-50 border border-amber-300 text-amber-800 text-xs font-bold rounded-lg hover:bg-amber-100 transition shadow-xs cursor-pointer"
+                      title={`View Revision History & Earlier Snapshots (Current: Rev ${selectedEstimate.currentRevisionNumber ?? 0})`}
+                    >
+                      <History className="w-3.5 h-3.5 text-amber-600" />
+                      Revision History (Rev {selectedEstimate.currentRevisionNumber ?? 0})
+                    </button>
+                  )}
 	                {isProjectWorkspace && (
 	                  <button
 	                    type="button"
@@ -2310,6 +2323,25 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
             </div>
           </div>
         </div>
+      )}
+
+      {showRevisionHistory && selectedEstimate && (
+        <EstimateRevisionsModal
+          isOpen={showRevisionHistory}
+          onClose={() => setShowRevisionHistory(false)}
+          estimate={selectedEstimate}
+          token={token || ""}
+          onRestored={async (restored) => {
+            if (setSelectedEstimate) {
+              setSelectedEstimate(restored);
+            }
+          }}
+          sellerProfile={sellerProfile}
+          stores={stores}
+          clients={clients}
+          products={products}
+          brands={brands}
+        />
       )}
     </>
   );

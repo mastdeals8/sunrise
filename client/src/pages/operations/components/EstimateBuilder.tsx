@@ -2,7 +2,7 @@ import React from "react";
 import { Pager, usePagedList } from "@/components/Pager";
 import { createPortal } from "react-dom";
 import { Link } from "wouter";
-import { Archive, Building2, Check, CheckCircle2, CheckSquare, ChevronDown, ChevronRight, ClipboardPaste, Copy, CreditCard as Edit3, Download, Eye, FilePlus2, FileSpreadsheet, FileText, FileUp, Filter, FolderOpen, MoreHorizontal, MoveDown, MoveUp, Pencil, Plus, Printer, Receipt, Redo2, Search, Square, Trash, Undo2, X } from "lucide-react";
+import { Archive, Building2, Check, CheckCircle2, CheckSquare, ChevronDown, ChevronRight, ClipboardPaste, Copy, CreditCard as Edit3, Download, Eye, FilePlus2, FileSpreadsheet, FileText, FileUp, Filter, FolderOpen, History, MoreHorizontal, MoveDown, MoveUp, Pencil, Plus, Printer, Receipt, Redo2, Search, Square, Trash, Undo2, X } from "lucide-react";
 import { displayFormatLabel, isAblblFormat, normalizeDisplayName, normalizeFormatMode, normalizeGstinPan } from "../../../../../shared/textFormat";
 import { getEstimateFormatProfile, isRetailSingleStoreFormat, isMultiStoreFormat, resolveCustomerFormatProfile } from "../../../../../shared/estimateProfiles";
 import { formatProductDetails, sameDisplayText } from "../../../../../shared/productDetails";
@@ -15,6 +15,7 @@ import { fetchEstimateItems, masterDataSave, openExecutionDocument, submitEstima
 import { exportEstimateToExcel } from "../utils/exportHelpers";
 import StoreWiseInvoiceModal from "./StoreWiseInvoiceModal";
 import { BulkEstimatePdfRunner } from "./BulkEstimatePdfRunner";
+import { EstimateRevisionsModal } from "./EstimateRevisionsModal";
 
 // ─── Create Product Drawer ───────────────────────────────────────────────────
 // Renders as a fixed right-side panel (pointer-events passthrough backdrop so
@@ -904,6 +905,8 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
   } | null>(null);
   const [selectedEstimateIds, setSelectedEstimateIds] = React.useState<Set<number>>(new Set());
   const [bulkPdfRunnerMode, setBulkPdfRunnerMode] = React.useState<"preview" | "zip" | "combined" | null>(null);
+  const [revisionHistoryEstimate, setRevisionHistoryEstimate] = React.useState<any | null>(null);
+  const [showRevisionHistory, setShowRevisionHistory] = React.useState<boolean>(false);
   const headerCheckboxRef = React.useRef<HTMLInputElement>(null);
 
   React.useEffect(() => {
@@ -1760,7 +1763,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                                   className="rounded border-slate-300 text-orange-600 focus:ring-orange-500 cursor-pointer w-3.5 h-3.5 align-middle"
                                 />
                               </td>
-	                            <td className="px-3 py-2 font-mono text-orange-600 font-bold">
+	                            <td className="px-3 py-2 font-mono text-orange-600 font-bold whitespace-nowrap">
                               {/* Estimate Number → opens Estimate Summary preview (not Project) */}
                               <button
                                 type="button"
@@ -1769,6 +1772,18 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                                 className="hover:underline"
                               >
                                 {e.estimateNumber}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(ev) => {
+                                  ev.stopPropagation();
+                                  setRevisionHistoryEstimate(e);
+                                  setShowRevisionHistory(true);
+                                }}
+                                title={`View Revision History (Rev ${e.currentRevisionNumber ?? 0})`}
+                                className="ml-1.5 px-1.5 py-0.2 rounded text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-300 hover:bg-amber-100 transition inline-block align-middle cursor-pointer"
+                              >
+                                Rev {e.currentRevisionNumber ?? 0}
                               </button>
                             </td>
 	                            <td className="px-3 py-1.5 max-w-[340px] min-w-[160px]" title={storeSubtitle ? `${e.title} • ${storeSubtitle}` : e.title}>
@@ -1859,6 +1874,20 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
 	                                  aria-label="View Estimate"
 	                                >
 	                                  <Eye className="w-3.5 h-3.5" />
+	                                </button>
+
+	                                {/* 1b. Revision History */}
+	                                <button
+	                                  type="button"
+	                                  onClick={() => {
+	                                    setRevisionHistoryEstimate(e);
+	                                    setShowRevisionHistory(true);
+	                                  }}
+	                                  title={`Revision History (Rev ${e.currentRevisionNumber ?? 0})`}
+	                                  className="inline-flex h-7 w-7 items-center justify-center rounded border border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100 transition shadow-xs cursor-pointer"
+	                                  aria-label="Revision History"
+	                                >
+	                                  <History className="w-3.5 h-3.5" />
 	                                </button>
 
 	                                {/* 2. Edit Estimate */}
@@ -1966,7 +1995,26 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
             <form onSubmit={handleCreateEstimate} className="eb-spreadsheet-workspace">
               <div className="eb-sheet-titlebar">
                 <div className="min-w-0">
-                  <h3>{editingEstimateId ? "Edit Estimate" : "New Estimate"}</h3>
+                  <div className="flex items-center gap-2">
+                    <h3>{editingEstimateId ? "Edit Estimate" : "New Estimate"}</h3>
+                    {editingEstimateId && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const est = estimates.find((x: any) => x.id === editingEstimateId);
+                          if (est) {
+                            setRevisionHistoryEstimate(est);
+                            setShowRevisionHistory(true);
+                          }
+                        }}
+                        className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-300 hover:bg-amber-200 transition flex items-center gap-1 cursor-pointer"
+                        title="View revision history for this estimate"
+                      >
+                        <History className="w-3 h-3 text-amber-700" />
+                        Rev {estimates.find((x: any) => x.id === editingEstimateId)?.currentRevisionNumber ?? 0}
+                      </button>
+                    )}
+                  </div>
                   <span>{estNumber || "Draft"} {estSubject ? `- ${estSubject}` : ""}</span>
                 </div>
                 <button
@@ -4431,6 +4479,21 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                   </button>
                 )}
 
+                {/* Revision History */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const est = openMoreMenu.estimate;
+                    setOpenMoreMenu(null);
+                    setRevisionHistoryEstimate(est);
+                    setShowRevisionHistory(true);
+                  }}
+                  className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-amber-800 hover:bg-amber-50 transition text-left cursor-pointer"
+                >
+                  <History className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                  <span className="font-bold">Revision History (Rev {openMoreMenu.estimate.currentRevisionNumber ?? 0})</span>
+                </button>
+
                 {openMoreMenu.estimate.status !== "archived" && openMoreMenu.estimate.status !== "submitted" && (
                   <button
                     type="button"
@@ -4448,6 +4511,33 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
               </div>
             </div>
           ), document.body)}
+
+          {/* Estimate Revisions & Version History Modal */}
+          {showRevisionHistory && revisionHistoryEstimate && (
+            <EstimateRevisionsModal
+              isOpen={showRevisionHistory}
+              onClose={() => {
+                setShowRevisionHistory(false);
+                setRevisionHistoryEstimate(null);
+              }}
+              estimate={revisionHistoryEstimate}
+              token={props.token || ""}
+              onRestored={async (restored) => {
+                if (props.onEstimateRestored) {
+                  props.onEstimateRestored(restored);
+                }
+                if (props.fetchData) {
+                  await props.fetchData();
+                }
+                showSuccess?.(`Estimate restored to Revision ${restored.currentRevisionNumber ?? restored.current_revision_number}!`);
+              }}
+              sellerProfile={sellerProfile}
+              stores={stores}
+              clients={clients}
+              products={products}
+              brands={brands}
+            />
+          )}
         </div>
   );
 };

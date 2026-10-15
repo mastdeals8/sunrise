@@ -25,6 +25,7 @@ import {
   estimateFormatProfiles,
   companies,
   companyUsers,
+  estimateRevisions,
 } from "../shared/schema";
 import { eq, and, or, isNull, gte, lte, desc, sql } from "drizzle-orm";
 import * as bcrypt from "bcryptjs";
@@ -51,7 +52,8 @@ import type {
   ClientBillingProfile, InsertClientBillingProfile,
   EstimateFormatProfileRow,
   Company, InsertCompany,
-  CompanyUser, InsertCompanyUser
+  CompanyUser, InsertCompanyUser,
+  EstimateRevision, InsertEstimateRevision
 } from "../shared/schema";
 
 export interface IStorage {
@@ -160,6 +162,8 @@ export interface IStorage {
   updateEstimate(id: number, updates: Partial<InsertEstimate>): Promise<Estimate | undefined>;
   getAllEstimateFormatProfiles(): Promise<EstimateFormatProfileRow[]>;
   getEstimateFormatProfile(code: string): Promise<EstimateFormatProfileRow | undefined>;
+  getEstimateRevisions(estimateId: number): Promise<EstimateRevision[]>;
+  getEstimateRevision(estimateId: number, revisionNumber: number): Promise<EstimateRevision | undefined>;
 
   // Delivery Challans
   getAllDeliveryChallans(companyId?: number): Promise<DeliveryChallan[]>;
@@ -968,7 +972,12 @@ export class DatabaseStorage implements IStorage {
 
   async createEstimate(estimate: InsertEstimate, items: InsertEstimateItem[]): Promise<Estimate> {
     return db.transaction(async (tx) => {
-      const result = await tx.insert(estimates).values(estimate).returning();
+      const result = await tx.insert(estimates).values({
+        ...estimate,
+        currentRevisionNumber: 0,
+        revisionCount: 1,
+        updatedAt: new Date(),
+      }).returning();
       const createdEstimate = result[0];
 
       // PERF (audit): batch insert instead of one INSERT per item (N+1 write).
@@ -979,8 +988,53 @@ export class DatabaseStorage implements IStorage {
         );
       }
 
+      // Generate immutable Revision 0 snapshot
+      const snapshotResult = await tx.execute(sql`
+        SELECT public.build_estimate_snapshot(
+          (SELECT e FROM public.estimates e WHERE e.id = ${createdEstimate.id}),
+          COALESCE((SELECT jsonb_agg(to_jsonb(i)) FROM public.estimate_items i WHERE i.estimate_id = ${createdEstimate.id}), '[]'::jsonb),
+          1
+        ) AS snap
+      `);
+      const snapshot = (snapshotResult.rows[0] as any)?.snap;
+
+      await tx.insert(estimateRevisions).values({
+        companyId: createdEstimate.companyId,
+        estimateId: createdEstimate.id,
+        revisionNumber: 0,
+        revisionNote: (estimate as any).revisionNote || "Initial estimate",
+        sourceRevisionNumber: null,
+        createdBy: createdEstimate.createdBy,
+        createdByName: null,
+        createdAt: new Date(),
+        snapshotSchemaVersion: 1,
+        subtotal: createdEstimate.subtotal,
+        taxAmount: createdEstimate.taxAmount,
+        totalAmount: createdEstimate.totalAmount,
+        itemsCount: items.length,
+        storeCount: createdEstimate.storeGrouping && typeof createdEstimate.storeGrouping === "object" ? Object.keys(createdEstimate.storeGrouping).length : 1,
+        snapshot: snapshot || {},
+      });
+
       return createdEstimate;
     });
+  }
+
+  async getEstimateRevisions(estimateId: number): Promise<EstimateRevision[]> {
+    return db
+      .select()
+      .from(estimateRevisions)
+      .where(eq(estimateRevisions.estimateId, estimateId))
+      .orderBy(desc(estimateRevisions.revisionNumber));
+  }
+
+  async getEstimateRevision(estimateId: number, revisionNumber: number): Promise<EstimateRevision | undefined> {
+    const rows = await db
+      .select()
+      .from(estimateRevisions)
+      .where(and(eq(estimateRevisions.estimateId, estimateId), eq(estimateRevisions.revisionNumber, revisionNumber)))
+      .limit(1);
+    return rows[0];
   }
 
   async getEstimateItems(estimateId: number): Promise<EstimateItem[]> {

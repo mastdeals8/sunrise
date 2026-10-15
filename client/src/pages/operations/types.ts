@@ -108,6 +108,9 @@ export interface Estimate {
   billingAddressSnapshot?: string | null;
   shippingAddressSnapshot?: string | null;
   abfrlProjectType?: string | null;
+  currentRevisionNumber?: number;
+  revisionCount?: number;
+  updatedAt?: string | null;
 }
 
 export interface EstimateItem {

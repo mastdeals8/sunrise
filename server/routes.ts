@@ -2,7 +2,7 @@ import { createServer, type Server } from "http";
 import express, { type Express, Request, Response, NextFunction } from "express";
 import { storage, sanitizeUser } from "./storage";
 import { hashPassword, comparePassword, generateToken, authenticateToken, authenticateBrowserRequest, requireRole, setSessionCookie, clearSessionCookie, AuthRequest } from "./auth";
-import { insertUserSchema, insertAttendanceSchema, insertTaskSchema, insertPettyCashExpenseSchema, insertInvoiceSchema, insertPaymentSchema, insertChartOfAccountSchema, insertClientSchema, insertClientBillingProfileSchema, insertBrandSchema, insertStoreSchema, insertProductSchema, insertEstimateSchema, insertEstimateItemSchema, insertStaffAdvanceSchema, insertPayrollSchema, insertDeliveryChallanSchema, clients, brands, stores, products, invoices, payments, botSettings, botUploadInbox, webhookLogs, customerRateCards, customerRateItems, estimates, estimateItems, deliveryChallans, executionDocuments, executionStores, fieldAccessLinks, staffAdvances, attendance, projectStoreStatus, users, telegramDeliveries } from "../shared/schema";
+import { insertUserSchema, insertAttendanceSchema, insertTaskSchema, insertPettyCashExpenseSchema, insertInvoiceSchema, insertPaymentSchema, insertChartOfAccountSchema, insertClientSchema, insertClientBillingProfileSchema, insertBrandSchema, insertStoreSchema, insertProductSchema, insertEstimateSchema, insertEstimateItemSchema, insertStaffAdvanceSchema, insertPayrollSchema, insertDeliveryChallanSchema, clients, brands, stores, products, invoices, payments, botSettings, botUploadInbox, webhookLogs, customerRateCards, customerRateItems, estimates, estimateItems, estimateRevisions, deliveryChallans, executionDocuments, executionStores, fieldAccessLinks, staffAdvances, attendance, projectStoreStatus, users, telegramDeliveries } from "../shared/schema";
 import { db, pool } from "./db";
 import { inArray, eq, sql, and, ne } from "drizzle-orm";
 import { z } from "zod";
@@ -3160,21 +3160,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (replaceItems) {
         console.log(`[estimate-update] replaceItems path, count: ${replaceItems.length}`);
         try {
-          const updated = await db.transaction(async (tx) => {
-            const updatedRows = await tx.update(estimates).set(updates).where(eq(estimates.id, id)).returning();
-            const updatedEstimate = updatedRows[0];
-            if (!updatedEstimate) return null;
+          const revNote = req.body.revisionNote || req.body.revision_note || null;
+          const expectedRev = req.body.expectedRevisionNumber ?? req.body.currentRevisionNumber ?? req.body.expected_revision_number ?? null;
 
-            await tx.delete(estimateItems).where(eq(estimateItems.estimateId, id));
-            if (replaceItems.length > 0) {
-              await tx.insert(estimateItems).values(
-                replaceItems.map((it: any) => ({ ...it, estimateId: id }))
-              );
-            }
-            return updatedEstimate;
-          });
-          if (!updated) return res.status(404).json({ message: "Estimate not found" });
-          console.log(`[estimate-update] transaction complete, sending response`);
+          const result = await db.execute(sql`
+            SELECT public.save_estimate_revision_atomic(
+              ${id}::integer,
+              ${JSON.stringify(updates)}::jsonb,
+              ${JSON.stringify(replaceItems)}::jsonb,
+              ${revNote}::text,
+              ${expectedRev !== null && expectedRev !== undefined ? Number(expectedRev) : null}::integer,
+              ${req.user?.id || null}::integer
+            ) AS res
+          `);
+          const updatedRaw = (result.rows[0] as any)?.res;
+          if (!updatedRaw) return res.status(404).json({ message: "Estimate not found" });
+
+          const [updated] = await db.select().from(estimates).where(eq(estimates.id, id));
+          console.log(`[estimate-update] atomic revision saved: rev ${updated?.currentRevisionNumber}`);
           (res as any).__auditDone = true;
           if (priorEstimate) {
             const d = diffForAudit(priorEstimate, { ...priorEstimate, ...updates });
@@ -3185,8 +3188,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
               estimateId: id, oldValue: d.oldValue, newValue: d.newValue,
             });
           }
-          return res.json(updated);
+          return res.json(updated || updatedRaw);
         } catch (e: any) {
+          if (e.code === '40001' || e.message?.includes('Concurrency conflict')) {
+            return res.status(409).json({ message: e.message, code: 'CONCURRENCY_CONFLICT' });
+          }
           return res.status(400).json({ message: `Items replace failed: ${e.message}` });
         }
       }
@@ -3205,6 +3211,74 @@ export async function registerRoutes(app: Express): Promise<Server> {
           });
         }
         res.json(updated);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // ==========================================
+  // Estimate Revisions & Version History
+  // ==========================================
+  app.get("/api/operations/estimates/:id/revisions", authenticateToken, async (req: AuthRequest, res: Response) => {
+    try {
+      const estimateId = parseInt(req.params.id, 10);
+      const [est] = await db.select().from(estimates).where(eq(estimates.id, estimateId)).limit(1);
+      if (!est) return res.status(404).json({ message: "Estimate not found" });
+
+      if (req.companyId && est.companyId && est.companyId !== req.companyId) {
+        return res.status(403).json({ message: "Access denied to estimate from another company" });
+      }
+
+      const revs = await storage.getEstimateRevisions(estimateId);
+      res.json(revs);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.get("/api/operations/estimates/:id/revisions/:rev", authenticateToken, async (req: AuthRequest, res: Response) => {
+    try {
+      const estimateId = parseInt(req.params.id, 10);
+      const revNum = parseInt(req.params.rev, 10);
+      const [est] = await db.select().from(estimates).where(eq(estimates.id, estimateId)).limit(1);
+      if (!est) return res.status(404).json({ message: "Estimate not found" });
+
+      if (req.companyId && est.companyId && est.companyId !== req.companyId) {
+        return res.status(403).json({ message: "Access denied to estimate from another company" });
+      }
+
+      const rev = await storage.getEstimateRevision(estimateId, revNum);
+      if (!rev) return res.status(404).json({ message: `Revision ${revNum} not found` });
+      res.json(rev);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.post("/api/operations/estimates/:id/revisions/:rev/restore", authenticateToken, requireRole(["admin", "manager", "accounts"]), async (req: AuthRequest, res: Response) => {
+    try {
+      const estimateId = parseInt(req.params.id, 10);
+      const revNum = parseInt(req.params.rev, 10);
+      const note = req.body?.revisionNote || req.body?.note || `Restored from Revision ${revNum}`;
+
+      const [est] = await db.select().from(estimates).where(eq(estimates.id, estimateId)).limit(1);
+      if (!est) return res.status(404).json({ message: "Estimate not found" });
+
+      if (req.companyId && est.companyId && est.companyId !== req.companyId) {
+        return res.status(403).json({ message: "Access denied to estimate from another company" });
+      }
+
+      const result = await db.execute(sql`
+        SELECT public.restore_estimate_revision_atomic(
+          ${estimateId}::integer,
+          ${revNum}::integer,
+          ${note}::text,
+          ${req.user?.id || null}::integer
+        ) AS res
+      `);
+      const restored = (result.rows[0] as any)?.res;
+      const [updated] = await db.select().from(estimates).where(eq(estimates.id, estimateId));
+      res.json(updated || restored);
     } catch (err: any) {
       res.status(500).json({ message: err.message });
     }
@@ -7243,6 +7317,38 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }))
         );
       }
+
+      // Create independent Revision 0 baseline snapshot for duplicate
+      try {
+        const snapRes = await db.execute(sql`
+          SELECT public.build_estimate_snapshot(
+            (SELECT e FROM public.estimates e WHERE e.id = ${newEst.id}),
+            COALESCE((SELECT jsonb_agg(to_jsonb(i)) FROM public.estimate_items i WHERE i.estimate_id = ${newEst.id}), '[]'::jsonb),
+            1
+          ) AS snap
+        `);
+        const snap = (snapRes.rows[0] as any)?.snap;
+        await db.insert(estimateRevisions).values({
+          companyId: targetCompanyId,
+          estimateId: newEst.id,
+          revisionNumber: 0,
+          revisionNote: `Duplicated from ${original.estimateNumber} (Rev ${original.currentRevisionNumber ?? 0})`,
+          sourceRevisionNumber: original.currentRevisionNumber ?? 0,
+          createdBy: req.user.id,
+          createdByName: req.user.name || (req.user as any).username || null,
+          createdAt: new Date(),
+          snapshotSchemaVersion: 1,
+          subtotal: newEst.subtotal,
+          taxAmount: newEst.taxAmount,
+          totalAmount: newEst.totalAmount,
+          itemsCount: originalItems.length,
+          storeCount: newEst.storeGrouping && typeof newEst.storeGrouping === "object" ? Object.keys(newEst.storeGrouping).length : 1,
+          snapshot: snap || {},
+        });
+      } catch (revErr) {
+        console.error("[duplicate-estimate] revision 0 snapshot error:", revErr);
+      }
+
       await backfillExecutionStores();
       res.json(newEst);
     } catch (err: any) {

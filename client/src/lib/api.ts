@@ -2002,7 +2002,13 @@ export async function updateEstimate(
       method: "PATCH",
       body: JSON.stringify(payload),
     });
-    if (!res.ok) throw new Error((await res.json()).message ?? "Failed to update estimate");
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      const errorObj: any = new Error(err.message ?? "Failed to update estimate");
+      errorObj.status = res.status;
+      errorObj.code = err.code;
+      throw errorObj;
+    }
     return res.json();
   }
   // Keep update validation and normalization on the same Edge Function path
@@ -2012,7 +2018,78 @@ export async function updateEstimate(
     pathSuffix: `?id=${encodeURIComponent(String(id))}`,
     body: JSON.stringify(payload),
   });
-  if (!res.ok) throw new Error((await res.json()).message ?? "Failed to update estimate");
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    const errorObj: any = new Error(err.message ?? "Failed to update estimate");
+    errorObj.status = res.status;
+    errorObj.code = err.code;
+    throw errorObj;
+  }
+  return toCamel(await res.json());
+}
+
+export async function fetchEstimateRevisions(
+  token: string | null,
+  estimateId: number
+): Promise<any[]> {
+  if (!isBoltMode) {
+    const res = await apiFetch(`/api/operations/estimates/${estimateId}/revisions`, token);
+    if (!res.ok) throw new Error((await res.json()).message ?? "Failed to fetch estimate revisions");
+    return res.json();
+  }
+  const { data, error } = await supabase
+    .from("estimate_revisions")
+    .select("id, company_id, estimate_id, revision_number, revision_note, source_revision_number, created_by, created_by_name, created_at, snapshot_schema_version, subtotal, tax_amount, total_amount, items_count, store_count")
+    .eq("estimate_id", estimateId)
+    .order("revision_number", { ascending: false });
+  if (error) throw error;
+  return toCamel(data || []);
+}
+
+export async function fetchEstimateRevision(
+  token: string | null,
+  estimateId: number,
+  revisionNumber: number
+): Promise<any> {
+  if (!isBoltMode) {
+    const res = await apiFetch(`/api/operations/estimates/${estimateId}/revisions/${revisionNumber}`, token);
+    if (!res.ok) throw new Error((await res.json()).message ?? "Failed to fetch revision");
+    return res.json();
+  }
+  const { data, error } = await supabase
+    .from("estimate_revisions")
+    .select("*")
+    .eq("estimate_id", estimateId)
+    .eq("revision_number", revisionNumber)
+    .single();
+  if (error) throw error;
+  return toCamel(data);
+}
+
+export async function restoreEstimateRevision(
+  token: string | null,
+  estimateId: number,
+  revisionNumber: number,
+  revisionNote?: string
+): Promise<any> {
+  if (!isBoltMode) {
+    const res = await apiFetch(`/api/operations/estimates/${estimateId}/revisions/${revisionNumber}/restore`, token, {
+      method: "POST",
+      body: JSON.stringify({ revisionNote }),
+    });
+    if (!res.ok) throw new Error((await res.json()).message ?? "Failed to restore revision");
+    return res.json();
+  }
+  const res = await edgeFetch("estimate-save", token, {
+    method: "POST",
+    body: JSON.stringify({
+      action: "restore",
+      estimateId,
+      restoreRevisionNumber: revisionNumber,
+      revisionNote,
+    }),
+  });
+  if (!res.ok) throw new Error((await res.json()).message ?? "Failed to restore revision");
   return toCamel(await res.json());
 }
 

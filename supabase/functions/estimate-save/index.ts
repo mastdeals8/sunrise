@@ -155,30 +155,45 @@ Deno.serve(async (req: Request) => {
         updates.gst_type = deriveGstType(sellerStateCode, newStateCode);
       }
 
-      if (replaceItems !== undefined) {
-        // Update estimate header first; if this fails, items are untouched.
-        const { data: updatedRow, error: updateErr } = await db
-          .from("estimates")
-          .update(updates)
-          .eq("id", estimateId)
-          .select()
-          .single();
-        if (updateErr) return errorResponse(updateErr.message, 400);
-        if (!updatedRow) return errorResponse("Estimate not found", 404);
+      if (rawBody.action === "restore" || updates.action === "restore") {
+        const revNum = Number(rawBody.revision_number ?? rawBody.revisionNumber ?? updates.revision_number ?? updates.revisionNumber);
+        const note = (rawBody.revision_note ?? rawBody.revisionNote ?? updates.revision_note ?? updates.revisionNote) as string | undefined;
+        const { data: restored, error: restErr } = await db.rpc("restore_estimate_revision_atomic", {
+          p_estimate_id: estimateId,
+          p_restore_revision_number: revNum,
+          p_revision_note: note || null,
+        });
+        if (restErr) return errorResponse(`Restore failed: ${restErr.message}`, 400);
+        return jsonResponse(restored);
+      }
 
-        // Atomic item replacement: insert new rows first, then delete old ones
-        // inside a single DB transaction. If the insert fails, old items survive.
-        if (replaceItems.length > 0) {
-          const normalizedItems = replaceItems.map((it: any) => normalizeKeys(it as Record<string, unknown>));
-          const { error: rpcErr } = await db.rpc("replace_estimate_items", {
-            p_estimate_id: estimateId,
-            p_items: normalizedItems,
-          });
-          if (rpcErr) return errorResponse(`Items replace failed: ${rpcErr.message}`, 400);
-        } else {
-          // No new items: just delete old ones
-          await db.from("estimate_items").delete().eq("estimate_id", estimateId);
+      if (replaceItems !== undefined) {
+        const normalizedItems = replaceItems.map((it: any) => normalizeKeys(it as Record<string, unknown>));
+        const revisionNote = (updates.revision_note || updates.revisionNote) as string | undefined;
+        const expectedRev = (updates.expected_revision_number ?? updates.expectedRevisionNumber) as number | undefined;
+        const userId = (updates.user_id ?? updates.userId) as number | undefined;
+
+        delete updates.revision_note;
+        delete updates.revisionNote;
+        delete updates.expected_revision_number;
+        delete updates.expectedRevisionNumber;
+        delete updates.user_id;
+        delete updates.userId;
+
+        const { data: updatedRow, error: rpcErr } = await db.rpc("save_estimate_revision_atomic", {
+          p_estimate_id: estimateId,
+          p_estimate: updates,
+          p_items: normalizedItems,
+          p_revision_note: revisionNote || null,
+          p_expected_revision_number: expectedRev !== undefined ? Number(expectedRev) : null,
+          p_user_id: userId ? Number(userId) : null,
+        });
+
+        if (rpcErr) {
+          const status = rpcErr.code === "40001" ? 409 : 400;
+          return errorResponse(`Save revision failed: ${rpcErr.message}`, status);
         }
+        if (!updatedRow) return errorResponse("Estimate not found", 404);
 
         return jsonResponse(updatedRow);
       }

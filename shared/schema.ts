@@ -486,6 +486,9 @@ export const estimates = pgTable("estimates", {
 
   createdBy: integer("created_by").references(() => users.id),
   createdAt: timestamp("created_at").defaultNow(),
+  currentRevisionNumber: integer("current_revision_number").notNull().default(0),
+  revisionCount: integer("revision_count").notNull().default(1),
+  updatedAt: timestamp("updated_at").defaultNow(),
 });
 
 // ==========================================
@@ -534,6 +537,31 @@ export const estimateItems = pgTable("estimate_items", {
   materialCodeSnapshot: jsonb("material_code_snapshot"), // Full material code data at estimate creation
   productSnapshot: jsonb("product_snapshot"), // Full product data at estimate creation
 });
+
+// ==========================================
+// 15B. Estimate Revisions & Version History (Sunrise Custom)
+// ==========================================
+export const estimateRevisions = pgTable("estimate_revisions", {
+  id: serial("id").primaryKey(),
+  companyId: integer("company_id").notNull().default(1),
+  estimateId: integer("estimate_id").references(() => estimates.id, { onDelete: 'cascade' }).notNull(),
+  revisionNumber: integer("revision_number").notNull(),
+  revisionNote: text("revision_note"),
+  sourceRevisionNumber: integer("source_revision_number"),
+  createdBy: integer("created_by").references(() => users.id, { onDelete: 'set null' }),
+  createdByName: text("created_by_name"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  snapshotSchemaVersion: integer("snapshot_schema_version").notNull().default(1),
+  subtotal: real("subtotal").notNull().default(0),
+  taxAmount: real("tax_amount").notNull().default(0),
+  totalAmount: real("total_amount").notNull().default(0),
+  itemsCount: integer("items_count").notNull().default(0),
+  storeCount: integer("store_count").notNull().default(0),
+  snapshot: jsonb("snapshot").notNull(),
+});
+
+export type EstimateRevision = typeof estimateRevisions.$inferSelect;
+export type InsertEstimateRevision = typeof estimateRevisions.$inferInsert;
 
 // ==========================================
 // 16. Delivery Challans / WCC (Sunrise Custom)

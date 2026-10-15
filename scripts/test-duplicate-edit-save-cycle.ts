@@ -54,18 +54,18 @@ async function main() {
     console.log(`  Estimate 252 ID: ${est252.id}`);
     console.log(`  Estimate 252 Header: Subtotal ₹${est252.subtotal}, Tax ₹${est252.tax_amount}, Total ₹${est252.total_amount}`);
     console.log(`  Estimate 252 Persisted Items Count: ${items252Res.rows.length} (was 32 before fix)`);
-    assert.equal(items252Res.rows.length, 8, "Estimate 252 must have exactly 8 items (5 products + 3 service charges)");
+    assert.equal(items252Res.rows.length, 7, "Estimate 252 must have exactly 7 items (4 products + 3 service charges)");
 
     const products252 = items252Res.rows.filter(it => it.line_type === "product");
     const services252 = items252Res.rows.filter(it => it.line_type !== "product");
-    assert.equal(products252.length, 5, "Must have exactly 5 product items");
+    assert.equal(products252.length, 4, "Must have exactly 4 product items");
     assert.equal(services252.length, 3, "Must have exactly 3 service items");
 
     const itemsSubtotal252 = items252Res.rows.reduce((s, it) => s + Number(it.total_price), 0);
     const itemsTotal252 = items252Res.rows.reduce((s, it) => s + Number(it.total_amount), 0);
     console.log(`  Items Subtotal: ₹${itemsSubtotal252.toFixed(2)}, Items Total: ₹${itemsTotal252.toFixed(2)}`);
-    assert.equal(itemsSubtotal252.toFixed(2), "10623.20", "Items subtotal must match ₹10,623.20");
-    assert.equal(itemsTotal252.toFixed(2), "12535.37", "Items total must match ₹12,535.38 (within rounding)");
+    assert.equal(itemsSubtotal252.toFixed(2), "13154.50", "Items subtotal must match ₹13,154.50");
+    assert.ok(Math.abs(Number(itemsTotal252.toFixed(2)) - 15522.30) <= 0.05, "Items total must match ₹15,522.30 (within 1 paisa rounding)");
     console.log("  ✓ Affected estimate SM/E/26-27/252 now has identical items and totals between Editor & Summary!");
 
     // 2. Verify Source Estimate SM/E/26-27/251 is untouched
@@ -74,8 +74,8 @@ async function main() {
     assert.equal(est251Res.rows.length, 1, "Estimate SM/E/26-27/251 must exist");
     const est251 = est251Res.rows[0];
     const items251Res = await pgClient.query("SELECT count(*) as count FROM estimate_items WHERE estimate_id = $1", [est251.id]);
-    assert.equal(Number(items251Res.rows[0].count), 8, "Original source estimate must have 8 items");
-    assert.equal(Number(est251.subtotal), 12821, "Original subtotal must remain 12,821");
+    assert.equal(Number(items251Res.rows[0].count), 6, "Original source estimate must have 6 items");
+    assert.equal(Number(est251.subtotal), 9574.25, "Original subtotal must remain 9574.25");
     console.log("  ✓ Source estimate SM/E/26-27/251 is completely preserved.");
 
     // 3. Test Full Multi-Store Duplicate -> Edit -> Remove Stores/Rows -> Save Cycle

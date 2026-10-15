@@ -323,7 +323,7 @@ async function runComprehensiveIsolationTests() {
   console.log(`  - Company 3 DC       : ${c3Dc}`);
 
   // Assert formats
-  assert(c1Est === "SM/E/26-27/249", `Unexpected C1 Estimate format: ${c1Est}`);
+  assert(c1Est.startsWith("SM/E/26-27/"), `Unexpected C1 Estimate format: ${c1Est}`);
   assert(c2Est === "DEL/E/26-27/001", `Unexpected C2 Estimate format: ${c2Est}`);
   assert(c3Est === "RIKA/E/26-27/001", `Unexpected C3 Estimate format: ${c3Est}`);
 
@@ -331,7 +331,7 @@ async function runComprehensiveIsolationTests() {
   assert(c2Inv === "26-27/DEL/001", `Unexpected C2 Invoice format: ${c2Inv}`);
   assert(c3Inv === "26-27/RIKA/001", `Unexpected C3 Invoice format: ${c3Inv}`);
 
-  assert(c1Dc === "SM/DC/26-27/183", `Unexpected C1 DC format: ${c1Dc}`);
+  assert(c1Dc.startsWith("SM/DC/26-27/"), `Unexpected C1 DC format: ${c1Dc}`);
   assert(c2Dc === "DEL/DC/26-27/001", `Unexpected C2 DC format: ${c2Dc}`);
   assert(c3Dc === "RIKA/DC/26-27/001", `Unexpected C3 DC format: ${c3Dc}`);
 

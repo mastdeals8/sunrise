@@ -1991,6 +1991,9 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
         abfrlProjectType: estAbfrlProjectType || null,
       };
 
+      const currentEstForRev = editingEstimateId ? estimates.find((e: any) => e.id === editingEstimateId) : null;
+      const expectedRevisionNumber = currentEstForRev?.currentRevisionNumber ?? undefined;
+
       const url = editingEstimateId ? `/api/operations/estimates/${editingEstimateId}` : "/api/operations/estimates";
       const method = editingEstimateId ? "PATCH" : "POST";
       console.log(`[save] request start (${_ms()}ms)`, { method, url, bytes: JSON.stringify(formattedItems).length });
@@ -1998,11 +2001,11 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
       if (isBoltMode) {
         try {
           const data = editingEstimateId
-            ? await updateEstimate(token, editingEstimateId, { ...estimatePayload, items: formattedItems })
+            ? await updateEstimate(token, editingEstimateId, { ...estimatePayload, items: formattedItems, expectedRevisionNumber })
             : await createEstimate(token, { estimate: estimatePayload, items: formattedItems });
           res = new Response(JSON.stringify(data), { status: 200 });
         } catch (err: any) {
-          res = new Response(JSON.stringify({ message: err.message }), { status: 500 });
+          res = new Response(JSON.stringify({ message: err.message }), { status: err.status || 500 });
         }
       } else {
         // Hard timeout so a stalled server can't strand the UI on "Saving...".
@@ -2013,7 +2016,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
             method,
             headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
             body: JSON.stringify(editingEstimateId
-              ? { ...estimatePayload, items: formattedItems }
+              ? { ...estimatePayload, items: formattedItems, expectedRevisionNumber }
               : { estimate: estimatePayload, items: formattedItems }),
             signal: controller.signal,
           });
@@ -2092,6 +2095,9 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
           const parsed = JSON.parse(body);
           if (parsed.message) errMsg = parsed.message;
         } catch {}
+        if (res.status === 409) {
+          alert(`⚠️ CONCURRENCY WARNING:\n\n${errMsg}\n\nPlease reload the estimate before making changes.`);
+        }
         setMessage(errMsg);
         setTimeout(() => setMessage(""), 8000);
       }
