@@ -150,7 +150,7 @@ async function runBenchmark(baseUrl: string) {
   return results;
 }
 
-runBenchmark("http://localhost:5005").catch((err) => {
+runBenchmark("https://sunriseapp.bolt.host").catch((err) => {
   console.error("Benchmark failed:", err);
   process.exit(1);
 });
