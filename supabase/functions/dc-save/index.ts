@@ -187,8 +187,19 @@ Deno.serve(async (req: Request) => {
       // receivedBy, remarks, etc.). Matches the estimate-save fix.
       const body = normalizeKeys(rawBody);
 
+      // Resolve company_id
+      let targetCompanyId = Number(rawBody.companyId ?? body.company_id ?? req.headers.get("X-Company-Id") ?? req.headers.get("x-company-id"));
+      if ((!targetCompanyId || isNaN(targetCompanyId)) && (body.estimate_id || rawBody.estimateId)) {
+        const estId = Number(body.estimate_id || rawBody.estimateId);
+        const { data: est } = await db.from("estimates").select("company_id").eq("id", estId).maybeSingle();
+        targetCompanyId = est?.company_id;
+      }
+      if (!targetCompanyId || isNaN(targetCompanyId)) {
+        return errorResponse("Missing required company context (X-Company-Id header or companyId)", 400);
+      }
+
       // deliveryDate defaults to now
-      const payload: Record<string, unknown> = { ...body };
+      const payload: Record<string, unknown> = { ...body, company_id: targetCompanyId };
       payload.delivery_date = preprocessDate(
         payload.delivery_date ?? payload.deliveryDate,
         () => new Date(),
@@ -203,7 +214,8 @@ Deno.serve(async (req: Request) => {
       // Replace client-side placeholders (DC-<ts> or WCC-<ts>) with a proper server number.
       const legacyPlaceholder = /^(DC|WCC)-\d+(-.*)?$/i.test(rawDc);
       if (!rawDc || legacyPlaceholder) {
-        payload.dc_number = await nextDocumentNumber(db, "dc");
+        const dcDate = payload.delivery_date ? new Date(String(payload.delivery_date)) : new Date();
+        payload.dc_number = await nextDocumentNumber(db, "dc", dcDate, targetCompanyId);
       }
 
       // Derive document type

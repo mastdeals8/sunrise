@@ -43,6 +43,18 @@ Deno.serve(async (req: Request) => {
     const payload: Record<string, unknown> = { ...body };
     payload.date = preprocessDate(payload.date, () => new Date());
 
+    // Resolve company_id
+    const invoiceId = Number(payload.invoice_id ?? payload.invoiceId ?? 0);
+    let targetCompanyId = Number(body.companyId ?? body.company_id ?? req.headers.get("X-Company-Id") ?? req.headers.get("x-company-id"));
+    if ((!targetCompanyId || isNaN(targetCompanyId)) && invoiceId > 0) {
+      const { data: inv } = await db.from("invoices").select("company_id").eq("id", invoiceId).maybeSingle();
+      targetCompanyId = inv?.company_id;
+    }
+    if (!targetCompanyId || isNaN(targetCompanyId)) {
+      return errorResponse("Missing required company context (X-Company-Id header or companyId)", 400);
+    }
+    payload.company_id = targetCompanyId;
+
     // Validate minimum required fields
     if (!payload.amount) {
       return errorResponse("Missing required field: amount", 400);

@@ -68,12 +68,14 @@ export async function nextDocumentNumber(
   db: SupabaseClient,
   kind: "invoice" | "estimate" | "dc",
   docDate: Date = new Date(),
+  companyId?: number,
 ): Promise<string> {
-  // Call the atomic SQL function first (preserves Tally alignment and lock serialization)
+  // Call the atomic SQL function first (preserves company isolation and lock serialization)
   try {
     const { data, error } = await db.rpc("next_sunrise_document_number", {
       p_kind: kind,
       p_date: docDate.toISOString().slice(0, 10),
+      p_company_id: companyId || null,
     });
     if (!error && typeof data === "string" && data) return data;
   } catch {
@@ -89,9 +91,11 @@ export async function nextDocumentNumber(
       ? estimateFyStartAtOverrides[fy.label] ?? cfg.startAt
       : cfg.startAt;
 
-  const { data: rows } = await db
-    .from(map.table)
-    .select(map.column);
+  let query = db.from(map.table).select(map.column);
+  if (companyId) {
+    query = (query as any).eq("company_id", companyId);
+  }
+  const { data: rows } = await query;
 
   let maxSeq = startAt - 1;
 

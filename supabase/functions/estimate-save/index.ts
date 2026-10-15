@@ -219,14 +219,19 @@ Deno.serve(async (req: Request) => {
         return errorResponse("Estimate must contain at least one item", 400);
       }
 
+      const rawCompany = rawEstimate.companyId ?? rawEstimate.company_id ?? req.headers.get("X-Company-Id") ?? req.headers.get("x-company-id");
+      const targetCompanyId = rawCompany ? parseInt(String(rawCompany), 10) : null;
+      if (!targetCompanyId || isNaN(targetCompanyId)) {
+        return errorResponse("Missing required company context (X-Company-Id header or companyId)", 400);
+      }
+
       // Normalize camelCase → snake_case for every field on the estimate and each item.
-      // The client (OperationsPage.tsx, api.ts createEstimate) sends camelCase; Supabase
-      // columns are snake_case. Mirrors the PATCH branch (line 114) which already normalizes.
-      // Without this, fields like abfrlProjectType, clientFormat, poNumber, taxAmount,
-      // totalAmount, billingTo, shippingTo, stateCode, vendorCode, packingPercent, etc.
-      // hit Supabase raw and produce "column does not exist" errors.
       const estimate: Record<string, unknown> = normalizeKeys(rawEstimate);
-      const items: Record<string, unknown>[] = (rawItems as Record<string, unknown>[]).map((it) => normalizeKeys(it));
+      estimate.company_id = targetCompanyId;
+      const items: Record<string, unknown>[] = (rawItems as Record<string, unknown>[]).map((it) => ({
+        ...normalizeKeys(it),
+        company_id: targetCompanyId,
+      }));
 
       // Billing profile snapshot
       if (estimate.billing_profile_id || estimate.billingProfileId) {
@@ -263,8 +268,13 @@ Deno.serve(async (req: Request) => {
         estimate.po_date = preprocessDate(estimate.po_date ?? estimate.poDate)?.toISOString() ?? null;
       }
 
-      // Generate estimate number
-      estimate.estimate_number = await nextDocumentNumber(db, "estimate");
+      // Generate estimate number scoped to company
+      estimate.estimate_number = await nextDocumentNumber(
+        db,
+        "estimate",
+        estimate.estimate_date ? new Date(String(estimate.estimate_date)) : new Date(),
+        targetCompanyId
+      );
 
       // ABFRL CAPEX: every line must have a material code
       const fmt = estimate.client_format || estimate.clientFormat;

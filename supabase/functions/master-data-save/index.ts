@@ -30,7 +30,7 @@ Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return corsResponse();
 
   try {
-    const { jwt } = await requireUser(req);
+    const { user } = await requireUser(req);
     const db = adminClient();
 
     // URL pattern: /master-data-save/{entity}[/{id}]
@@ -44,10 +44,55 @@ Deno.serve(async (req: Request) => {
 
     const body: Record<string, unknown> = method !== "DELETE" ? await req.json().catch(() => ({})) : {};
 
+    // ── 1. AUTHORIZATION & COMPANY ISOLATION ENFORCEMENT ───────────────────────
+    const rawCompany = body.companyId ?? body.company_id ?? req.headers.get("X-Company-Id") ?? req.headers.get("x-company-id");
+    let effectiveCompanyId = rawCompany ? parseInt(String(rawCompany), 10) : null;
+
+    // For PATCH / DELETE where companyId wasn't in payload, find it from the existing record
+    if ((!effectiveCompanyId || isNaN(effectiveCompanyId)) && id) {
+      if (entity === "billing-profiles") {
+        const { data: prof } = await db.from("client_billing_profiles").select("client_id, clients!inner(company_id)").eq("id", id).maybeSingle();
+        effectiveCompanyId = (prof as any)?.clients?.company_id ?? null;
+      } else {
+        const table = entity === "material-codes" ? "material_codes" : entity;
+        const { data: rec } = await db.from(table).select("company_id").eq("id", id).maybeSingle();
+        effectiveCompanyId = (rec as any)?.company_id ?? null;
+      }
+    }
+
+    if (!effectiveCompanyId || isNaN(effectiveCompanyId)) {
+      return errorResponse("Missing required company context (X-Company-Id header or companyId in body)", 400);
+    }
+
+    // Verify user has access to effectiveCompanyId
+    const { data: dbUser } = await db
+      .from("users")
+      .select("id, role")
+      .or(`auth_user_id.eq.${user.id},email.eq.${user.email}`)
+      .maybeSingle();
+
+    if (!dbUser) {
+      return errorResponse("User not found in system", 403);
+    }
+
+    const isSuper = dbUser.id === 1 || dbUser.role === "admin";
+    if (!isSuper) {
+      const { data: cu } = await db
+        .from("company_users")
+        .select("id, role")
+        .eq("user_id", dbUser.id)
+        .eq("company_id", effectiveCompanyId)
+        .maybeSingle();
+      if (!cu) {
+        return errorResponse(`Access denied to company workspace ${effectiveCompanyId}`, 403);
+      }
+    }
+
     // ── CLIENTS ───────────────────────────────────────────────────────────────
     if (entity === "clients") {
       if (method === "POST") {
         const row = {
+          company_id: effectiveCompanyId,
           name: normalizeDisplayName(String(body.name ?? "")),
           email: body.email || null,
           mobile: body.mobile || null,
@@ -69,6 +114,12 @@ Deno.serve(async (req: Request) => {
       }
 
       if (method === "PATCH" && id) {
+        // Enforce company boundary
+        const { data: existing } = await db.from("clients").select("company_id").eq("id", id).maybeSingle();
+        if (!existing || existing.company_id !== effectiveCompanyId) {
+          return errorResponse("Client not found in the current workspace", 404);
+        }
+
         const updates: Record<string, unknown> = {};
         if (body.name !== undefined) updates.name = normalizeDisplayName(String(body.name));
         if (body.email !== undefined) updates.email = body.email;
@@ -84,19 +135,24 @@ Deno.serve(async (req: Request) => {
         if (body.paymentTerms !== undefined) updates.payment_terms = body.paymentTerms;
         if (body.vendorCode !== undefined) updates.vendor_code = body.vendorCode;
         if (body.isActive !== undefined) updates.is_active = body.isActive;
-        const { data, error } = await db.from("clients").update(updates).eq("id", id).select().single();
+        const { data, error } = await db.from("clients").update(updates).eq("id", id).eq("company_id", effectiveCompanyId).select().single();
         if (error) return errorResponse(error.message, 500);
         return jsonResponse(data);
       }
 
       if (method === "DELETE" && id) {
+        const { data: existing } = await db.from("clients").select("company_id").eq("id", id).maybeSingle();
+        if (!existing || existing.company_id !== effectiveCompanyId) {
+          return errorResponse("Client not found in the current workspace", 404);
+        }
+
         // Soft-delete if estimates exist, hard-delete otherwise
         const { data: estCheck } = await db.from("estimates").select("id").eq("client_id", id).limit(1);
         if (estCheck && estCheck.length > 0) {
-          await db.from("clients").update({ is_active: false }).eq("id", id);
+          await db.from("clients").update({ is_active: false }).eq("id", id).eq("company_id", effectiveCompanyId);
           return jsonResponse({ soft: true, message: "Client has estimates — deactivated instead of deleted." });
         }
-        await db.from("clients").delete().eq("id", id);
+        await db.from("clients").delete().eq("id", id).eq("company_id", effectiveCompanyId);
         return jsonResponse({ soft: false, message: "Client deleted." });
       }
     }
@@ -105,8 +161,13 @@ Deno.serve(async (req: Request) => {
     if (entity === "brands") {
       if (method === "POST") {
         const parentClientId = Number(body.parentClientId);
-        const { data: parentClient } = await db.from("clients").select("name, client_group_name").eq("id", parentClientId).single();
+        const { data: parentClient } = await db.from("clients").select("name, client_group_name, company_id").eq("id", parentClientId).single();
+        if (!parentClient || parentClient.company_id !== effectiveCompanyId) {
+          return errorResponse("Parent client does not belong to authorized workspace", 403);
+        }
+
         const row = {
+          company_id: effectiveCompanyId,
           name: normalizeDisplayName(String(body.name ?? "")),
           parent_client_id: parentClientId,
           parent_brand: parentClient ? normalizeDisplayName(String(parentClient.client_group_name || parentClient.name)) : null,
@@ -118,25 +179,38 @@ Deno.serve(async (req: Request) => {
       }
 
       if (method === "PATCH" && id) {
+        const { data: existing } = await db.from("brands").select("company_id").eq("id", id).maybeSingle();
+        if (!existing || existing.company_id !== effectiveCompanyId) {
+          return errorResponse("Brand not found in the current workspace", 404);
+        }
+
         const updates: Record<string, unknown> = {};
         if (body.name !== undefined) updates.name = normalizeDisplayName(String(body.name));
         if (body.isActive !== undefined) updates.is_active = body.isActive;
         if (body.parentClientId !== undefined) {
           updates.parent_client_id = Number(body.parentClientId);
-          const { data: parentClient } = await db.from("clients").select("name, client_group_name").eq("id", Number(body.parentClientId)).single();
+          const { data: parentClient } = await db.from("clients").select("name, client_group_name, company_id").eq("id", Number(body.parentClientId)).single();
+          if (!parentClient || parentClient.company_id !== effectiveCompanyId) {
+            return errorResponse("Parent client does not belong to authorized workspace", 403);
+          }
           updates.parent_brand = parentClient ? normalizeDisplayName(String(parentClient.client_group_name || parentClient.name)) : null;
         }
-        const { data, error } = await db.from("brands").update(updates).eq("id", id).select().single();
+        const { data, error } = await db.from("brands").update(updates).eq("id", id).eq("company_id", effectiveCompanyId).select().single();
         if (error) return errorResponse(error.message, 500);
         return jsonResponse(data);
       }
 
       if (method === "DELETE" && id) {
+        const { data: existing } = await db.from("brands").select("company_id").eq("id", id).maybeSingle();
+        if (!existing || existing.company_id !== effectiveCompanyId) {
+          return errorResponse("Brand not found in the current workspace", 404);
+        }
+
         const { data: storeCheck } = await db.from("stores").select("id").eq("brand_id", id).limit(1);
         if (storeCheck && storeCheck.length > 0) return errorResponse("Brand has linked stores. Remove them first.", 400);
         const { data: estCheck } = await db.from("estimates").select("id").eq("brand_id", id).limit(1);
         if (estCheck && estCheck.length > 0) return errorResponse("Brand has linked estimates. Remove them first.", 400);
-        await db.from("brands").delete().eq("id", id);
+        await db.from("brands").delete().eq("id", id).eq("company_id", effectiveCompanyId);
         return jsonResponse({ message: "Brand deleted." });
       }
     }
@@ -144,10 +218,19 @@ Deno.serve(async (req: Request) => {
     // ── STORES ────────────────────────────────────────────────────────────────
     if (entity === "stores") {
       if (method === "POST") {
+        const clientId = Number(body.clientId);
+        const brandId = Number(body.brandId);
+        const { data: cl } = await db.from("clients").select("company_id").eq("id", clientId).single();
+        const { data: br } = await db.from("brands").select("company_id").eq("id", brandId).single();
+        if (!cl || cl.company_id !== effectiveCompanyId || !br || br.company_id !== effectiveCompanyId) {
+          return errorResponse("Client or Brand does not belong to authorized workspace", 403);
+        }
+
         const row: Record<string, unknown> = {
+          company_id: effectiveCompanyId,
           name: normalizeDisplayName(String(body.name ?? "")),
-          client_id: Number(body.clientId),
-          brand_id: Number(body.brandId),
+          client_id: clientId,
+          brand_id: brandId,
           location: body.location || null,
           address: body.address || null,
           contact_person: body.contactPerson ? normalizeDisplayName(String(body.contactPerson)) : null,
@@ -166,6 +249,11 @@ Deno.serve(async (req: Request) => {
       }
 
       if (method === "PATCH" && id) {
+        const { data: existing } = await db.from("stores").select("company_id").eq("id", id).maybeSingle();
+        if (!existing || existing.company_id !== effectiveCompanyId) {
+          return errorResponse("Store not found in the current workspace", 404);
+        }
+
         const updates: Record<string, unknown> = {};
         if (body.name !== undefined) updates.name = normalizeDisplayName(String(body.name));
         if (body.clientId !== undefined) updates.client_id = Number(body.clientId);
@@ -181,18 +269,23 @@ Deno.serve(async (req: Request) => {
         if (body.regionZone !== undefined) updates.region_zone = body.regionZone;
         if (body.contact !== undefined) updates.contact = body.contact ? normalizeDisplayName(String(body.contact)) : null;
         if (body.isActive !== undefined) updates.is_active = body.isActive;
-        const { data, error } = await db.from("stores").update(updates).eq("id", id).select().single();
+        const { data, error } = await db.from("stores").update(updates).eq("id", id).eq("company_id", effectiveCompanyId).select().single();
         if (error) return errorResponse(error.message, 500);
         return jsonResponse(data);
       }
 
       if (method === "DELETE" && id) {
+        const { data: existing } = await db.from("stores").select("company_id").eq("id", id).maybeSingle();
+        if (!existing || existing.company_id !== effectiveCompanyId) {
+          return errorResponse("Store not found in the current workspace", 404);
+        }
+
         const { data: estCheck } = await db.from("estimate_items").select("id").eq("store_id", id).limit(1);
         if (estCheck && estCheck.length > 0) {
-          await db.from("stores").update({ is_active: false }).eq("id", id);
+          await db.from("stores").update({ is_active: false }).eq("id", id).eq("company_id", effectiveCompanyId);
           return jsonResponse({ soft: true, message: "Store has estimate items — deactivated instead of deleted." });
         }
-        await db.from("stores").delete().eq("id", id);
+        await db.from("stores").delete().eq("id", id).eq("company_id", effectiveCompanyId);
         return jsonResponse({ soft: false, message: "Store deleted." });
       }
     }
@@ -201,6 +294,7 @@ Deno.serve(async (req: Request) => {
     if (entity === "products") {
       if (method === "POST") {
         const row: Record<string, unknown> = {
+          company_id: effectiveCompanyId,
           name: String(body.name ?? "").trim(),
           category: body.category ? normalizeDisplayName(String(body.category)) : null,
           unit: body.unit || "sqft",
@@ -221,6 +315,11 @@ Deno.serve(async (req: Request) => {
       }
 
       if (method === "PATCH" && id) {
+        const { data: existing } = await db.from("products").select("company_id").eq("id", id).maybeSingle();
+        if (!existing || existing.company_id !== effectiveCompanyId) {
+          return errorResponse("Product not found in the current workspace", 404);
+        }
+
         const updates: Record<string, unknown> = {};
         if (body.name !== undefined) updates.name = String(body.name).trim();
         if (body.category !== undefined) updates.category = body.category ? normalizeDisplayName(String(body.category)) : null;
@@ -235,22 +334,26 @@ Deno.serve(async (req: Request) => {
         if (body.warranty !== undefined) updates.warranty = body.warranty;
         if (body.materialCodeId !== undefined) updates.material_code_id = body.materialCodeId ? Number(body.materialCodeId) : null;
         if (body.isActive !== undefined) updates.is_active = Boolean(body.isActive);
-        const { data, error } = await db.from("products").update(updates).eq("id", id).select().single();
+        const { data, error } = await db.from("products").update(updates).eq("id", id).eq("company_id", effectiveCompanyId).select().single();
         if (error) return errorResponse(error.message, 500);
         return jsonResponse(data);
       }
 
       if (method === "DELETE" && id) {
-        const { data: product } = await db.from("products").select("name").eq("id", id).single();
-        if (product && (product as any).name === "Installation Service") {
+        const { data: existing } = await db.from("products").select("company_id, name").eq("id", id).maybeSingle();
+        if (!existing || existing.company_id !== effectiveCompanyId) {
+          return errorResponse("Product not found in the current workspace", 404);
+        }
+
+        if (existing.name === "Installation Service") {
           return errorResponse("Cannot delete system service product.", 409);
         }
         const { data: usageCheck } = await db.from("estimate_items").select("id").eq("product_id", id).limit(1);
         if (usageCheck && usageCheck.length > 0) {
-          await db.from("products").update({ is_active: false }).eq("id", id);
+          await db.from("products").update({ is_active: false }).eq("id", id).eq("company_id", effectiveCompanyId);
           return jsonResponse({ soft: true, message: "Product is used in estimates — deactivated instead of deleted." });
         }
-        await db.from("products").delete().eq("id", id);
+        await db.from("products").delete().eq("id", id).eq("company_id", effectiveCompanyId);
         return jsonResponse({ soft: false, message: "Product deleted." });
       }
     }
@@ -258,8 +361,14 @@ Deno.serve(async (req: Request) => {
     // ── BILLING PROFILES ──────────────────────────────────────────────────────
     if (entity === "billing-profiles") {
       if (method === "POST") {
+        const clientId = Number(body.clientId);
+        const { data: client } = await db.from("clients").select("company_id").eq("id", clientId).single();
+        if (!client || client.company_id !== effectiveCompanyId) {
+          return errorResponse("Client does not belong to authorized workspace", 403);
+        }
+
         const row = toSnake({
-          clientId: Number(body.clientId),
+          clientId,
           legalCompanyName: normalizeDisplayName(String(body.legalCompanyName ?? "")),
           branchLocationName: body.branchLocationName ? normalizeDisplayName(String(body.branchLocationName)) : null,
           gstin: body.gstin ? normalizeGstinPan(String(body.gstin)) : null,
@@ -299,6 +408,11 @@ Deno.serve(async (req: Request) => {
         const { data, error } = await db.from("client_billing_profiles").update(updates).eq("id", id).select().single();
         if (error) return errorResponse(error.message, 500);
         return jsonResponse(data);
+      }
+
+      if (method === "DELETE" && id) {
+        await db.from("client_billing_profiles").delete().eq("id", id);
+        return jsonResponse({ message: "Billing profile deleted." });
       }
     }
 

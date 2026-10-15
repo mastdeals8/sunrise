@@ -1,9 +1,10 @@
 import React, { useMemo, useState } from "react";
-import { Plus, Pencil, Archive, ArchiveRestore, Eye, Save, X, Search, Copy, Trash2, Download } from "lucide-react";
+import { Plus, Pencil, Archive, ArchiveRestore, Eye, Save, X, Search, Copy, CopyCheck, Trash2, Download, Building2 } from "lucide-react";
 import type { Client } from "../types";
 import { displayFormatLabel, isAblblFormat, normalizeDisplayName, normalizeFormatMode, normalizeGstinPan } from "../../../../../shared/textFormat";
 import ClientForm, { type ClientFormValue } from "./ClientForm";
-import { masterDataSave } from "../../../lib/api";
+import { masterDataSave, copyRecordToWorkspace } from "../../../lib/api";
+import { useAuth } from "../../../contexts/AuthContext";
 
 interface ClientsPanelProps {
   clients: Client[];
@@ -80,8 +81,13 @@ const ClientsPanel: React.FC<ClientsPanelProps> = ({
   fetchBillingProfiles,
   setShowBillingProfileDialog,
 }) => {
+  const { availableCompanies, activeCompanyId } = useAuth();
   const [viewClient, setViewClient] = useState<Client | null>(null);
   const [editClient, setEditClient] = useState<Client | null>(null);
+  const [copyClient, setCopyClient] = useState<Client | null>(null);
+  const [targetWorkspaceId, setTargetWorkspaceId] = useState<number | null>(null);
+  const [copyBillingProfiles, setCopyBillingProfiles] = useState<boolean>(true);
+  const [copying, setCopying] = useState<boolean>(false);
   const [showArchived, setShowArchived] = useState(false);
   const [search, setSearch] = useState("");
   const [filterFormat, setFilterFormat] = useState<string>("all");
@@ -107,6 +113,26 @@ const ClientsPanel: React.FC<ClientsPanelProps> = ({
       reload && reload();
     } catch (err: any) { alert(err.message || "Delete failed"); }
   };
+  const handleExecuteCopy = async () => {
+    if (!copyClient || !targetWorkspaceId || !token) return;
+    setCopying(true);
+    try {
+      const res = await copyRecordToWorkspace(token, "clients", copyClient.id, targetWorkspaceId, {
+        copyBillingProfiles,
+      });
+      const destComp = availableCompanies.find(c => c.id === targetWorkspaceId);
+      alert(`Client "${copyClient.name}" copied successfully to "${destComp?.name || `Workspace ${targetWorkspaceId}`}"!\n\nNew Independent Client ID: ${res?.destinationId || res?.destination_id || 'Created'}\nProfiles Copied: ${res?.profilesCopied ?? 0}`);
+      setCopyClient(null);
+      if (targetWorkspaceId === activeCompanyId && reload) {
+        reload();
+      }
+    } catch (err: any) {
+      alert(err.message || "Failed to copy client to another workspace");
+    } finally {
+      setCopying(false);
+    }
+  };
+
   const duplicate = async (c: Client) => {
     if (!token) return;
     const newName = prompt(`Duplicate client "${c.name}" — new name?`, `${c.name} (copy)`);
@@ -317,7 +343,19 @@ const ClientsPanel: React.FC<ClientsPanelProps> = ({
                     <div className="flex justify-end gap-1">
                       <button title="View" onClick={() => setViewClient(c)} className="btn-action"><Eye className="w-3.5 h-3.5 text-slate-500" /></button>
                       <button title="Edit" onClick={() => setEditClient({ ...c })} className="btn-action"><Pencil className="w-3.5 h-3.5 text-blue-600" /></button>
-                      <button title="Duplicate" onClick={() => duplicate(c)} className="btn-action"><Copy className="w-3.5 h-3.5 text-slate-500" /></button>
+                      <button title="Duplicate in current workspace" onClick={() => duplicate(c)} className="btn-action"><Copy className="w-3.5 h-3.5 text-slate-500" /></button>
+                      <button 
+                        title="Copy to another workspace" 
+                        onClick={() => {
+                          setCopyClient(c);
+                          const others = availableCompanies.filter(comp => comp.id !== activeCompanyId);
+                          setTargetWorkspaceId(others[0]?.id || null);
+                          setCopyBillingProfiles(true);
+                        }} 
+                        className="btn-action bg-purple-50 hover:bg-purple-100"
+                      >
+                        <CopyCheck className="w-3.5 h-3.5 text-purple-600" />
+                      </button>
                       {c.isActive ? (
                         <button title="Archive" onClick={() => archive(c)} className="btn-action"><Archive className="w-3.5 h-3.5 text-amber-600" /></button>
                       ) : (
@@ -410,6 +448,77 @@ const ClientsPanel: React.FC<ClientsPanelProps> = ({
             <button onClick={() => setEditClient(null)} className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-md">Cancel</button>
             <button onClick={saveEdit} className="flex items-center gap-1 px-4 py-1.5 bg-orange-600 hover:bg-orange-500 text-white text-xs font-bold rounded-md">
               <Save className="w-3.5 h-3.5" /> Save
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {copyClient && (
+        <Modal onClose={() => !copying && setCopyClient(null)}>
+          <div className="flex items-center gap-2 mb-3">
+            <div className="p-2 bg-purple-100 text-purple-700 rounded-lg">
+              <Building2 className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-slate-900">Copy Client to Another Workspace</h3>
+              <p className="text-xs text-slate-500">Create an independent copy with isolated ownership. The source client remains untouched.</p>
+            </div>
+          </div>
+
+          <div className="bg-slate-50 rounded-lg p-3 border border-slate-200 text-xs mb-4 space-y-1">
+            <div className="font-semibold text-slate-800">Source Client: <span className="font-bold text-purple-700">{copyClient.name}</span></div>
+            <div className="text-slate-500">Current Workspace: {availableCompanies.find(c => c.id === activeCompanyId)?.name || `Workspace ID ${activeCompanyId}`}</div>
+            {copyClient.gstNumber && <div className="font-mono text-slate-500">GSTIN: {copyClient.gstNumber}</div>}
+          </div>
+
+          <div className="space-y-4 text-xs">
+            <div>
+              <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wide mb-1">
+                Select Destination Workspace *
+              </label>
+              <select
+                value={targetWorkspaceId || ""}
+                onChange={(e) => setTargetWorkspaceId(Number(e.target.value))}
+                className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white text-slate-800 text-xs font-semibold focus:ring-2 focus:ring-purple-500 focus:outline-none"
+              >
+                {availableCompanies
+                  .filter((comp) => comp.id !== activeCompanyId)
+                  .map((comp) => (
+                    <option key={comp.id} value={comp.id}>
+                      {comp.name} (Workspace ID: {comp.id})
+                    </option>
+                  ))}
+              </select>
+            </div>
+
+            <label className="flex items-center gap-2 cursor-pointer text-slate-700 font-medium select-none">
+              <input
+                type="checkbox"
+                checked={copyBillingProfiles}
+                onChange={(e) => setCopyBillingProfiles(e.target.checked)}
+                className="rounded border-slate-300 text-purple-600 focus:ring-purple-500 h-4 w-4"
+              />
+              <span>Copy all active GST & Billing Profiles to destination client</span>
+            </label>
+          </div>
+
+          <div className="flex justify-end gap-2 mt-5 pt-3 border-t border-slate-100">
+            <button
+              type="button"
+              disabled={copying}
+              onClick={() => setCopyClient(null)}
+              className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg transition"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={copying || !targetWorkspaceId}
+              onClick={handleExecuteCopy}
+              className="flex items-center gap-1.5 px-5 py-2 bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold rounded-lg shadow-sm transition disabled:opacity-50"
+            >
+              <CopyCheck className="w-4 h-4" />
+              {copying ? "Copying..." : "Copy to Workspace"}
             </button>
           </div>
         </Modal>

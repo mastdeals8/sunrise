@@ -2787,9 +2787,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/operations/clients", authenticateToken, requireRole(["admin", "manager"]), async (req: AuthRequest, res: Response) => {
     try {
+      if (!req.companyId) {
+        return res.status(400).json({ message: "Missing required company context (X-Company-Id header)" });
+      }
       const parsed = insertClientSchema.safeParse({
         ...req.body,
-        companyId: req.companyId || 1,
+        companyId: req.companyId,
         name: normalizeDisplayName(req.body.name),
         city: normalizeDisplayName(req.body.city) || null,
         gstNumber: normalizeGstinPan(req.body.gstNumber) || null,
@@ -2883,6 +2886,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/operations/brands", authenticateToken, requireRole(["admin", "manager"]), async (req: AuthRequest, res: Response) => {
     try {
+      if (!req.companyId) {
+        return res.status(400).json({ message: "Missing required company context (X-Company-Id header)" });
+      }
       const parentClientId = Number(req.body.parentClientId);
       if (!parentClientId) {
         return res.status(400).json({ message: "Parent client is required" });
@@ -2893,7 +2899,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       const parsed = insertBrandSchema.safeParse({
         ...req.body,
-        companyId: req.companyId || 1,
+        companyId: req.companyId,
         name: normalizeDisplayName(req.body.name),
         parentClientId,
         parentBrand: normalizeDisplayName(parentClient.name) || null,
@@ -2921,9 +2927,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/operations/stores", authenticateToken, requireRole(["admin", "manager"]), async (req: AuthRequest, res: Response) => {
     try {
+      if (!req.companyId) {
+        return res.status(400).json({ message: "Missing required company context (X-Company-Id header)" });
+      }
       const parsed = insertStoreSchema.safeParse({
         ...req.body,
-        companyId: req.companyId || 1,
+        companyId: req.companyId,
         name: normalizeDisplayName(req.body.name),
         location: normalizeDisplayName(req.body.location) || null,
         contactPerson: normalizeDisplayName(req.body.contactPerson) || null,
@@ -2962,9 +2971,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/operations/products", authenticateToken, requireRole(["admin", "manager", "designer"]), async (req: AuthRequest, res: Response) => {
     try {
+      if (!req.companyId) {
+        return res.status(400).json({ message: "Missing required company context (X-Company-Id header)" });
+      }
       const body = {
         ...req.body,
-        companyId: req.companyId || 1,
+        companyId: req.companyId,
         category: await normalizeProductCategory(req.body.category, req.companyId),
       };
       const parsed = insertProductSchema.safeParse(body);
@@ -6322,6 +6334,97 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!updated[0]) return res.status(404).json({ message: "Client not found" });
       res.json(updated[0]);
     } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  app.post("/api/operations/:entity/:id/copy-to-workspace", authenticateToken, requireRole(["admin", "manager"]), async (req: AuthRequest, res: Response) => {
+    try {
+      const entity = req.params.entity;
+      const id = parseInt(req.params.id, 10);
+      const destinationCompanyId = Number(req.body.destinationCompanyId);
+      const options = req.body.options || {};
+      if (isNaN(id) || !destinationCompanyId) {
+        return res.status(400).json({ message: "Invalid ID or destination workspace" });
+      }
+      const memberships = req.user?.memberships || [];
+      const hasAccess = req.user?.isSuperAdmin || memberships.some(m => m.companyId === destinationCompanyId);
+      if (!hasAccess) {
+        return res.status(403).json({ message: "Access denied to destination workspace" });
+      }
+
+      if (entity === "clients") {
+        const src = (await db.select().from(clients).where(eq(clients.id, id)).limit(1))[0];
+        if (!src) return res.status(404).json({ message: "Source client not found" });
+        if (src.companyId === destinationCompanyId) {
+          return res.status(400).json({ message: "Destination workspace cannot be the same as source workspace" });
+        }
+        const created = (await db.insert(clients).values({
+          companyId: destinationCompanyId,
+          name: src.name,
+          email: src.email,
+          mobile: src.mobile,
+          city: src.city,
+          address: src.address,
+          gstNumber: src.gstNumber,
+          format: src.format,
+          clientGroupName: src.clientGroupName,
+          clientType: src.clientType,
+          pan: src.pan,
+          primaryContactPerson: src.primaryContactPerson,
+          paymentTerms: src.paymentTerms,
+          vendorCode: src.vendorCode,
+          isActive: true,
+        }).returning())[0];
+
+        let profilesCopied = 0;
+        if (options.copyBillingProfiles !== false) {
+          const bps = await storage.getClientBillingProfiles(id);
+          for (const bp of bps) {
+            await storage.createBillingProfile({
+              clientId: created.id,
+              legalCompanyName: bp.legalCompanyName,
+              branchLocationName: bp.branchLocationName || null,
+              gstin: bp.gstin,
+              pan: bp.pan || null,
+              state: bp.state,
+              stateCode: bp.stateCode,
+              billingAddress: bp.billingAddress,
+              shippingAddress: bp.shippingAddress || null,
+              contactPerson: bp.contactPerson || null,
+              mobile: bp.mobile || null,
+              email: bp.email || null,
+              isDefault: bp.isDefault,
+              isActive: bp.isActive,
+              notes: bp.notes || null,
+            });
+            profilesCopied++;
+          }
+        }
+        return res.json({ success: true, sourceId: id, destinationId: created.id, destinationCompanyId, record: created, profilesCopied });
+      } else if (entity === "products") {
+        const src = (await db.select().from(products).where(eq(products.id, id)).limit(1))[0];
+        if (!src) return res.status(404).json({ message: "Source product not found" });
+        const created = (await db.insert(products).values({
+          companyId: destinationCompanyId,
+          name: src.name,
+          category: src.category,
+          unit: src.unit,
+          rate: src.rate,
+          description: src.description,
+          hsnSac: src.hsnSac,
+          isStandard: src.isStandard,
+          calculationType: src.calculationType,
+          gstPercent: src.gstPercent,
+          defaultSpecification: src.defaultSpecification,
+          warranty: src.warranty,
+          isActive: true,
+        }).returning())[0];
+        return res.json({ success: true, sourceId: id, destinationId: created.id, destinationCompanyId, record: created });
+      }
+
+      return res.status(400).json({ message: `Copy not supported for entity ${entity}` });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
   });
 
   app.patch("/api/operations/brands/:id", authenticateToken, requireRole(["admin", "manager", "accounts"]), async (req: AuthRequest, res: Response) => {

@@ -1,11 +1,12 @@
 import React, { useMemo, useState } from "react";
-import { Plus, Pencil, Trash2, Eye, Save, X, Search, Copy, Archive, ArchiveRestore, Download, Lock } from "lucide-react";
+import { Plus, Pencil, Trash2, Eye, Save, X, Search, Copy, CopyCheck, Archive, ArchiveRestore, Download, Lock, Building2 } from "lucide-react";
 import type { Product, MaterialCodeRow } from "../types";
 import { normalizeDisplayName } from "../../../../../shared/textFormat";
 import { isSystemServiceProduct } from "../../../../../shared/systemServices";
 import CategoryAutocomplete, { categoryKey, normalizeCategoryLabel } from "./CategoryAutocomplete";
 import ProductForm, { type ProductFormValue } from "./ProductForm";
-import { masterDataSave } from "../../../lib/api";
+import { masterDataSave, copyRecordToWorkspace } from "../../../lib/api";
+import { useAuth } from "../../../contexts/AuthContext";
 
 interface ProductsPanelProps {
   products: Product[];
@@ -78,11 +79,15 @@ const ProductsPanel: React.FC<ProductsPanelProps> = ({
   handleCreateProduct,
   formatCurrency,
 }) => {
+  const { availableCompanies, activeCompanyId } = useAuth();
   const [search, setSearch] = useState("");
   const [filterCalc, setFilterCalc] = useState<string>("all");
   const [showInactive, setShowInactive] = useState(false);
   const [view, setView] = useState<Product | null>(null);
   const [edit, setEdit] = useState<Product | null>(null);
+  const [copyProduct, setCopyProduct] = useState<Product | null>(null);
+  const [targetWorkspaceId, setTargetWorkspaceId] = useState<number | null>(null);
+  const [copying, setCopying] = useState(false);
   const [saving, setSaving] = useState(false);
   // Sortable header state. Default = name ascending. Click same header to
   // toggle dir; click different header to switch field and reset to asc.
@@ -132,6 +137,24 @@ const ProductsPanel: React.FC<ProductsPanelProps> = ({
       reload && reload();
     } catch (err: any) { alert(err.message || "Delete failed"); }
   };
+  const handleExecuteCopy = async () => {
+    if (!copyProduct || !targetWorkspaceId || !token) return;
+    setCopying(true);
+    try {
+      const res = await copyRecordToWorkspace(token, "products", copyProduct.id, targetWorkspaceId);
+      const destComp = availableCompanies.find(c => c.id === targetWorkspaceId);
+      alert(`Product "${copyProduct.name}" copied successfully to "${destComp?.name || `Workspace ${targetWorkspaceId}`}"!\n\nNew Independent Product ID: ${res?.destinationId || res?.destination_id || 'Created'}`);
+      setCopyProduct(null);
+      if (targetWorkspaceId === activeCompanyId && reload) {
+        reload();
+      }
+    } catch (err: any) {
+      alert(err.message || "Failed to copy product to another workspace");
+    } finally {
+      setCopying(false);
+    }
+  };
+
   const duplicate = async (p: Product) => {
     if (!token) return;
     const newName = prompt(`Duplicate product "${p.name}" — new name?`, `${p.name} (copy)`);
@@ -360,7 +383,18 @@ const ProductsPanel: React.FC<ProductsPanelProps> = ({
                       <div className="flex justify-end gap-1">
                         <button title="View" onClick={() => setView(p)} className="btn-action"><Eye className="w-3.5 h-3.5 text-slate-500" /></button>
                         <button title="Edit" onClick={() => setEdit({ ...p })} className="btn-action"><Pencil className="w-3.5 h-3.5 text-blue-600" /></button>
-                        <button title="Duplicate" onClick={() => duplicate(p)} className="btn-action"><Copy className="w-3.5 h-3.5 text-slate-500" /></button>
+                        <button title="Duplicate in current workspace" onClick={() => duplicate(p)} className="btn-action"><Copy className="w-3.5 h-3.5 text-slate-500" /></button>
+                        <button 
+                          title="Copy to another workspace" 
+                          onClick={() => {
+                            setCopyProduct(p);
+                            const others = availableCompanies.filter(comp => comp.id !== activeCompanyId);
+                            setTargetWorkspaceId(others[0]?.id || null);
+                          }} 
+                          className="btn-action bg-purple-50 hover:bg-purple-100"
+                        >
+                          <CopyCheck className="w-3.5 h-3.5 text-purple-600" />
+                        </button>
                         {p.isActive ? (
                           <button title="Deactivate" onClick={() => confirm(`Deactivate "${p.name}"?`) && patch(p.id, { isActive: false })} className="btn-action"><Archive className="w-3.5 h-3.5 text-amber-600" /></button>
                         ) : (
@@ -463,6 +497,67 @@ const ProductsPanel: React.FC<ProductsPanelProps> = ({
           </Drawer>
         );
       })()}
+
+      {copyProduct && (
+        <div className="fixed inset-0 z-50 bg-slate-900/40 flex items-center justify-center p-4" onClick={() => !copying && setCopyProduct(null)}>
+          <div className="relative bg-white rounded-xl shadow-2xl border border-slate-200 max-w-lg w-full p-5" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center gap-2 mb-3">
+              <div className="p-2 bg-purple-100 text-purple-700 rounded-lg">
+                <Building2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-slate-900">Copy Product to Another Workspace</h3>
+                <p className="text-xs text-slate-500">Create an independent copy with isolated ownership.</p>
+              </div>
+            </div>
+
+            <div className="bg-slate-50 rounded-lg p-3 border border-slate-200 text-xs mb-4 space-y-1">
+              <div className="font-semibold text-slate-800">Source Product: <span className="font-bold text-purple-700">{copyProduct.name}</span></div>
+              <div className="text-slate-500">Category: {copyProduct.category || "General"} | Rate: {formatCurrency(copyProduct.rate)} / {copyProduct.unit}</div>
+              <div className="text-slate-500">Current Workspace: {availableCompanies.find(c => c.id === activeCompanyId)?.name || `Workspace ID ${activeCompanyId}`}</div>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wide mb-1">
+                Select Destination Workspace *
+              </label>
+              <select
+                value={targetWorkspaceId || ""}
+                onChange={(e) => setTargetWorkspaceId(Number(e.target.value))}
+                className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white text-slate-800 text-xs font-semibold focus:ring-2 focus:ring-purple-500 focus:outline-none"
+              >
+                {availableCompanies
+                  .filter((comp) => comp.id !== activeCompanyId)
+                  .map((comp) => (
+                    <option key={comp.id} value={comp.id}>
+                      {comp.name} (Workspace ID: {comp.id})
+                    </option>
+                  ))}
+              </select>
+            </div>
+
+            <div className="flex justify-end gap-2 mt-5 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                disabled={copying}
+                onClick={() => setCopyProduct(null)}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg transition"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={copying || !targetWorkspaceId}
+                onClick={handleExecuteCopy}
+                className="flex items-center gap-1.5 px-5 py-2 bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold rounded-lg shadow-sm transition disabled:opacity-50"
+              >
+                <CopyCheck className="w-4 h-4" />
+                {copying ? "Copying..." : "Copy to Workspace"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

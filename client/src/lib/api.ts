@@ -237,11 +237,12 @@ export async function fetchDashboard(
     return { totalRevenue: 0, totalReceivables: 0 };
   }
 
+  const companyId = getActiveCompanyId();
   const [invoices, estimates, deliveryChallans, executionStores] =
     await Promise.all([
-      sbSelect<any>("invoices"),
-      sbSelect<any>("estimates"),
-      sbSelect<any>("delivery_challans"),
+      sbSelect<any>("invoices", (q) => q.select("*").eq("company_id", companyId)),
+      sbSelect<any>("estimates", (q) => q.select("*").eq("company_id", companyId)),
+      sbSelect<any>("delivery_challans", (q) => q.select("*").eq("company_id", companyId)),
       sbSelect<any>("execution_stores"),
     ]);
 
@@ -369,32 +370,54 @@ export async function fetchMaterialCodes(token: string | null) {
     const res = await apiFetch("/api/operations/material-codes", token);
     return res.ok ? res.json() : [];
   }
-  return sbSelect("material_codes", (q) => q.select("*").order("code"));
+  const companyId = getActiveCompanyId();
+  return sbSelect("material_codes", (q) => q.select("*").eq("company_id", companyId).order("code"));
 }
 
 export async function saveMaterialCode(token: string | null, id: number | null, payload: Record<string, unknown>) {
+  const companyId = (payload.companyId as number) || (payload.company_id as number) || getActiveCompanyId();
   if (!isBoltMode) {
     const res = await apiFetch(id ? `/api/operations/material-codes/${id}` : "/api/operations/material-codes", token, {
-      method: id ? "PATCH" : "POST", body: JSON.stringify(payload),
+      method: id ? "PATCH" : "POST", body: JSON.stringify({ ...payload, companyId }),
     });
     if (!res.ok) throw new Error((await res.json()).message ?? "Failed to save material code");
     return res.json();
   }
-  const row: Record<string, unknown> = {};
+  try {
+    const { data: atomicData, error: atomicErr } = await supabase.rpc("save_master_data_atomic", {
+      p_entity: "material-codes",
+      p_method: id ? "PATCH" : "POST",
+      p_id: id || null,
+      p_payload: { ...payload, companyId },
+    });
+    if (!atomicErr && atomicData) return toCamel(atomicData);
+  } catch {}
+  const row: Record<string, unknown> = { company_id: companyId };
   for (const [key, value] of Object.entries(payload)) row[key.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`)] = value;
-  const query = id ? supabase.from("material_codes").update(row).eq("id", id) : supabase.from("material_codes").insert(row);
+  row.company_id = companyId;
+  const query = id ? supabase.from("material_codes").update(row).eq("id", id).eq("company_id", companyId) : supabase.from("material_codes").insert(row);
   const { data, error } = await query.select().single();
   if (error) throw new Error(error.message);
   return toCamel(data);
 }
 
 export async function deleteMaterialCode(token: string | null, id: number) {
+  const companyId = getActiveCompanyId();
   if (!isBoltMode) {
     const res = await apiFetch(`/api/operations/material-codes/${id}`, token, { method: "DELETE" });
     if (!res.ok) throw new Error((await res.json()).message ?? "Failed to delete material code");
     return;
   }
-  const { error } = await supabase.from("material_codes").delete().eq("id", id);
+  try {
+    const { data, error } = await supabase.rpc("save_master_data_atomic", {
+      p_entity: "material-codes",
+      p_method: "DELETE",
+      p_id: id,
+      p_payload: { companyId },
+    });
+    if (!error) return;
+  } catch {}
+  const { error } = await supabase.from("material_codes").delete().eq("id", id).eq("company_id", companyId);
   if (error) throw new Error(error.message);
 }
 
@@ -523,8 +546,9 @@ export async function fetchExecutionDocuments(
     const res = await apiFetch(url, token);
     return res.ok ? res.json() : [];
   }
+  const companyId = getActiveCompanyId();
   const docs = await sbSelect<any>("execution_documents", (q) => {
-    const base = q.select("*").eq("status", "active").order("created_at", { ascending: false });
+    const base = q.select("*").eq("status", "active").eq("company_id", companyId).order("created_at", { ascending: false });
     return estimateId ? base.eq("estimate_id", estimateId) : base;
   });
   if (!docs.length) return docs;
@@ -615,13 +639,14 @@ export async function fetchLedgerSummary(token: string | null) {
     const res = await apiFetch("/api/finance/ledgers/summary", token);
     return res.ok ? res.json() : [];
   }
-  // Compute client-level summary from raw reads
+  const companyId = getActiveCompanyId();
+  // Compute client-level summary from raw reads scoped to company
   const [clients, invoices, payments] = await Promise.all([
-    sbSelect<any>("clients", (q) => q.select("id, name")),
+    sbSelect<any>("clients", (q) => q.select("id, name").eq("company_id", companyId)),
     sbSelect<any>("invoices", (q) =>
-      q.select("client_id, total_amount, paid_amount, status, type")
+      q.select("client_id, total_amount, paid_amount, status, type").eq("company_id", companyId)
     ),
-    sbSelect<any>("payments", (q) => q.select("client_id, amount")),
+    sbSelect<any>("payments", (q) => q.select("client_id, amount").eq("company_id", companyId)),
   ]);
 
   return clients
@@ -1673,10 +1698,12 @@ async function edgeFetch(
   const supabaseUrl = (import.meta.env.VITE_SUPABASE_URL as string | undefined) ?? "";
   const { pathSuffix = "", ...fetchOptions } = options;
   const url = `${supabaseUrl}/functions/v1/${functionName}${pathSuffix}`;
+  const companyId = getActiveCompanyId();
   return fetch(url, {
     ...fetchOptions,
     headers: {
       "Content-Type": "application/json",
+      "X-Company-Id": String(companyId),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...fetchOptions.headers,
     },
@@ -2597,6 +2624,11 @@ export async function updateDeliveryChallan(
  * entity: "clients" | "brands" | "stores" | "products" | "billing-profiles"
  * method: "POST" | "PATCH" | "DELETE"
  */
+/**
+ * Call save_master_data_atomic RPC in Bolt mode, with fallback to master-data-save Edge Function or Express.
+ * entity: "clients" | "brands" | "stores" | "products" | "billing-profiles" | "material-codes"
+ * method: "POST" | "PATCH" | "DELETE"
+ */
 export async function masterDataSave(
   token: string | null,
   entity: string,
@@ -2604,11 +2636,14 @@ export async function masterDataSave(
   id?: number | null,
   payload?: Record<string, unknown>
 ): Promise<any> {
+  const companyId = (payload?.companyId as number) || (payload?.company_id as number) || getActiveCompanyId();
+  const safePayload = payload ? { ...payload, companyId } : undefined;
+
   if (!isBoltMode) {
     const url = id ? `/api/operations/${entity}/${id}` : `/api/operations/${entity}`;
     const res = await apiFetch(url, token, {
       method,
-      body: method !== "DELETE" ? JSON.stringify(payload) : undefined,
+      body: method !== "DELETE" ? JSON.stringify(safePayload) : undefined,
     });
     if (!res.ok) {
       const j = await res.json().catch(() => ({}));
@@ -2616,17 +2651,72 @@ export async function masterDataSave(
     }
     return res.json().catch(() => ({}));
   }
+
+  // 1. Try atomic PostgreSQL RPC save directly (preserves transaction safety and strict company isolation)
+  try {
+    const { data: atomicData, error: atomicErr } = await supabase.rpc("save_master_data_atomic", {
+      p_entity: entity,
+      p_method: method,
+      p_id: id || null,
+      p_payload: safePayload || {},
+    });
+    if (!atomicErr && atomicData) {
+      return toCamel(atomicData);
+    }
+    if (atomicErr) {
+      console.warn("[api] save_master_data_atomic RPC warning:", atomicErr.message);
+    }
+  } catch (rpcErr) {
+    console.warn("[api] save_master_data_atomic error:", rpcErr);
+  }
+
+  // 2. Fallback to Edge Function
   const pathSuffix = id ? `/${entity}/${id}` : `/${entity}`;
   const res = await edgeFetch("master-data-save", token, {
     method,
     pathSuffix,
-    body: method !== "DELETE" ? JSON.stringify(payload) : undefined,
+    body: method !== "DELETE" ? JSON.stringify(safePayload) : undefined,
   });
   if (!res.ok) {
     const j = await res.json().catch(() => ({}));
     throw Object.assign(new Error(j.message ?? `${entity} ${method} failed`), { status: res.status, body: j });
   }
   return res.json().catch(() => ({}));
+}
+
+/**
+ * Deliberate, authorized cross-workspace copy action.
+ * Creates an independent destination record with a new ID and target company ownership.
+ * Does NOT alter or delete the source record.
+ */
+export async function copyRecordToWorkspace(
+  token: string | null,
+  entity: "clients" | "products" | "brands",
+  sourceId: number,
+  destinationCompanyId: number,
+  options?: { copyBillingProfiles?: boolean }
+): Promise<any> {
+  if (isBoltMode) {
+    const { data, error } = await supabase.rpc("copy_record_to_workspace", {
+      p_entity: entity,
+      p_source_id: sourceId,
+      p_destination_company_id: destinationCompanyId,
+      p_options: options || {},
+    });
+    if (error) throw new Error(error.message || `Failed to copy ${entity} to workspace ${destinationCompanyId}`);
+    return toCamel(data);
+  }
+
+  const res = await apiFetch(`/api/operations/${entity}/${sourceId}/copy-to-workspace`, token, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ destinationCompanyId, options }),
+  });
+  if (!res.ok) {
+    const j = await res.json().catch(() => ({}));
+    throw new Error(j.message || `Failed to copy ${entity} to workspace ${destinationCompanyId}`);
+  }
+  return res.json();
 }
 
 // ─── Payments ─────────────────────────────────────────────────────────────────

@@ -22,7 +22,7 @@ function preprocessDate(value: unknown): string | null {
   return isNaN(d.getTime()) ? null : d.toISOString();
 }
 
-const invoiceFields = new Set(["invoice_number", "type", "party_name", "amount", "tax_amount", "total_amount", "date", "due_date", "status", "estimate_id", "client_id", "paid_amount", "balance_amount", "packet_settings", "remarks", "delivery_challan_id", "line_items", "po_number", "po_reference", "transport_cost", "store_id", "store_code", "store_name"]);
+const invoiceFields = new Set(["company_id", "invoice_number", "type", "party_name", "amount", "tax_amount", "total_amount", "date", "due_date", "status", "estimate_id", "client_id", "paid_amount", "balance_amount", "packet_settings", "remarks", "delivery_challan_id", "line_items", "po_number", "po_reference", "transport_cost", "store_id", "store_code", "store_name"]);
 const toSnake = (key: string) => key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
 function normalizeInvoicePayload(body: Record<string, unknown>) {
   const payload: Record<string, unknown> = {};
@@ -73,6 +73,17 @@ Deno.serve(async (req: Request) => {
     const totalsError = synchronizeInvoiceTotals(payload);
     if (totalsError) return errorResponse(totalsError, 400);
 
+    // Resolve company_id
+    let targetCompanyId = Number(body.companyId ?? body.company_id ?? req.headers.get("X-Company-Id") ?? req.headers.get("x-company-id"));
+    if ((!targetCompanyId || isNaN(targetCompanyId)) && payload.estimate_id) {
+      const { data: est } = await db.from("estimates").select("company_id").eq("id", payload.estimate_id).maybeSingle();
+      targetCompanyId = est?.company_id;
+    }
+    if (!targetCompanyId || isNaN(targetCompanyId)) {
+      return errorResponse("Missing required company context (X-Company-Id header or companyId)", 400);
+    }
+    payload.company_id = targetCompanyId;
+
     // Required: at minimum partyName and amount
     if (!payload.party_name) {
       return errorResponse("Missing required field: party_name", 400);
@@ -80,7 +91,7 @@ Deno.serve(async (req: Request) => {
 
     const requestedId = Number(body.id || 0);
     if (requestedId > 0) {
-      const { data: updated, error } = await db.from("invoices").update(payload).eq("id", requestedId).select().single();
+      const { data: updated, error } = await db.from("invoices").update(payload).eq("id", requestedId).eq("company_id", targetCompanyId).select().single();
       if (error) return errorResponse(error.message, 400);
       return jsonResponse(updated);
     }
@@ -98,6 +109,7 @@ Deno.serve(async (req: Request) => {
 
     if (payload.estimate_id) {
       let query = db.from("invoices").select("*")
+        .eq("company_id", targetCompanyId)
         .eq("estimate_id", payload.estimate_id)
         .neq("status", "cancelled");
       if (payload.store_id) {
@@ -116,11 +128,13 @@ Deno.serve(async (req: Request) => {
     // Allocate or validate established Sunrise invoice convention
     const requestedNumber = String(payload.invoice_number ?? "").trim();
     if (!requestedNumber || /^INV-\d+$/i.test(requestedNumber)) {
-      payload.invoice_number = await nextDocumentNumber(db, "invoice");
+      const invDate = payload.date ? new Date(String(payload.date)) : new Date();
+      payload.invoice_number = await nextDocumentNumber(db, "invoice", invDate, targetCompanyId);
     } else {
       const { data: existingDup } = await db
         .from("invoices")
         .select("id, invoice_number")
+        .eq("company_id", targetCompanyId)
         .eq("invoice_number", requestedNumber)
         .neq("status", "cancelled")
         .maybeSingle();
