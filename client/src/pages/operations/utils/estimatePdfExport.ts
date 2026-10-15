@@ -89,7 +89,33 @@ export function dataUrlToBytes(dataUrl: string): Uint8Array {
   return bytes;
 }
 
-export async function waitForImages(element: HTMLElement, timeoutMs = 2500): Promise<void> {
+/**
+ * Fast native canvas-to-binary JPEG bytes converter.
+ * Uses canvas.toBlob() directly into an ArrayBuffer when available,
+ * bypassing expensive base64 string encoding and atob loops in JS.
+ */
+export async function canvasToJpgBytes(
+  canvas: HTMLCanvasElement,
+  quality = 0.95
+): Promise<Uint8Array> {
+  if (typeof canvas.toBlob === "function") {
+    try {
+      const blob = await new Promise<Blob | null>((resolve) =>
+        canvas.toBlob(resolve, "image/jpeg", quality)
+      );
+      if (blob) {
+        const buffer = await blob.arrayBuffer();
+        return new Uint8Array(buffer);
+      }
+    } catch {
+      // Fallback below
+    }
+  }
+  const dataUrl = canvas.toDataURL("image/jpeg", quality);
+  return dataUrlToBytes(dataUrl);
+}
+
+export async function waitForImages(element: HTMLElement, timeoutMs = 1500): Promise<void> {
   const imgs = Array.from(element.querySelectorAll("img"));
   if (imgs.length === 0) return;
 
@@ -97,7 +123,8 @@ export async function waitForImages(element: HTMLElement, timeoutMs = 2500): Pro
     imgs.map(
       (img) =>
         new Promise<void>((resolve) => {
-          if (img.complete && img.naturalWidth > 0) return resolve();
+          // If already complete (loaded or errored), resolve immediately
+          if (img.complete) return resolve();
           const timer = setTimeout(resolve, timeoutMs);
           img.onload = () => {
             clearTimeout(timer);
@@ -141,6 +168,7 @@ export async function renderEstimateElementToPdf(
     logging: false,
     scrollX: 0,
     scrollY: 0,
+    imageTimeout: 3000,
   });
 
   const cW = canvas.width;
@@ -158,8 +186,7 @@ export async function renderEstimateElementToPdf(
     const fitScale = Math.min(1, PRINTABLE_H / rawDrawH);
     const drawW = PRINTABLE_W * fitScale;
     const drawH = rawDrawH * fitScale;
-    const dataUrl = canvas.toDataURL("image/jpeg", 0.95);
-    const bytes = dataUrlToBytes(dataUrl);
+    const bytes = await canvasToJpgBytes(canvas, 0.95);
     const img = await pdf.embedJpg(bytes);
 
     const page = pdf.addPage([A4_W, A4_H]);
@@ -249,8 +276,7 @@ export async function renderEstimateElementToPdf(
         sCtx.drawImage(canvas, 0, slice.startY, cW, slice.height, 0, sliceRepeatH, cW, slice.height);
       }
 
-      const dataUrl = sliceCanvas.toDataURL("image/jpeg", 0.95);
-      const bytes = dataUrlToBytes(dataUrl);
+      const bytes = await canvasToJpgBytes(sliceCanvas, 0.95);
       const img = await pdf.embedJpg(bytes);
 
       const drawW = PRINTABLE_W;

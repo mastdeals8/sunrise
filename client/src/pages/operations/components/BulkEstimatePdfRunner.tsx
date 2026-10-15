@@ -72,15 +72,17 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
   // Bulk print execution state
   const [isPrintingAll, setIsPrintingAll] = useState(false);
 
-  // Client DOM fallback rendering host for single estimate
-  const [clientExportEst, setClientExportEst] = useState<Estimate | null>(null);
+  // Bounded off-screen slots for client DOM export (concurrency = 2)
+  const [slotEsts, setSlotEsts] = useState<[Estimate | null, Estimate | null]>([null, null]);
+  const slot0Ref = useRef<HTMLDivElement>(null);
+  const slot1Ref = useRef<HTMLDivElement>(null);
+  const slotRefs = [slot0Ref, slot1Ref];
 
   const cancelledRef = useRef(false);
   const bulkPrintHostRef = useRef<HTMLDivElement>(null);
-  const exportSingleHostRef = useRef<HTMLDivElement>(null);
 
-  // In-memory cache of generated PDF bytes across operations with same scale/density
-  const cachedPdfsRef = useRef<Map<number, Uint8Array>>(new Map());
+  // In-memory cache of generated PDF bytes across operations keyed by revision snapshot and options
+  const cachedPdfsRef = useRef<Map<string, Uint8Array>>(new Map());
 
   // Invalidate cached PDFs if scale or density changes
   useEffect(() => {
@@ -151,6 +153,35 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
 
     setStatusText(`Preparing ${total} estimate(s)...`);
 
+    // Helper to get safe cache key incorporating estimate revision and update timestamp
+    const getEstimateCacheKey = (est: Estimate) => {
+      const rev = (est as any).current_revision_number ?? (est as any).currentRevisionNumber ?? 0;
+      const updated =
+        (est as any).updated_at ??
+        (est as any).updatedAt ??
+        (est as any).created_at ??
+        (est as any).createdAt ??
+        "";
+      return `${est.id}_r${rev}_${updated}_s${scale}_d${density}_fit${targetFitPages || "auto"}`;
+    };
+
+    // Pre-warm branding images to avoid network delay and CORS stalls during rendering
+    if (sellerProfile) {
+      const brandImages = [
+        sellerProfile.logoPath,
+        sellerProfile.signaturePath,
+        sellerProfile.sealPath,
+        sellerProfile.signatureStampPath,
+      ].filter(Boolean);
+      for (const imgUrl of brandImages) {
+        if (imgUrl) {
+          const img = new Image();
+          img.crossOrigin = "anonymous";
+          img.src = imgUrl;
+        }
+      }
+    }
+
     // Ensure all items are loaded via batch fetch if not already in memory
     const missingIds = selectedEstimates.filter((est) => !itemsMap[est.id]).map((est) => est.id);
     if (missingIds.length > 0) {
@@ -164,9 +195,29 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
 
     let completedCount = 0;
 
-    // Concurrency limit: 3 for server Playwright, 1 for client DOM to prevent Safari freeze
-    const CONCURRENCY = !isBoltMode ? 3 : 1;
+    // Concurrency limit: 3 for server Playwright, 2 bounded slots for client DOM
+    const CONCURRENCY = !isBoltMode ? 3 : 2;
     let nextIndex = 0;
+
+    // Isolated slot pool for client-side DOM rendering
+    const availableSlots = [0, 1];
+    const slotWaiters: Array<(slot: number) => void> = [];
+
+    const acquireSlot = (): Promise<number> => {
+      if (availableSlots.length > 0) {
+        return Promise.resolve(availableSlots.pop()!);
+      }
+      return new Promise<number>((resolve) => slotWaiters.push(resolve));
+    };
+
+    const releaseSlot = (slot: number) => {
+      if (slotWaiters.length > 0) {
+        const next = slotWaiters.shift()!;
+        next(slot);
+      } else {
+        availableSlots.push(slot);
+      }
+    };
 
     const exportWorker = async () => {
       while (nextIndex < total && !cancelledRef.current) {
@@ -179,10 +230,11 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
 
         try {
           let pdfBytes: Uint8Array | null = null;
+          const cacheKey = getEstimateCacheKey(est);
 
-          // Check if already generated in this session with same settings
-          if (cachedPdfsRef.current.has(est.id)) {
-            pdfBytes = cachedPdfsRef.current.get(est.id)!;
+          // Check if already generated in this session with exact same revision and settings
+          if (cachedPdfsRef.current.has(cacheKey)) {
+            pdfBytes = cachedPdfsRef.current.get(cacheKey)!;
           }
 
           // 1. In full Express mode (when not in Bolt mode), attempt server Playwright renderer
@@ -202,33 +254,56 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
           }
 
           // 2. In Bolt mode or when server generation failed:
-          // Mount the estimate into single export container and render via html2canvas & pdf-lib
+          // Acquire an isolated DOM slot and render via html2canvas & pdf-lib
           if (!pdfBytes) {
-            setClientExportEst(est);
-            await new Promise((r) => setTimeout(r, 60));
-            await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+            const slotIdx = await acquireSlot();
+            try {
+              // Mount into slot and wait for React commit
+              await new Promise<void>((resolve) => {
+                setSlotEsts((prev) => {
+                  const next = [...prev] as [Estimate | null, Estimate | null];
+                  next[slotIdx] = est;
+                  return next;
+                });
+                requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+              });
 
-            const host = exportSingleHostRef.current;
-            const docEl = host?.querySelector(".estimate-print") as HTMLElement | null;
-            if (!docEl) {
-              throw new Error(`Estimate #${est.estimateNumber || est.id} document element failed to render in DOM container`);
+              const host = slotRefs[slotIdx].current;
+              let docEl = host?.querySelector(".estimate-print") as HTMLElement | null;
+              if (!docEl) {
+                // Retry in next frame if DOM tree is still committing
+                await new Promise((r) => requestAnimationFrame(r));
+                docEl = host?.querySelector(".estimate-print") as HTMLElement | null;
+              }
+
+              if (!docEl) {
+                throw new Error(
+                  `Estimate #${est.estimateNumber || est.id} document element failed to render in DOM container`
+                );
+              }
+
+              const singleDoc = await renderEstimateElementToPdf(
+                docEl,
+                undefined,
+                est.estimateNumber || "Estimate",
+                targetFitPages,
+                scale
+              );
+              pdfBytes = await singleDoc.save();
+            } finally {
+              setSlotEsts((prev) => {
+                const next = [...prev] as [Estimate | null, Estimate | null];
+                next[slotIdx] = null;
+                return next;
+              });
+              releaseSlot(slotIdx);
             }
-
-            const singleDoc = await renderEstimateElementToPdf(
-              docEl,
-              undefined,
-              est.estimateNumber || "Estimate",
-              targetFitPages,
-              scale
-            );
-            pdfBytes = await singleDoc.save();
-            setClientExportEst(null);
           }
 
           if (cancelledRef.current) break;
 
           if (pdfBytes) {
-            cachedPdfsRef.current.set(est.id, pdfBytes);
+            cachedPdfsRef.current.set(cacheKey, pdfBytes);
             pdfResultsMap.set(est.id, pdfBytes);
           }
 
@@ -252,11 +327,11 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
 
     if (cancelledRef.current) {
       setIsProcessing(false);
-      setClientExportEst(null);
+      setSlotEsts([null, null]);
       return;
     }
 
-    setClientExportEst(null);
+    setSlotEsts([null, null]);
     setFailures(failedList);
     const finalSuccessCount = pdfResultsMap.size;
     setSuccessCount(finalSuccessCount);
@@ -873,33 +948,37 @@ export const BulkEstimatePdfRunner: React.FC<BulkEstimatePdfRunnerProps> = ({
           </div>
         )}
 
-        {/* Single off-screen container for client DOM export fallback */}
-        {clientExportEst && (
-          <div
-            ref={exportSingleHostRef}
-            style={{
-              position: "fixed",
-              left: "-99999px",
-              top: "-99999px",
-              width: "733px",
-              opacity: 0.001,
-              pointerEvents: "none",
-              zIndex: -9999,
-            }}
-          >
-            <div data-print-document="true">
-              <EstimateDocument
-                estimate={clientExportEst}
-                items={itemsMap[clientExportEst.id] || []}
-                stores={stores}
-                clients={clients}
-                products={products}
-                brands={brands}
-                sellerProfile={sellerProfile}
-                assetToken={token}
-              />
+        {/* Bounded off-screen slots for client DOM export */}
+        {slotEsts.map((slotEst, sIdx) =>
+          slotEst ? (
+            <div
+              key={sIdx}
+              ref={slotRefs[sIdx]}
+              data-slot-est-id={slotEst.id}
+              style={{
+                position: "fixed",
+                left: "-99999px",
+                top: `${-99999 - sIdx * 5000}px`,
+                width: "733px",
+                opacity: 0.001,
+                pointerEvents: "none",
+                zIndex: -9999,
+              }}
+            >
+              <div data-print-document="true">
+                <EstimateDocument
+                  estimate={slotEst}
+                  items={itemsMap[slotEst.id] || []}
+                  stores={stores}
+                  clients={clients}
+                  products={products}
+                  brands={brands}
+                  sellerProfile={sellerProfile}
+                  assetToken={token}
+                />
+              </div>
             </div>
-          </div>
+          ) : null
         )}
       </div>
     </div>
