@@ -189,6 +189,11 @@ async function runSecurityAdvisorVerification() {
     // TEST 5: CROSS-COMPANY ISOLATION ON INVOICE_PACKET_PAGES & PROJECT_FILES
     // -------------------------------------------------------------------------
     console.log("\n>>> [TEST 5] INVOICE_PACKET_PAGES & PROJECT_FILES CROSS-COMPANY ISOLATION");
+    await pgClient.query(`DELETE FROM invoice_packet_pages WHERE packet_id IN (SELECT id FROM invoice_packets WHERE packet_number = 'PKT-TEST-AUDIT')`);
+    await pgClient.query(`DELETE FROM invoice_packets WHERE packet_number = 'PKT-TEST-AUDIT'`);
+    await pgClient.query(`DELETE FROM project_files WHERE project_id IN (SELECT id FROM projects WHERE project_code = 'PRJ-TEST-AUDIT')`);
+    await pgClient.query(`DELETE FROM projects WHERE project_code = 'PRJ-TEST-AUDIT'`);
+
     // Create test project in Company 1
     const testProjRes = await pgClient.query(`
       INSERT INTO projects (company_id, project_code, name, client_id, brand_id, store_id, budget, status)

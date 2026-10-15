@@ -3,7 +3,7 @@ import { formatCurrency } from "@/utils/format";
 import { useAuth } from "../contexts/AuthContext";
 import { useGlobalDate } from "../contexts/GlobalDateContext";
 import { supabase, isBoltMode } from "../lib/supabase";
-import { fetchUsers } from "../lib/api";
+import { fetchUsers, getActiveCompanyId } from "../lib/api";
 import { 
   Coins, 
   Plus, 
@@ -112,6 +112,7 @@ const PettyCashPage: React.FC = () => {
     e.preventDefault();
     if (!amount || !category) return;
 
+    const activeCompanyId = getActiveCompanyId();
     if (isBoltMode) {
       const { error: insErr } = await supabase.from("petty_cash_expenses").insert({
         category,
@@ -121,7 +122,8 @@ const PettyCashPage: React.FC = () => {
         paid_by: paidBy || null,
         expense_date: expenseDate || new Date().toISOString(),
         status: "pending",
-        receipt_image_url: receiptName ? `/uploads/receipts/${receiptName}` : null
+        receipt_image_url: receiptName ? `/uploads/receipts/${receiptName}` : null,
+        company_id: activeCompanyId,
       });
       if (!insErr) {
         setShowForm(false);
@@ -143,7 +145,8 @@ const PettyCashPage: React.FC = () => {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`
+          Authorization: `Bearer ${token}`,
+          "X-Company-Id": String(activeCompanyId),
         },
         body: JSON.stringify({
           category,
@@ -153,7 +156,8 @@ const PettyCashPage: React.FC = () => {
           paidBy: paidBy || null,
           expenseDate: expenseDate || new Date().toISOString(),
           status: "pending",
-          receiptImageUrl: receiptName ? `/uploads/receipts/${receiptName}` : null
+          receiptImageUrl: receiptName ? `/uploads/receipts/${receiptName}` : null,
+          companyId: activeCompanyId,
         })
       });
 

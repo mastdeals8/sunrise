@@ -1355,6 +1355,7 @@ Sunrise Media`;
                           mimeType: file.type || null,
                           fileSize: file.size || null,
                           uploadedVia: "project_workspace",
+                          companyId: selectedEstimate.companyId || (selectedEstimate as any).company_id,
                         });
                       } catch (err: any) {
                         alert(`Upload failed: ${err?.message || err}`);

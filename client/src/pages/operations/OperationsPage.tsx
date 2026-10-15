@@ -47,7 +47,7 @@ import ProjectWorkspace from "./components/ProjectWorkspace";
 import WccDcEditor from "./components/WccDcEditor";
 import { useOperationsData, type Invoice } from "./hooks/useOperationsData";
 import { isBoltMode, supabase } from "../../lib/supabase";
-import { createEstimate, updateEstimate, duplicateEstimate, createDeliveryChallan, updateDeliveryChallan, fetchEstimateItems, fetchDeliveryChallansForEstimate, fetchBillingProfiles as apiFetchBillingProfiles, fetchCompanySettings, createInvoice, createPayment, fetchClientLedger, masterDataSave, uploadToStorage, registerExecutionDocument, deleteExecutionDocument, deleteWccPhotoArtifacts, hydrateDeliveryChallanPhotos, normalizeWccPhotos, resolveCustomerRate, apiFetch } from "../../lib/api";
+import { createEstimate, updateEstimate, duplicateEstimate, createDeliveryChallan, updateDeliveryChallan, fetchEstimateItems, fetchDeliveryChallansForEstimate, fetchBillingProfiles as apiFetchBillingProfiles, fetchCompanySettings, createInvoice, createPayment, fetchClientLedger, masterDataSave, uploadToStorage, registerExecutionDocument, deleteExecutionDocument, deleteWccPhotoArtifacts, hydrateDeliveryChallanPhotos, normalizeWccPhotos, resolveCustomerRate, apiFetch, getExecutionDocumentSignedUrl, fetchExecutionDocumentVersions, replaceExecutionDocument } from "../../lib/api";
 import { useEstimateBuilder } from "./hooks/useEstimateBuilder";
 import { useInvoiceWorkflow } from "./hooks/useInvoiceWorkflow";
 import { useWccDcEditor } from "./hooks/useWccDcEditor";
@@ -2442,8 +2442,10 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     const file = e.target.files[0];
 
     if (isBoltMode) {
-      const estimateId = (poWorkflowEstimate || selectedEstimate)?.id;
+      const targetEstimate = poWorkflowEstimate || selectedEstimate;
+      const estimateId = targetEstimate?.id;
       if (!estimateId) { alert("No active estimate selected for upload."); return; }
+      const companyId = targetEstimate?.companyId || (targetEstimate as any)?.company_id || activeCompanyId;
       try {
         setUploadingDocType(docType);
         const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
@@ -2460,6 +2462,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
           mimeType: file.type || null,
           fileSize: file.size || null,
           uploadedVia: "po_modal",
+          companyId,
         });
         showSuccess("File uploaded successfully.");
       } catch (err: any) {
@@ -3462,84 +3465,47 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
   const executionDocIsPdf = (doc: any) =>
     Boolean(doc?.mimeType === "application/pdf" || /\.pdf$/i.test(executionDocFileName(doc)));
 
-  const openExecutionDocumentViewerFromOwner = (doc: any) => {
-    setExecutionDocumentViewer(doc);
+  const openExecutionDocumentViewerFromOwner = async (doc: any) => {
+    let displayUrl = doc?.filePath || "";
+    if (doc?.filePath && !doc.filePath.startsWith("http://") && !doc.filePath.startsWith("https://") && !doc.filePath.startsWith("data:")) {
+      try {
+        displayUrl = await getExecutionDocumentSignedUrl(doc.filePath, false, doc.estimateId, doc.documentType === "po" || doc.documentType === "client_po");
+      } catch (err) {
+        console.warn("Could not sign execution document URL:", err);
+      }
+    }
+    setExecutionDocumentViewer({ ...doc, displayUrl, filePath: displayUrl, storagePath: doc?.filePath });
     setExecutionDocumentVersions([]);
     setShowExecutionDocumentHistory(false);
   };
 
   const loadExecutionDocumentVersionsFromOwner = async (doc: any) => {
-    if (!doc?.id || !token) return;
-    if (isBoltMode) return; // version history not yet available in Bolt
-    const res = await fetch(`/api/operations/execution-documents/${doc.id}/versions`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (res.ok) {
-      setExecutionDocumentVersions(await res.json());
+    if (!doc?.id) return;
+    try {
+      const versions = await fetchExecutionDocumentVersions(doc);
+      setExecutionDocumentVersions(versions);
       setShowExecutionDocumentHistory(true);
+    } catch (err: any) {
+      console.warn("Could not load versions:", err);
     }
   };
 
   const openExecutionDocumentHistoryFromOwner = async (doc: any) => {
-    setExecutionDocumentViewer(doc);
-    setExecutionDocumentVersions([]);
+    await openExecutionDocumentViewerFromOwner(doc);
     setShowExecutionDocumentHistory(true);
     await loadExecutionDocumentVersionsFromOwner(doc);
   };
 
   const replaceExecutionDocumentFromOwner = async (doc: any, file: File) => {
-    if (isBoltMode) {
-      try {
-        const estimateId = doc.estimateId || selectedEstimate?.id;
-        if (!estimateId) { alert("No estimate context for upload."); return; }
-        const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-        const storagePath = `estimate-${estimateId}/${doc.storeCode || "misc"}/${Date.now()}-${safeName}`;
-        const { storagePath: saved, displayUrl } = await uploadToStorage("execution-documents", storagePath, file);
-        // Mark old doc as replaced and register new one
-        await supabase.from("execution_documents").update({ status: "replaced" }).eq("id", doc.id);
-        const newDoc = await registerExecutionDocument(token, {
-          estimateId,
-          storeCode: doc.storeCode || "",
-          documentType: doc.documentType,
-          filePath: saved,
-          originalFileName: file.name,
-          mimeType: file.type || null,
-          fileSize: file.size || null,
-          uploadedVia: "project_workspace",
-        });
-        setExecutionDocumentViewer({ ...newDoc, filePath: displayUrl });
-        setExecutionDocumentVersions([]);
-        setShowExecutionDocumentHistory(false);
-        fetchData();
-      } catch (err: any) {
-        alert(err?.message || "Replace failed.");
-      }
-      return;
-    }
-    const formData = new FormData();
-    formData.append("file", file);
-    const uploadRes = await fetch("/api/operations/upload", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}` },
-      body: formData,
-    });
-    if (!uploadRes.ok) return;
-    const uploaded = await uploadRes.json();
-    const res = await fetch(`/api/operations/execution-documents/${doc.id}/replace`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify({
-        filePath: uploaded.filePath,
-        originalFileName: uploaded.fileName || file.name,
-        mimeType: file.type || null,
-        fileSize: uploaded.fileSize || file.size || null,
-      }),
-    });
-    if (res.ok) {
-      setExecutionDocumentViewer(await res.json());
+    try {
+      const { newDoc, displayUrl } = await replaceExecutionDocument(token, doc, file);
+      setExecutionDocumentViewer({ ...newDoc, filePath: displayUrl });
       setExecutionDocumentVersions([]);
       setShowExecutionDocumentHistory(false);
       fetchData();
+      showSuccess("Document replaced successfully.");
+    } catch (err: any) {
+      alert(err?.message || "Replace failed.");
     }
   };
 

@@ -35,6 +35,41 @@ Deno.serve(async (req: Request) => {
     }
 
     const db = adminClient();
+
+    // 1. Verify existence and company_id of target document
+    const { data: existing, error: findErr } = await db
+      .from("execution_documents")
+      .select("id, company_id, status, estimate_id")
+      .eq("id", id)
+      .maybeSingle();
+
+    if (findErr) return errorResponse(findErr.message, 400);
+    if (!existing) return errorResponse("Document not found", 404);
+
+    // 2. Enforce workspace access check
+    const { data: dbUser } = await db
+      .from("users")
+      .select("id, role")
+      .eq("email", user.email!)
+      .maybeSingle();
+
+    const isSuper = dbUser && (dbUser.id === 1 || dbUser.role === "admin");
+    if (!isSuper && dbUser) {
+      const { data: cu } = await db
+        .from("company_users")
+        .select("id, role")
+        .eq("user_id", dbUser.id)
+        .eq("company_id", existing.company_id)
+        .maybeSingle();
+      if (!cu) {
+        return errorResponse(`Access denied to company workspace ${existing.company_id}`, 403);
+      }
+    }
+
+    // 3. Disallow modifying company_id
+    delete fields.company_id;
+    delete fields.companyId;
+
     const { data, error } = await db
       .from("execution_documents")
       .update(fields)

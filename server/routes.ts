@@ -2,7 +2,7 @@ import { createServer, type Server } from "http";
 import express, { type Express, Request, Response, NextFunction } from "express";
 import { storage, sanitizeUser } from "./storage";
 import { hashPassword, comparePassword, generateToken, authenticateToken, authenticateBrowserRequest, requireRole, setSessionCookie, clearSessionCookie, AuthRequest } from "./auth";
-import { insertUserSchema, insertAttendanceSchema, insertTaskSchema, insertPettyCashExpenseSchema, insertInvoiceSchema, insertPaymentSchema, insertChartOfAccountSchema, insertClientSchema, insertClientBillingProfileSchema, insertBrandSchema, insertStoreSchema, insertProductSchema, insertEstimateSchema, insertEstimateItemSchema, insertStaffAdvanceSchema, insertPayrollSchema, insertDeliveryChallanSchema, clients, brands, stores, products, invoices, payments, botSettings, botUploadInbox, webhookLogs, customerRateCards, customerRateItems, estimates, estimateItems, estimateRevisions, deliveryChallans, executionDocuments, executionStores, fieldAccessLinks, staffAdvances, attendance, projectStoreStatus, users, telegramDeliveries } from "../shared/schema";
+import { insertUserSchema, insertAttendanceSchema, insertTaskSchema, insertPettyCashExpenseSchema, insertInvoiceSchema, insertPaymentSchema, insertChartOfAccountSchema, insertClientSchema, insertClientBillingProfileSchema, insertBrandSchema, insertStoreSchema, insertProductSchema, insertEstimateSchema, insertEstimateItemSchema, insertStaffAdvanceSchema, insertPayrollSchema, insertDeliveryChallanSchema, clients, brands, stores, products, invoices, payments, botSettings, botUploadInbox, webhookLogs, customerRateCards, customerRateItems, estimates, estimateItems, estimateRevisions, deliveryChallans, executionDocuments, executionStores, fieldAccessLinks, staffAdvances, attendance, projectStoreStatus, users, telegramDeliveries, companyUsers } from "../shared/schema";
 import { db, pool } from "./db";
 import { inArray, eq, sql, and, ne } from "drizzle-orm";
 import { z } from "zod";
@@ -182,9 +182,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
     uploadedVia?: string;
     uploadedAt?: Date | null;
     metadata?: any;
+    companyId?: number | null;
   }) => {
     const filePath = normalizeStoredFilePath(doc.filePath);
     if (!filePath) return null;
+    let companyId = doc.companyId;
+    if (!companyId && doc.estimateId) {
+      const [est] = await db.select({ companyId: estimates.companyId }).from(estimates).where(eq(estimates.id, doc.estimateId)).limit(1);
+      companyId = est?.companyId;
+    }
     const singleActiveOwnerTypes = new Set(["signed_wcc", "signed_dc", "transport_receipt", "extra"]);
     if (doc.deliveryChallanId && singleActiveOwnerTypes.has(String(doc.documentType || "").toLowerCase())) {
       const activeOwnerDoc = await db.select().from(executionDocuments)
@@ -208,6 +214,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       .limit(1);
     if (existing[0]) return existing[0];
     const inserted = await db.insert(executionDocuments).values({
+      companyId: companyId || 1,
       estimateId: doc.estimateId,
       deliveryChallanId: doc.deliveryChallanId || null,
       storeCode: doc.storeCode || null,
@@ -1481,8 +1488,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!req.file) {
         return res.status(400).json({ message: "No file uploaded" });
       }
+      const rawCompanyId = req.headers["x-company-id"] || req.query.companyId || req.body?.companyId;
+      const targetCompanyId = rawCompanyId ? Number(rawCompanyId) : 1;
+      const isSuper = req.user.id === 1 || req.user.role === "admin";
+      if (!isSuper && targetCompanyId) {
+        const [membership] = await db.select().from(companyUsers)
+          .where(and(eq(companyUsers.userId, req.user.id), eq(companyUsers.companyId, targetCompanyId)))
+          .limit(1);
+        if (!membership) return res.status(403).json({ message: "Access denied to company workspace" });
+      }
       const filePath = `/uploads/company-assets/${req.file.filename}`;
       await storage.createUpload({
+        companyId: targetCompanyId,
         fileName: req.file.originalname,
         filePath,
         fileSize: req.file.size,
@@ -4234,7 +4251,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!req.user) return res.status(401).json({ message: "Unauthorized" });
       const { estimateId, deliveryChallanId, storeCode, documentType, filePath, originalFileName, mimeType, fileSize, uploadedVia, metadata } = req.body;
       if (!estimateId || !documentType || !filePath) return res.status(400).json({ message: "estimateId, documentType and filePath are required" });
+
+      const [est] = await db.select({ companyId: estimates.companyId }).from(estimates).where(eq(estimates.id, Number(estimateId))).limit(1);
+      if (!est) return res.status(404).json({ message: "Referenced estimate not found" });
+
+      const targetCompanyId = est.companyId;
+      const isSuper = req.user.id === 1 || req.user.role === "admin";
+      if (!isSuper) {
+        const [membership] = await db.select().from(companyUsers)
+          .where(and(eq(companyUsers.userId, req.user.id), eq(companyUsers.companyId, targetCompanyId)))
+          .limit(1);
+        if (!membership) return res.status(403).json({ message: "Access denied to company workspace" });
+      }
+
       const doc = await db.insert(executionDocuments).values({
+        companyId: targetCompanyId,
         estimateId: Number(estimateId),
         deliveryChallanId: deliveryChallanId ? Number(deliveryChallanId) : null,
         storeCode: storeCode || null,
@@ -4447,7 +4478,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         `);
         nextVersion = Math.max(1, ...((allSignedVersions as any[]).map(doc => Number(doc.version || 1)))) + 1;
       }
+      const [linkEst] = await db.select({ companyId: estimates.companyId }).from(estimates).where(eq(estimates.id, link.estimateId)).limit(1);
       const inserted = await db.insert(executionDocuments).values({
+        companyId: linkEst?.companyId || 1,
         estimateId: link.estimateId,
         deliveryChallanId: ownerDc?.id || null,
         storeCode,
@@ -4497,14 +4530,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/operations/execution-documents/:id/replace", authenticateToken, requireRole(["admin", "manager", "production", "installer"]), async (req: AuthRequest, res: Response) => {
     try {
+      if (!req.user) return res.status(401).json({ message: "Unauthorized" });
       const id = Number(req.params.id);
       const [doc] = await db.select().from(executionDocuments).where(eq(executionDocuments.id, id)).limit(1);
       if (!doc) return res.status(404).json({ message: "Document not found" });
+
+      const targetCompanyId = doc.companyId;
+      const isSuper = req.user.id === 1 || req.user.role === "admin";
+      if (!isSuper && targetCompanyId) {
+        const [membership] = await db.select().from(companyUsers)
+          .where(and(eq(companyUsers.userId, req.user.id), eq(companyUsers.companyId, targetCompanyId)))
+          .limit(1);
+        if (!membership) return res.status(403).json({ message: "Access denied to company workspace" });
+      }
+
       const filePath = normalizeStoredFilePath(req.body?.filePath);
       if (!filePath) return res.status(400).json({ message: "filePath is required" });
       const { rootId, rows: versions } = await loadExecutionDocumentVersions(doc);
       const nextVersion = Math.max(1, ...versions.map((row: any) => Number(row.version || 1))) + 1;
       const inserted = await db.insert(executionDocuments).values({
+        companyId: targetCompanyId,
         estimateId: doc.estimateId,
         deliveryChallanId: doc.deliveryChallanId,
         storeCode: doc.storeCode,
@@ -4537,7 +4582,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.delete("/api/operations/execution-documents/:id", authenticateToken, requireRole(["admin", "manager", "production", "installer"]), async (req: AuthRequest, res: Response) => {
     try {
+      if (!req.user) return res.status(401).json({ message: "Unauthorized" });
       const id = Number(req.params.id);
+      const [doc] = await db.select().from(executionDocuments).where(eq(executionDocuments.id, id)).limit(1);
+      if (!doc) return res.status(404).json({ message: "Document not found" });
+
+      const targetCompanyId = doc.companyId;
+      const isSuper = req.user.id === 1 || req.user.role === "admin";
+      if (!isSuper && targetCompanyId) {
+        const [membership] = await db.select().from(companyUsers)
+          .where(and(eq(companyUsers.userId, req.user.id), eq(companyUsers.companyId, targetCompanyId)))
+          .limit(1);
+        if (!membership) return res.status(403).json({ message: "Access denied to company workspace" });
+      }
+
       const updated = await db.update(executionDocuments)
         .set({ status: "deleted", deletedAt: new Date(), deletedBy: req.user?.id || null, updatedAt: new Date() })
         .where(eq(executionDocuments.id, id))
@@ -4731,8 +4789,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (isNaN(estimateId)) return res.status(400).json({ message: "Invalid estimateId" });
       if (!req.file) return res.status(400).json({ message: "No file uploaded" });
 
+      const [est] = await db.select({ companyId: estimates.companyId }).from(estimates).where(eq(estimates.id, estimateId)).limit(1);
+      if (!est) return res.status(404).json({ message: "Referenced estimate not found" });
+
+      const targetCompanyId = est.companyId;
+      const isSuper = req.user.id === 1 || req.user.role === "admin";
+      if (!isSuper) {
+        const [membership] = await db.select().from(companyUsers)
+          .where(and(eq(companyUsers.userId, req.user.id), eq(companyUsers.companyId, targetCompanyId)))
+          .limit(1);
+        if (!membership) return res.status(403).json({ message: "Access denied to company workspace" });
+      }
+
       const filePath = `/uploads/${req.file.filename}`;
       const doc = await db.insert(executionDocuments).values({
+        companyId: targetCompanyId,
         estimateId,
         deliveryChallanId: null,
         storeCode: null,

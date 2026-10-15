@@ -4,7 +4,7 @@ import { useAuth } from "../contexts/AuthContext";
 import { FileUp, Search, Download, ExternalLink, Image as ImageIcon, FileText, File, X, RefreshCw, Trash2, History } from "lucide-react";
 import { EmptyState } from "@/components/ui-kit";
 import { isBoltMode } from "../lib/supabase";
-import { fetchEstimates, fetchDeliveryChallans, fetchExecutionDocuments, openExecutionDocument } from "../lib/api";
+import { fetchEstimates, fetchDeliveryChallans, fetchExecutionDocuments, openExecutionDocument, replaceExecutionDocument, deleteExecutionDocument, fetchExecutionDocumentVersions } from "../lib/api";
 
 interface Upload {
   id: number;
@@ -358,49 +358,33 @@ const DocumentViewer: React.FC<{
   const [showVersions, setShowVersions] = useState(false);
   const [replacing, setReplacing] = useState(false);
 
-  const uploadFile = async (file: File) => {
-    if (isBoltMode) throw new Error("File upload requires the Express backend.");
-    const fd = new FormData();
-    fd.append("file", file);
-    const res = await fetch("/api/operations/upload", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}` },
-      body: fd,
-    });
-    if (!res.ok) throw new Error("Upload failed");
-    return res.json();
-  };
-
   const replaceDoc = async (file: File) => {
     if (!doc.id) return;
-    if (isBoltMode) { alert("Document replacement requires the Express backend (npm run dev:full)."); return; }
     setReplacing(true);
     try {
-      const uploaded = await uploadFile(file);
-      const res = await fetch(`/api/operations/execution-documents/${doc.id}/replace`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({
-          filePath: uploaded.filePath,
-          originalFileName: uploaded.fileName || file.name,
-          mimeType: file.type || null,
-          fileSize: uploaded.fileSize || file.size || null,
-        }),
+      const { newDoc, displayUrl } = await replaceExecutionDocument(token, {
+        id: doc.id,
+        estimateId: doc.estimateId,
+        storeCode: doc.storeCode || "",
+        documentType: doc.type,
+        version: doc.version,
+        filePath: doc.filePath,
+        originalFileName: doc.fileName,
+      }, file);
+
+      onDocChange({
+        ...doc,
+        id: newDoc.id,
+        fileName: newDoc.originalFileName || newDoc.filePath?.split("/").pop() || doc.fileName,
+        filePath: newDoc.filePath,
+        mimeType: newDoc.mimeType,
+        fileSize: newDoc.fileSize,
+        version: newDoc.version,
+        date: newDoc.uploadedAt || newDoc.createdAt,
       });
-      if (res.ok) {
-        const next = await res.json();
-        onDocChange({
-          ...doc,
-          id: next.id,
-          fileName: next.originalFileName || next.filePath?.split("/").pop() || doc.fileName,
-          filePath: next.filePath,
-          mimeType: next.mimeType,
-          fileSize: next.fileSize,
-          version: next.version,
-          date: next.uploadedAt || next.createdAt,
-        });
-        onChanged();
-      }
+      onChanged();
+    } catch (err: any) {
+      alert(err?.message || "Replacement failed");
     } finally {
       setReplacing(false);
     }
@@ -408,26 +392,27 @@ const DocumentViewer: React.FC<{
 
   const deleteDoc = async () => {
     if (!doc.id || !window.confirm(`Delete ${doc.fileName}?`)) return;
-    if (isBoltMode) { alert("Document deletion requires the Express backend (npm run dev:full)."); return; }
-    const res = await fetch(`/api/operations/execution-documents/${doc.id}`, {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (res.ok) {
+    try {
+      await deleteExecutionDocument(token, doc.id);
       onChanged();
       onClose();
+    } catch (err: any) {
+      alert(err?.message || "Delete failed");
     }
   };
 
   const loadVersions = async () => {
     if (!doc.id) return;
-    if (isBoltMode) { alert("Version history requires the Express backend (npm run dev:full)."); return; }
-    const res = await fetch(`/api/operations/execution-documents/${doc.id}/versions`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (res.ok) {
-      setVersions(await res.json());
+    try {
+      const vList = await fetchExecutionDocumentVersions({
+        id: doc.id,
+        estimateId: doc.estimateId,
+        documentType: doc.type,
+      });
+      setVersions(vList);
       setShowVersions(true);
+    } catch (err: any) {
+      alert(err?.message || "Failed to load version history");
     }
   };
 

@@ -67,6 +67,8 @@ export interface Product {
 
 export interface Estimate {
   id: number;
+  companyId?: number;
+  company_id?: number;
   estimateNumber: string;
   estimateDate?: string | null;
   clientId: number;

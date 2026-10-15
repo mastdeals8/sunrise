@@ -1594,11 +1594,25 @@ export async function registerExecutionDocument(
     fileSize?: number | null;
     uploadedVia?: string;
     metadata?: Record<string, unknown>;
+    companyId?: number;
   }
 ): Promise<any> {
+  let companyId = doc.companyId || getActiveCompanyId();
+  if ((!companyId || isNaN(companyId)) && doc.estimateId) {
+    const { data: est } = await supabase.from("estimates").select("company_id").eq("id", doc.estimateId).maybeSingle();
+    if (est?.company_id) companyId = est.company_id;
+  }
+  if (!companyId || isNaN(companyId)) {
+    throw new Error("Missing company context for execution document");
+  }
+
   if (!isBoltMode) {
     const res = await apiFetch("/api/operations/execution-documents", token, {
       method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Company-Id": String(companyId),
+      },
       body: JSON.stringify({
         estimateId: doc.estimateId,
         storeCode: doc.storeCode,
@@ -1609,21 +1623,24 @@ export async function registerExecutionDocument(
         fileSize: doc.fileSize ?? null,
         uploadedVia: doc.uploadedVia ?? "project_workspace",
         metadata: doc.metadata ?? {},
+        companyId,
       }),
     });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).message ?? "Failed to register document");
     return res.json();
   }
+
   const row: Record<string, unknown> = {
     estimate_id: doc.estimateId,
-    store_code: doc.storeCode,
+    store_code: doc.storeCode || null,
     document_type: doc.documentType,
     file_path: doc.filePath,
-    original_file_name: doc.originalFileName,
+    original_file_name: doc.originalFileName || null,
     mime_type: doc.mimeType ?? null,
     file_size: doc.fileSize ?? null,
     uploaded_via: doc.uploadedVia ?? "project_workspace",
     metadata: doc.metadata ?? {},
+    company_id: companyId,
   };
   const { data, error } = await supabase.from("execution_documents").insert(row).select().single();
   if (error) throw new Error(error.message);
@@ -2777,6 +2794,7 @@ export async function uploadExecutionDocument(
     documentType: string;
     uploadedVia?: string;
     metadata?: Record<string, unknown>;
+    companyId?: number;
   }
 ): Promise<{ storagePath: string; displayUrl: string; doc: any }> {
   const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
@@ -2792,8 +2810,125 @@ export async function uploadExecutionDocument(
     fileSize: file.size || null,
     uploadedVia: opts.uploadedVia ?? "project_workspace",
     metadata: opts.metadata ?? {},
+    companyId: opts.companyId,
   });
   return { storagePath: saved, displayUrl, doc };
+}
+
+/** Fetch all version records for a document or estimate slot */
+export async function fetchExecutionDocumentVersions(doc: any): Promise<any[]> {
+  if (!doc?.id) return [];
+  if (!isBoltMode) {
+    const res = await apiFetch(`/api/operations/execution-documents/${doc.id}/versions`, null);
+    return res.ok ? res.json() : [];
+  }
+  const companyId = doc.companyId || getActiveCompanyId();
+  const docType = doc.documentType || doc.type;
+  let query = supabase
+    .from("execution_documents")
+    .select("*")
+    .eq("company_id", companyId)
+    .eq("estimate_id", doc.estimateId);
+  if (docType) {
+    query = query.eq("document_type", docType);
+  }
+  const { data } = await query.order("version", { ascending: false });
+  return (data || []).map(toCamel);
+}
+
+/**
+ * Robustly replace an existing execution document:
+ * 1. Uploads new file to Supabase storage.
+ * 2. Marks old document as replaced and links replaced_by_document_id.
+ * 3. Registers new document version with incremented version number.
+ * 4. Synchronizes parent estimate PO or delivery challan file paths where applicable.
+ */
+export async function replaceExecutionDocument(
+  token: string | null,
+  doc: any,
+  file: File
+): Promise<{ newDoc: any; displayUrl: string }> {
+  const estimateId = doc.estimateId;
+  if (!estimateId) throw new Error("No estimate context for document replacement");
+  const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+  const storeCode = doc.storeCode || "misc";
+  const docType = doc.documentType || doc.type || "document";
+  const storagePath = `estimate-${estimateId}/${storeCode}/${Date.now()}-${safeName}`;
+  const { storagePath: saved, displayUrl } = await uploadToStorage("execution-documents", storagePath, file);
+
+  const companyId = doc.companyId || getActiveCompanyId();
+  const nextVersion = (Number(doc.version) || 1) + 1;
+
+  // 1. Register new document with incremented version and metadata reference
+  const newDoc = await registerExecutionDocument(token, {
+    estimateId,
+    storeCode: doc.storeCode || "",
+    documentType: docType,
+    filePath: saved,
+    originalFileName: file.name,
+    mimeType: file.type || null,
+    fileSize: file.size || null,
+    uploadedVia: doc.uploadedVia || "project_workspace",
+    companyId,
+    metadata: {
+      ...(doc.metadata || {}),
+      replacedDocumentId: doc.id,
+    },
+  });
+
+  // 2. Mark previous document as replaced
+  if (doc.id) {
+    if (isBoltMode) {
+      await supabase
+        .from("execution_documents")
+        .update({
+          status: "replaced",
+          replaced_by_document_id: newDoc.id,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", doc.id);
+    } else {
+      await edgeFetch("exec-doc-update", token, {
+        method: "PATCH",
+        body: JSON.stringify({
+          id: doc.id,
+          status: "replaced",
+          replaced_by_document_id: newDoc.id,
+          updated_at: new Date().toISOString(),
+        }),
+      }).catch(() => undefined);
+    }
+  }
+
+  // 3. If replacing a PO, keep parent estimate.po_file_path synchronized
+  const docTypeLower = String(docType).toLowerCase();
+  if (docTypeLower === "po" || docTypeLower === "client_po") {
+    await supabase
+      .from("estimates")
+      .update({ po_file_path: saved })
+      .eq("id", estimateId);
+  }
+
+  // 4. If linked to a delivery challan, keep challan path synchronized
+  if (doc.deliveryChallanId) {
+    const fieldMap: Record<string, string> = {
+      signed_wcc: "signed_challan_path",
+      signed_dc: "signed_challan_path",
+      photo: "photo_path",
+      wcc_photo: "photo_path",
+      transport_receipt: "transport_receipt_path",
+      extra: "extra_doc_path",
+    };
+    const col = fieldMap[docTypeLower];
+    if (col) {
+      await supabase
+        .from("delivery_challans")
+        .update({ [col]: saved })
+        .eq("id", doc.deliveryChallanId);
+    }
+  }
+
+  return { newDoc, displayUrl };
 }
 
 /** Generate a 2-hour signed URL for a private execution-documents storage path. */

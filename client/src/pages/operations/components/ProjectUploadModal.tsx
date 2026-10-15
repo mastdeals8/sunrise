@@ -4,7 +4,7 @@ import {
   File, AlertCircle, CheckCircle, Loader,
 } from "lucide-react";
 import { isBoltMode } from "../../../lib/supabase";
-import { uploadToStorage, registerExecutionDocument } from "../../../lib/api";
+import { uploadToStorage, registerExecutionDocument, getActiveCompanyId } from "../../../lib/api";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -30,6 +30,7 @@ interface Props {
   token: string | null;
   onClose: () => void;
   onSuccess: () => void;
+  companyId?: number;
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -57,7 +58,7 @@ const makePreview = (f: File): string | null => {
 // ── Component ─────────────────────────────────────────────────────────────────
 
 const ProjectUploadModal: React.FC<Props> = ({
-  mode, estimateId, stores, token, onClose, onSuccess,
+  mode, estimateId, stores, token, onClose, onSuccess, companyId,
 }) => {
   const [pending, setPending] = React.useState<PendingFile[]>([]);
   const [defaultStore, setDefaultStore] = React.useState(stores[0]?.storeCode ?? "");
@@ -180,6 +181,7 @@ const ProjectUploadModal: React.FC<Props> = ({
           fileSize: p.file.size || null,
           uploadedVia: "project_workspace",
           metadata: mode === "photo" ? { photoType: p.photoType } : {},
+          companyId: companyId || getActiveCompanyId(),
         });
       } catch (err: any) {
         errs.push(`${p.file.name}: ${err?.message ?? "Failed"}`);

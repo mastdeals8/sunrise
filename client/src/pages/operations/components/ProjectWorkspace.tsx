@@ -1,6 +1,6 @@
 import React from "react";
 import { isBoltMode, supabase } from "../../../lib/supabase";
-import { fetchEstimateItems, fetchDeliveryChallansForEstimate, fetchExecutionStores, fetchExecutionDocuments, fetchInvoiceForEstimate, uploadToStorage, registerExecutionDocument, deleteExecutionDocument, openExecutionDocument, isActiveDeliveryChallan, isWccDeliveryChallan } from "../../../lib/api";
+import { fetchEstimateItems, fetchDeliveryChallansForEstimate, fetchExecutionStores, fetchExecutionDocuments, fetchInvoiceForEstimate, uploadToStorage, registerExecutionDocument, deleteExecutionDocument, openExecutionDocument, isActiveDeliveryChallan, isWccDeliveryChallan, getActiveCompanyId } from "../../../lib/api";
 import { ArrowLeft, Camera, CircleCheck as CheckCircle, CircleCheck as CheckCircle2, ChevronRight, Clock, Download, ExternalLink, Eye, File, FileCheck2, FilePlus, FileText, FileUp, Image as ImageIcon, IndianRupee, MapPin, Package, Paperclip, Printer, RefreshCw, Trash2, TrendingUp, Truck, Upload, X, CircleAlert as AlertCircle, Activity as ActivityIcon, Zap } from "lucide-react";
 import { StatusBadge } from "@/components/ui-kit";
 import type { Client, Brand, Store, Estimate, DeliveryChallan, Product } from "../types";
@@ -601,6 +601,7 @@ const StoreDrawer: React.FC<{
         mimeType: file.type || null,
         fileSize: file.size || null,
         uploadedVia: "project_workspace",
+        companyId: estimate.companyId || (estimate as any).company_id || getActiveCompanyId(),
       });
       onRefresh();
     } catch (e: any) {
@@ -1472,6 +1473,7 @@ const DocumentsTab: React.FC<{
           mimeType: file.type || null,
           fileSize: file.size || null,
           uploadedVia: "project_workspace",
+          companyId: estimate.companyId || (estimate as any).company_id || getActiveCompanyId(),
         });
       } else {
         const fd = new FormData();
@@ -1521,6 +1523,7 @@ const DocumentsTab: React.FC<{
         mimeType: file.type || null,
         fileSize: file.size || null,
         uploadedVia: "project_workspace",
+        companyId: estimate.companyId || (estimate as any).company_id || getActiveCompanyId(),
       });
       onRefresh();
     } catch (e: any) {
@@ -2240,6 +2243,7 @@ const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({
           estimateId={estimate.id}
           stores={modalStores}
           token={token}
+          companyId={estimate.companyId || (estimate as any).company_id}
           onClose={() => setUploadModal(null)}
           onSuccess={refresh}
         />
