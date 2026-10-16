@@ -437,8 +437,8 @@ export const estimates = pgTable("estimates", {
   // Falls back to createdAt for legacy rows (backfilled by additive migration).
   estimateDate: timestamp("estimate_date"),
   clientId: integer("client_id").references(() => clients.id, { onDelete: 'cascade' }).notNull(),
-  brandId: integer("brand_id").references(() => brands.id, { onDelete: 'cascade' }).notNull(),
-  storeId: integer("store_id").references(() => stores.id, { onDelete: 'cascade' }).notNull(),
+  brandId: integer("brand_id").references(() => brands.id, { onDelete: 'cascade' }),
+  storeId: integer("store_id").references(() => stores.id, { onDelete: 'cascade' }),
   title: text("title").notNull(),
   description: text("description"),
   subtotal: real("subtotal").notNull().default(0),

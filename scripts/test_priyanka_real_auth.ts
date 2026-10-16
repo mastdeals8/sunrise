@@ -210,12 +210,13 @@ async function runRealAuthSuite() {
 
   // 10. Test Brand, Store & Estimate Creation in Workspace 2
   console.log('\n>>> [STEP 10] Testing Estimate Creation with New Client in Workspace 2...');
+  const uniqueSuffix = String(Date.now());
   const { data: brandRes, error: brandErr } = await priyankaClient.rpc('save_master_data_atomic', {
     p_entity: 'brands',
     p_method: 'POST',
     p_id: null,
     p_payload: {
-      name: 'Priyanka Test Brand',
+      name: `Priyanka Test Brand ${uniqueSuffix}`,
       parentClientId: createdClientId,
       companyId: 2
     }
@@ -231,11 +232,11 @@ async function runRealAuthSuite() {
     p_method: 'POST',
     p_id: null,
     p_payload: {
-      name: 'Priyanka Test Store Delhi',
+      name: `Priyanka Test Store ${uniqueSuffix}`,
       clientId: createdClientId,
       brandId: createdBrandId,
       companyId: 2,
-      storeCode: 'DEL-STR-01',
+      storeCode: `DEL-STR-${uniqueSuffix.slice(-6)}`,
       city: 'Delhi',
       state: 'Delhi'
     }

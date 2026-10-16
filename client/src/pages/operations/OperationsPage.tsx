@@ -564,10 +564,14 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
       return { ...row, calculationType: effectiveCalcType, unit: effectiveUnit, ...calc };
     });
 
+    const totalMaterialBase = productRowsCalculated.reduce((acc, row) => {
+      if (isServiceLineType(row.lineType)) return acc;
+      return acc + (Number(row.amount) || 0);
+    }, 0);
+
     const materialBaseByStore = productRowsCalculated.reduce<Record<string, number>>((acc, row) => {
       if (isServiceLineType(row.lineType)) return acc;
       const sid = String(row.storeId || "");
-      if (!sid) return acc;
       acc[sid] = (acc[sid] || 0) + (Number(row.amount) || 0);
       return acc;
     }, {});
@@ -576,6 +580,9 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
       if (!isServiceLineType(row.lineType)) return row;
       const materialCode = materialCodes.find(m => m.id === row.materialCodeId || m.code === row.materialCode);
       const gstPct = materialCode?.gstPercent || defaultGstPct;
+      const sid = String(row.storeId || "");
+      const storeBase = sid ? materialBaseByStore[sid] : undefined;
+      const baseForThisRow = storeBase !== undefined ? storeBase : totalMaterialBase;
       const calc = row.lineType === "transport" && row.unit === "km"
         ? calculateEstimateRowValues(
           "fixed",
@@ -588,7 +595,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
         )
         : calculateServiceChargeRowValues(
           row.rate,
-          materialBaseByStore[String(row.storeId || "")] || 0,
+          baseForThisRow,
           gstPct,
           gstTypeValue,
         );
@@ -1764,14 +1771,34 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     isSavingEstimateRef.current = true;
     setIsSaving(true);
 
-    if ((!isBoltMode && !estNumber) || !estClientId || !estBrandId) {
+    const isAbfrl = isAblblFormat(estFormat);
+
+    if (!estClientId) {
       isSavingEstimateRef.current = false;
       setIsSaving(false);
+      setMessage("Please select a client before saving.");
+      setTimeout(() => setMessage(""), 5000);
+      return;
+    }
+    if (isAbfrl && !estBrandId) {
+      isSavingEstimateRef.current = false;
+      setIsSaving(false);
+      setMessage("Brand is required for ABFRL estimates.");
+      setTimeout(() => setMessage(""), 5000);
+      return;
+    }
+    if (!isBoltMode && !estNumber) {
+      isSavingEstimateRef.current = false;
+      setIsSaving(false);
+      setMessage("Estimate Number is required.");
+      setTimeout(() => setMessage(""), 5000);
       return;
     }
     if (!estTitle && !estSubject) {
       isSavingEstimateRef.current = false;
       setIsSaving(false);
+      setMessage("Please provide an Estimate Title or Subject.");
+      setTimeout(() => setMessage(""), 5000);
       return;
     }
 
@@ -1822,7 +1849,6 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     // ABFRL CAPEX rule: every line must have a material code.
     // ABFRL SELEX: material code is optional.
     // Non-ABFRL: not enforced.
-    const isAbfrl = isAblblFormat(estFormat);
     const effectiveProfileCode = estFormatProfileCode
       || (isAbfrl ? "ABLBL" : (estFormat === "RETAIL_SINGLE_STORE" ? "RETAIL_SINGLE_STORE" : "normal"));
     const profile = getEstimateFormatProfile(effectiveProfileCode);
@@ -1958,13 +1984,14 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
         estimateNumber: estNumber,
         estimateDate: estDate || todayYmd,
         clientId: Number(estClientId),
-        brandId: Number(estBrandId),
+        brandId: estBrandId ? Number(estBrandId) : null,
         storeId: (profile.code === "RETAIL_SINGLE_STORE" && estStoreId)
           ? Number(estStoreId)
-          : (Number(estStoreId)
-            || Number(Object.keys(storeGrouping)[0])
-            || stores.find(s => s.clientId === Number(estClientId))?.id
-            || 1),
+          : (estStoreId
+            ? Number(estStoreId)
+            : (Object.keys(storeGrouping).length > 0
+              ? Number(Object.keys(storeGrouping)[0])
+              : (stores.find(s => s.clientId === Number(estClientId))?.id || null))),
         title: estTitle || estSubject || estNumber,
         description: estDescription || null,
         subtotal: estimateSubtotal,
@@ -1981,9 +2008,9 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
         stateCode: estStateCode || null,
         vendorCode: estVendorCode || null,
         gstType: estGstType,
-        packingPercent: 0,
-        implementationPercent: 0,
-        transportAmount: 0,
+        packingPercent: Number(estPacking) || 0,
+        implementationPercent: Number(estImplementation) || 0,
+        transportAmount: Number(estTransport) || 0,
         storeGrouping: isAbfrl && Object.keys(storeGrouping).length > 0 ? storeGrouping : null,
         billingProfileId: estBillingProfileId ? Number(estBillingProfileId) : null,
         // CAPEX/SELEX uses the existing persisted project-type field. Normal

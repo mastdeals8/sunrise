@@ -2488,11 +2488,18 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                   !sellerProfile?.stateCode ? "State Code" : "",
                   !sellerContact ? "Contact Information" : "",
                 ].filter(Boolean);
+                const isCashCustomer = Boolean(eClient && (eClient.name?.toLowerCase() === "cash" || eClient.clientType === "walk_in"));
+                const gstBadgeText = isCashCustomer
+                  ? (estGstin ? "GST Loaded" : "Cash Customer")
+                  : (estGstin || estStateCode ? "GST Loaded" : "GST Missing");
+                const gstBadgeClass = isCashCustomer
+                  ? "ok"
+                  : (estGstin || estStateCode ? "ok" : "warn");
                 const compactHeaderBits = [
                   estNumber || "Draft",
                   estSubject || estTitle || "Untitled Estimate",
                   normalizeDisplayName(eClient?.name) || "No Client",
-                  estGstin || estStateCode ? "GST Loaded" : "GST Missing",
+                  gstBadgeText,
                 ];
 
                 // storeBreakdown and grand totals are memoized at component level
@@ -3195,7 +3202,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                         <b>{compactHeaderBits[0]}</b>
                         <span>{compactHeaderBits[1]}</span>
                         <span>{compactHeaderBits[2]}</span>
-                        <strong className={compactHeaderBits[3] === "GST Loaded" ? "ok" : "warn"}>{compactHeaderBits[3]}</strong>
+                        <strong className={gstBadgeClass}>{compactHeaderBits[3]}</strong>
                         {!headerExpanded && (
                           <button type="button" className="eb-show-details-btn" onClick={() => setHeaderExpanded(true)}>
                             <ChevronDown className="w-3.5 h-3.5" /> Show Estimate Details
@@ -4036,7 +4043,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                     </div>
 
                     {/* Grand totals */}
-                    {activeStoreIds.length > 0 && (
+                    {(activeStoreIds.length > 0 || (!eIsAbfrl && estItems.length > 0)) && (
                       <table className="w-full border-collapse text-[11px]">
                         <tbody>
                           <tr>
