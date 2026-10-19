@@ -138,10 +138,12 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({
 
   const logoUrl = companyAssetUrl(sellerProfile?.logoPath || (isCompany1 ? "/brand/file-1780929283382-585314307.png" : ""), token);
   const { dataUrl: logoDataUrl, ready: logoReady } = useDataUrl(logoUrl);
-  const sigUrl = companyAssetUrl(sellerProfile?.signaturePath || sellerProfile?.signatureStampPath || (isCompany1 ? "/brand/file-1780897714393-225895475.png" : ""), token);
-  const { dataUrl: sigDataUrl, ready: sigReady } = useDataUrl(sigUrl);
-  const sealUrl = companyAssetUrl(sellerProfile?.sealPath, token);
-  const { dataUrl: sealDataUrl, ready: sealReady } = useDataUrl(sealUrl);
+  // Invoices use a single combined stamp-and-signature image (from sealPath or signatureStampPath/signaturePath).
+  // The separate signature is intentionally blank and duplicate signature rendering is removed.
+  // Stale fallback to old /brand/file-1780897714393-225895475.png is eliminated.
+  const stampSignAssetPath = sellerProfile?.sealPath || sellerProfile?.signatureStampPath || sellerProfile?.signaturePath || "";
+  const stampSignUrl = companyAssetUrl(stampSignAssetPath, token);
+  const { dataUrl: stampSignDataUrl, ready: stampSignReady } = useDataUrl(stampSignUrl);
 
   const footerBgColor = sellerProfile?.footerBgColor || "#f59e0b";
   const footerTextColor = sellerProfile?.footerTextColor || "#ffffff";
@@ -152,10 +154,10 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({
   const docFooterText = sellerProfile?.docFooterText || sellerProfile?.documentFooter || "";
 
   useEffect(() => {
-    if (logoReady && sigReady && sealReady) {
+    if (logoReady && stampSignReady) {
       document.documentElement.setAttribute("data-invoice-images-ready", "true");
     }
-  }, [logoReady, sigReady, sealReady]);
+  }, [logoReady, stampSignReady]);
 
   const billingName = est?.billingLegalNameSnapshot || inv.partyName || client?.name || "";
   const billingAddress = est?.billingAddressSnapshot || client?.address || "";
@@ -581,19 +583,12 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({
                 <div style={{ fontSize: "8.5px", lineHeight: 1.4 }}>IFSC No. : {sellerProfile?.bankIfsc || "HDFC0001794"}</div>
               </td>
               <td style={{ ...cellBase, padding: "6px 8px", textAlign: "center", verticalAlign: "bottom" }}>
-                <div style={{ height: "46px", display: "flex", alignItems: "center", justifyContent: "center", gap: "8px" }}>
-                  {sealDataUrl && (
+                <div style={{ height: "46px", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  {stampSignDataUrl && (
                     <img
-                      src={sealDataUrl}
-                      alt="Company seal"
-                      style={{ maxHeight: "42px", maxWidth: "60px", objectFit: "contain" }}
-                    />
-                  )}
-                  {sigDataUrl && (
-                    <img
-                      src={sigDataUrl}
+                      src={stampSignDataUrl}
                       alt="Signature and stamp"
-                      style={{ maxHeight: "42px", maxWidth: sealDataUrl ? "80px" : "130px", objectFit: "contain" }}
+                      style={{ maxHeight: "44px", maxWidth: "140px", objectFit: "contain" }}
                     />
                   )}
                 </div>

@@ -1252,9 +1252,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     defaultInvoicePrefix: "SM/INV",
     defaultDcPrefix: "SM/DC",
     logoPath: "/brand/file-1780929283382-585314307.png",
-    signatureStampPath: "/brand/file-1780897714393-225895475.png",
-    signaturePath: "/brand/file-1780897714393-225895475.png",
-    sealPath: "/brand/file-1780897714393-225895475.png",
+    signatureStampPath: "",
+    signaturePath: "",
+    sealPath: "",
     footerBgColor: "#f59e0b",
     footerTextColor: "#ffffff",
     headerBgColor: "#ffffff",
@@ -1361,9 +1361,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         defaultInvoicePrefix: company.invoicePrefix || "INV",
         defaultDcPrefix: company.dcPrefix || "DC",
         logoPath: company.logoPath || "",
-        signaturePath: company.signaturePath || company.signatureStampPath || "",
+        signaturePath: company.signaturePath || "",
         sealPath: company.sealPath || company.signatureStampPath || "",
-        signatureStampPath: company.signatureStampPath || company.signaturePath || "",
+        signatureStampPath: company.signatureStampPath || "",
         footerBgColor: company.footerBgColor || "#f59e0b",
         footerTextColor: company.footerTextColor || "#ffffff",
         headerBgColor: company.headerBgColor || "#ffffff",
@@ -1403,9 +1403,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (company.invoicePrefix) out.defaultInvoicePrefix = company.invoicePrefix;
       if (company.dcPrefix) out.defaultDcPrefix = company.dcPrefix;
       if (company.logoPath) out.logoPath = company.logoPath;
-      if (company.signaturePath) out.signaturePath = company.signaturePath;
-      if (company.sealPath) out.sealPath = company.sealPath;
-      if (company.signatureStampPath) out.signatureStampPath = company.signatureStampPath;
+      out.signaturePath = company.signaturePath || "";
+      out.sealPath = company.sealPath || company.signatureStampPath || "";
+      out.signatureStampPath = company.signatureStampPath || "";
       if (company.footerBgColor) out.footerBgColor = company.footerBgColor;
       if (company.footerTextColor) out.footerTextColor = company.footerTextColor;
       if (company.headerBgColor) out.headerBgColor = company.headerBgColor;
