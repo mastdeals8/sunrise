@@ -1153,10 +1153,14 @@ export class DatabaseStorage implements IStorage {
   // ==========================================
   // Material Codes (additive)
   // ==========================================
-  async getAllMaterialCodes(filters?: { clientId?: number; brandId?: number }) {
+  async getAllMaterialCodes(filters?: { clientId?: number; brandId?: number; companyId?: number }) {
     try {
       let q: any = db.select().from(materialCodes);
       const conds: any[] = [];
+
+      if (filters?.companyId) {
+        conds.push(eq(materialCodes.companyId, filters.companyId));
+      }
 
       // If clientId provided, filter by clientId
       if (filters?.clientId) {

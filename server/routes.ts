@@ -2,7 +2,7 @@ import { createServer, type Server } from "http";
 import express, { type Express, Request, Response, NextFunction } from "express";
 import { storage, sanitizeUser } from "./storage";
 import { hashPassword, comparePassword, generateToken, authenticateToken, authenticateBrowserRequest, requireRole, setSessionCookie, clearSessionCookie, AuthRequest } from "./auth";
-import { insertUserSchema, insertAttendanceSchema, insertTaskSchema, insertPettyCashExpenseSchema, insertInvoiceSchema, insertPaymentSchema, insertChartOfAccountSchema, insertClientSchema, insertClientBillingProfileSchema, insertBrandSchema, insertStoreSchema, insertProductSchema, insertEstimateSchema, insertEstimateItemSchema, insertStaffAdvanceSchema, insertPayrollSchema, insertDeliveryChallanSchema, clients, brands, stores, products, invoices, payments, botSettings, botUploadInbox, webhookLogs, customerRateCards, customerRateItems, estimates, estimateItems, estimateRevisions, deliveryChallans, executionDocuments, executionStores, fieldAccessLinks, staffAdvances, attendance, projectStoreStatus, users, telegramDeliveries, companyUsers } from "../shared/schema";
+import { insertUserSchema, insertAttendanceSchema, insertTaskSchema, insertPettyCashExpenseSchema, insertInvoiceSchema, insertPaymentSchema, insertChartOfAccountSchema, insertClientSchema, insertClientBillingProfileSchema, insertBrandSchema, insertStoreSchema, insertProductSchema, insertEstimateSchema, insertEstimateItemSchema, insertStaffAdvanceSchema, insertPayrollSchema, insertDeliveryChallanSchema, clients, brands, stores, products, invoices, payments, botSettings, botUploadInbox, webhookLogs, customerRateCards, customerRateItems, estimates, estimateItems, estimateRevisions, deliveryChallans, executionDocuments, executionStores, fieldAccessLinks, staffAdvances, attendance, projectStoreStatus, users, telegramDeliveries, companyUsers, materialCodes } from "../shared/schema";
 import { db, pool } from "./db";
 import { inArray, eq, sql, and, ne } from "drizzle-orm";
 import { z } from "zod";
@@ -5789,7 +5789,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const clientId = req.query.clientId ? parseInt(req.query.clientId as string, 10) : undefined;
       const brandId = req.query.brandId ? parseInt(req.query.brandId as string, 10) : undefined;
-      const list = await storage.getAllMaterialCodes({ clientId, brandId });
+      const list = await storage.getAllMaterialCodes({ clientId, brandId, companyId: req.companyId || 1 });
       res.json(list);
     } catch (err: any) {
       res.status(500).json({ message: err.message });
@@ -5798,7 +5798,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/operations/material-codes", authenticateToken, requireRole(["admin", "manager", "designer", "accounts"]), async (req: AuthRequest, res: Response) => {
     try {
-      const created = await storage.createMaterialCode(req.body);
+      const created = await storage.createMaterialCode({ ...req.body, companyId: req.companyId || 1 });
       res.status(201).json(created);
     } catch (err: any) {
       res.status(500).json({ message: err.message });
@@ -6356,10 +6356,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
            (materialCodeId !== null && it.materialCodeId === materialCodeId))
         );
         if (match && Number(match.rate) > 0) {
+          let mcCode: string | null = null;
+          let mcDesc: string | null = null;
+          if (match.materialCodeId) {
+            const [mc] = await db.select().from(materialCodes).where(eq(materialCodes.id, match.materialCodeId)).limit(1);
+            if (mc) {
+              mcCode = mc.code;
+              mcDesc = mc.description;
+            }
+          }
           return res.json({
             rateCardId: card.id,
             productId: match.productId,
             materialCodeId: match.materialCodeId,
+            materialCode: mcCode,
+            materialDescription: mcDesc,
             rate: match.rate,
             gstPercent: match.gstPercent,
             uom: match.uom,

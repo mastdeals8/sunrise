@@ -2960,7 +2960,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                   column: EstimateGridColumn,
                   field: string,
                   fallback: string,
-                  opts: { align?: "left" | "right"; inputMode?: React.HTMLAttributes<HTMLInputElement>["inputMode"]; fontWeight?: number; placeholder?: string; fontFamily?: string } = {},
+                  opts: { align?: "left" | "right"; inputMode?: React.HTMLAttributes<HTMLInputElement>["inputMode"]; fontWeight?: number; placeholder?: string; fontFamily?: string; title?: string } = {},
                 ) => {
                   const editing = isEditingCell(rowIndex, column.id);
                   const value = editing ? getDraft(rowIndex, column.id, fallback) : String(fallback ?? "");
@@ -2974,6 +2974,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                         readOnly={!editing}
                         value={value}
                         placeholder={opts.placeholder}
+                        title={opts.title}
                         onFocus={() => {
                           selectSingleRow(rowIndex);
                           setActiveCell({ rowIndex, columnId: column.id });
@@ -3063,7 +3064,13 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                     );
                   }
                   if (column.id === "element") return renderTextInput(item, rowIndex, column, "itemName", item.itemName || "", { fontWeight: 600, placeholder: "Visual" });
-                  if (column.id === "materialCode") return renderTextInput(item, rowIndex, column, "materialCode", item.materialCode || "", { fontFamily: "monospace", placeholder: "Auto" });
+                  if (column.id === "materialCode") {
+                    return renderTextInput(item, rowIndex, column, "materialCode", item.materialCode || "", {
+                      fontFamily: "monospace",
+                      placeholder: "Auto",
+                      title: item.materialCode ? `Material Code: ${item.materialCode}` : "Auto: No matching code found in master data (manual entry allowed)"
+                    });
+                  }
                   if (column.id === "hsn") return renderTextInput(item, rowIndex, column, "hsn", item.hsn || "", { placeholder: "HSN" });
                   if (column.id === "standard") {
                     const editing = isEditingCell(rowIndex, column.id);

@@ -1525,6 +1525,9 @@ export async function resolveCustomerRate(
   rateCardName: string;
   calculationType?: string;
   itemName?: string;
+  materialCodeId?: number | null;
+  materialCode?: string | null;
+  materialDescription?: string | null;
 } | null> {
   if (!isBoltMode) {
     const q = new URLSearchParams({ clientId: String(params.clientId) });

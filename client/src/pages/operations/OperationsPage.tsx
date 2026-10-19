@@ -55,6 +55,7 @@ import { importFieldsMap } from "./utils/importFieldsMap";
 import { displayFormatLabel, isAblblFormat, normalizeDisplayName, normalizeFormatMode, normalizeGstinPan } from "../../../../shared/textFormat";
 import { getEstimateFormatProfile, isRetailSingleStoreFormat, isMultiStoreFormat, normalizeFormatProfileCode } from "../../../../shared/estimateProfiles";
 import { DuplicateEstimateStoresModal } from "./components/DuplicateEstimateStoresModal";
+import { resolveMatchingMaterialCode } from "./utils/materialCodeResolution";
 import { Building2, Tag, MapPin, Package, FileText, Plus, CircleCheck as CheckCircle, Trash, ShoppingBag, Download, Upload, Eye, Check, X, FileSpreadsheet, Image as ImageIcon, FileUp, Printer, ChevronDown, ChevronRight, Scale, CircleAlert as AlertCircle, Clock, Briefcase, Database, Copy, Truck, Receipt, Clipboard, ClipboardPaste, FolderOpen } from "lucide-react";
 
 const MATERIAL_CODE_MASTER = [
@@ -1124,21 +1125,18 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
       updated[index].materialCode = "";
       updated[index].materialDescription = "";
 
-      // Auto-fill material code from product's linked material code (additive)
-      if (selectedProd.materialCodeId) {
-        const linkedMc = materialCodes.find(m => m.id === selectedProd.materialCodeId);
-        if (linkedMc) {
-          updated[index].materialCodeId = linkedMc.id;
-          updated[index].materialCode = linkedMc.code;
-          updated[index].materialDescription = linkedMc.description || "";
-          if (!updated[index].hsn && linkedMc.hsn) updated[index].hsn = linkedMc.hsn;
-        } else {
-          // legacy text material code on product
-          updated[index].materialCode = selectedProd.materialCode || "";
-        }
-      } else {
-        // fallback: legacy text-only material code field on product
-        updated[index].materialCode = selectedProd.materialCode || "";
+      // Auto-fill material code using canonical resolver (additive)
+      const resolvedMc = resolveMatchingMaterialCode(selectedProd, materialCodes, {
+        companyId: activeCompanyId || 1,
+        clientId: estClientId ? Number(estClientId) : null,
+        brandId: estBrandId ? Number(estBrandId) : null,
+      });
+      updated[index].materialCodeId = resolvedMc.materialCodeId;
+      updated[index].materialCode = resolvedMc.materialCode;
+      updated[index].materialDescription = resolvedMc.materialDescription;
+      if (!updated[index].hsn && resolvedMc.materialCodeId) {
+        const linkedMc = materialCodes.find(m => m.id === resolvedMc.materialCodeId);
+        if (linkedMc?.hsn) updated[index].hsn = linkedMc.hsn;
       }
 
       const calc = calculateEstimateRowValues(
@@ -1189,6 +1187,11 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
         row.rate = String(data.rate);
         if (data.uom) row.unit = data.uom;
         row.rateSource = "rate_card";
+        if (data.materialCode || data.materialCodeId) {
+          row.materialCodeId = data.materialCodeId ?? row.materialCodeId ?? null;
+          row.materialCode = data.materialCode || row.materialCode || "";
+          row.materialDescription = data.materialDescription || row.materialDescription || "";
+        }
         const gst = Number(data.gstPercent ?? 18);
         const calc = calculateEstimateRowValues(
           row.calculationType,
@@ -2069,8 +2072,12 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
         // Optimistically patch the local estimates array so the register
         // shows the updated amount the instant the form closes.
         if (editingEstimateId && savedEstimate) {
+          const patched = {
+            ...savedEstimate,
+            abfrlProjectType: savedEstimate.abfrlProjectType ?? estAbfrlProjectType ?? null,
+          };
           setEstimates(prev =>
-            prev.map(e => (e.id === editingEstimateId ? { ...e, ...savedEstimate } : e))
+            prev.map(e => (e.id === editingEstimateId ? { ...e, ...patched } : e))
           );
         }
 
@@ -2343,14 +2350,25 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
         const normalizedServiceLabel = isServiceLineType(lineType)
           ? serviceProductLabel({ ...item, lineType, rate: parseRateInput(repairedRate) }, products)
           : undefined;
+        const resolvedMc = resolveMatchingMaterialCode(
+          item.productId ? products.find(p => p.id === Number(item.productId)) : null,
+          materialCodes,
+          {
+            companyId: est.companyId || activeCompanyId || 1,
+            clientId: est.clientId,
+            brandId: est.brandId,
+            existingCode: item.materialCode,
+            existingCodeId: item.materialCodeId,
+          }
+        );
         return {
           sl: Number(item.sl) || idx + 1,
           productId: item.productId ? String(item.productId) : "",
           isStandard: item.isStandard !== false,
           hsn: item.hsn || "",
-          materialCode: item.materialCode || "",
-          materialCodeId: item.materialCodeId ?? null,
-          materialDescription: item.materialDescription || "",
+          materialCode: resolvedMc.materialCode || item.materialCode || "",
+          materialCodeId: resolvedMc.materialCodeId ?? item.materialCodeId ?? null,
+          materialDescription: resolvedMc.materialDescription || item.materialDescription || "",
           itemName: normalizedServiceLabel || item.itemName || "",
           width: item.width != null ? String(item.width) : "",
           height: item.height != null ? String(item.height) : "",
