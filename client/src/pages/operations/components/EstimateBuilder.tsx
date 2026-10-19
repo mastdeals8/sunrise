@@ -1300,7 +1300,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
   }, []);
 
   const editableColumnIds = React.useMemo<EstimateGridColumnId[]>(() => ([
-    "element", "product", "hsn", "standard", "width", "height", "quantity", "rate"
+    "element", "product", "materialCode", "hsn", "standard", "width", "height", "quantity", "rate"
   ]), []);
 
   const getCellKey = (rowIndex: number, columnId: EstimateGridColumnId) => `${rowIndex}:${columnId}`;
@@ -2506,7 +2506,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                 const storeBreakdown = storeBreakdownMemo.breakdown;
                 const { grandMaterial, grandSgst, grandCgst, grandIgst, grandTotal } = storeBreakdownMemo;
                 const showStandardColumn = eIsAbfrl;
-                const showMaterialCodeColumn = eIsAbfrl && estAbfrlProjectType === "CAPEX";
+                const showMaterialCodeColumn = eIsAbfrl && String(estAbfrlProjectType || "").trim().toUpperCase() === "CAPEX";
                 const gridColumns = buildEstimateColumns(showMaterialCodeColumn, showStandardColumn, columnPrefs);
                 const tableCols = gridColumns.length;
                 const navigableColumnIds = gridColumns
@@ -2814,7 +2814,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                     event.preventDefault();
                     // Cell paste: read clipboard and inject into this cell (not editing).
                     // Only for text/numeric input columns; product/standard fall through to row paste.
-                    const cellPasteCols: EstimateGridColumnId[] = ["element", "hsn", "width", "height", "quantity", "rate"];
+                    const cellPasteCols: EstimateGridColumnId[] = ["element", "materialCode", "hsn", "width", "height", "quantity", "rate"];
                     if (cellPasteCols.includes(columnId)) {
                       void navigator.clipboard?.readText?.().then(text => {
                         const trimmed = (text ?? "").trim();
@@ -2975,6 +2975,11 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                         value={value}
                         placeholder={opts.placeholder}
                         title={opts.title}
+                        onClick={() => {
+                          if (!editing && editableColumnIds.includes(column.id)) {
+                            beginEditCell(rowIndex, column.id);
+                          }
+                        }}
                         onFocus={() => {
                           selectSingleRow(rowIndex);
                           setActiveCell({ rowIndex, columnId: column.id });
@@ -3068,7 +3073,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                     return renderTextInput(item, rowIndex, column, "materialCode", item.materialCode || "", {
                       fontFamily: "monospace",
                       placeholder: "Auto",
-                      title: item.materialCode ? `Material Code: ${item.materialCode}` : "Auto: No matching code found in master data (manual entry allowed)"
+                      title: item.materialCode ? `Material Code: ${item.materialCode}` : "Auto: No matching code found in master data (click to enter manual code)"
                     });
                   }
                   if (column.id === "hsn") return renderTextInput(item, rowIndex, column, "hsn", item.hsn || "", { placeholder: "HSN" });

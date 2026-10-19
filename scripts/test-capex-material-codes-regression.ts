@@ -1,5 +1,11 @@
 import { pool } from "../server/db";
 import { resolveMatchingMaterialCode } from "../client/src/pages/operations/utils/materialCodeResolution";
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import fs from "fs";
+import path from "path";
+import EstimateDocument from "../client/src/components/EstimateDocument";
+import { exportEstimateToExcel } from "../client/src/pages/operations/utils/exportHelpers";
 import assert from "assert";
 
 async function runRegressionSuite() {
@@ -246,6 +252,192 @@ async function runRegressionSuite() {
       assert.strictEqual(c.company_id, 1, "All returned codes must belong to company 1");
     }
     console.log("✓ DB scoping for company 1 verified.");
+
+    // -------------------------------------------------------------
+    // Test 7: EstimateBuilder editableColumnIds Integrity Check
+    // -------------------------------------------------------------
+    console.log("\n[Test 7] Verifying EstimateBuilder.tsx editableColumnIds contains materialCode...");
+    const ebSource = fs.readFileSync(path.resolve(process.cwd(), "client/src/pages/operations/components/EstimateBuilder.tsx"), "utf8");
+    assert.ok(
+      ebSource.includes('"materialCode"') && ebSource.includes("editableColumnIds"),
+      "EstimateBuilder must include materialCode in editableColumnIds"
+    );
+    assert.ok(
+      ebSource.includes('const cellPasteCols: EstimateGridColumnId[] = ["element", "materialCode"'),
+      "EstimateBuilder must include materialCode in cellPasteCols"
+    );
+    console.log("✓ EstimateBuilder editableColumnIds and cellPasteCols include materialCode.");
+
+    // -------------------------------------------------------------
+    // Test 8: Code-Only Edit Save Verification on Disposable Estimate
+    // -------------------------------------------------------------
+    console.log("\n[Test 8] Testing material-code-only save on disposable estimate...");
+    const { rows: preRevCount } = await client.query(`SELECT COUNT(*) as count FROM estimate_revisions WHERE estimate_id = $1`, [disposableId]);
+    const prevRevNum = Number(preRevCount[0].count) - 1;
+
+    // Mutate only row 1 material code from "" to "MANUAL-TEST-001"
+    const codeOnlyItems = [
+      { ...updatedItems[0], materialCode: "MANUAL-TEST-001" },
+      updatedItems[1],
+      updatedItems[2],
+    ];
+    const codeOnlyPayload = {
+      ...updatedPayload,
+      items: codeOnlyItems,
+    };
+
+    await client.query(
+      `SELECT save_estimate_revision_atomic($1, $2::jsonb, $3::jsonb, 'Manual material code update', $4, 1)`,
+      [disposableId, JSON.stringify(codeOnlyPayload), JSON.stringify(codeOnlyPayload.items), prevRevNum]
+    );
+
+    const { rows: postRevCount } = await client.query(`SELECT COUNT(*) as count FROM estimate_revisions WHERE estimate_id = $1`, [disposableId]);
+    assert.strictEqual(Number(postRevCount[0].count), Number(preRevCount[0].count) + 1, "Material-code-only change MUST create a new revision");
+
+    const { rows: dispItemsCodeSaved } = await client.query(
+      `SELECT sl, item_name, material_code, total_price FROM estimate_items WHERE estimate_id = $1 ORDER BY sl`,
+      [disposableId]
+    );
+    assert.strictEqual(dispItemsCodeSaved[0].material_code, "MANUAL-TEST-001", "Row 1 material code must be updated to MANUAL-TEST-001");
+    assert.strictEqual(dispItemsCodeSaved[1].material_code, "OT_PACKING000N", "Row 2 material code must remain unchanged");
+    assert.strictEqual(dispItemsCodeSaved[2].material_code, "AUTH-MANUAL-001", "Row 3 material code must remain unchanged");
+    console.log("✓ Material-code-only edit successfully persisted atomically without financial changes.");
+
+    // -------------------------------------------------------------
+    // Test 9: Canonical EstimateDocument Markup for CAPEX
+    // -------------------------------------------------------------
+    console.log("\n[Test 9] Testing canonical EstimateDocument markup for CAPEX...");
+    const capexDocEstimate = {
+      id: disposableId,
+      estimateNumber: estNum,
+      abfrlProjectType: "CAPEX",
+      formatProfileCode: "ABLBL",
+      title: "CAPEX Test Estimate",
+      subject: "CAPEX Test Subject",
+      clientId: 1,
+      storeId: 1,
+      totalAmount: 15930,
+      subtotal: 13500,
+      taxAmount: 2430,
+      gstType: "CGST_SGST",
+    };
+    const capexDocItems = [
+      { id: 1, sl: 1, itemName: "English Signage", description: "Channel Letter Front", materialCode: "MANUAL-ENG-001", width: 10, height: 2, quantity: 1, totalPrice: 7000, totalAmount: 8260, cgstPercent: 9, cgstAmount: 630, sgstPercent: 9, sgstAmount: 630 },
+      { id: 2, sl: 2, itemName: "Marathi Signage", description: "Regional Signage", materialCode: "", width: 5, height: 2, quantity: 1, totalPrice: 3500, totalAmount: 4130, cgstPercent: 9, cgstAmount: 315, sgstPercent: 9, sgstAmount: 315 },
+      { id: 3, sl: 3, itemName: "Packing Charges", lineType: "packing", description: "Packing", materialCode: "OT_PACKING000N", quantity: 1, totalPrice: 500, totalAmount: 590, cgstPercent: 9, cgstAmount: 45, sgstPercent: 9, sgstAmount: 45 },
+    ];
+    const mockStore = [{ id: 1, name: "Pune Store", storeCode: "PN01", address: "Camp, Pune", location: "Camp", city: "Pune", state: "MH" }];
+    const mockClient = [{ id: 1, name: "Aditya Birla Fashion & Retail Ltd", address: "Mumbai", formatProfileCode: "ABLBL" }];
+
+    const capexMarkup = renderToStaticMarkup(
+      React.createElement(EstimateDocument, {
+        estimate: capexDocEstimate as any,
+        items: capexDocItems as any,
+        stores: mockStore as any,
+        clients: mockClient as any,
+        products: [],
+      })
+    );
+
+    assert.ok(capexMarkup.includes("Material Code"), "CAPEX output must include 'Material Code' column header");
+    assert.ok(capexMarkup.includes("MANUAL-ENG-001"), "CAPEX output must render manual material code");
+    assert.ok(capexMarkup.includes("OT_PACKING000N"), "CAPEX output must render service material code");
+    // Ensure "Auto" is not rendered as a stored code value
+    assert.ok(!capexMarkup.includes(">Auto<"), "Blank material code must render empty, never as 'Auto'");
+    console.log("✓ EstimateDocument renders Material Code column correctly for CAPEX.");
+
+    // -------------------------------------------------------------
+    // Test 10: Canonical EstimateDocument Markup for Non-CAPEX (SELEX) and Retail
+    // -------------------------------------------------------------
+    console.log("\n[Test 10] Testing canonical EstimateDocument markup for Non-CAPEX and Retail...");
+    const selexDocEstimate = { ...capexDocEstimate, abfrlProjectType: "SELEX" };
+    const selexMarkup = renderToStaticMarkup(
+      React.createElement(EstimateDocument, {
+        estimate: selexDocEstimate as any,
+        items: capexDocItems as any,
+        stores: mockStore as any,
+        clients: mockClient as any,
+        products: [],
+      })
+    );
+    assert.ok(!selexMarkup.includes("Material Code"), "SELEX (non-CAPEX) must NOT include 'Material Code' column");
+
+    const retailDocEstimate = { ...capexDocEstimate, formatProfileCode: "RETAIL_SINGLE_STORE" };
+    const retailClient = [{ id: 1, name: "Wakefit Innovations", formatProfileCode: "RETAIL_SINGLE_STORE" }];
+    const retailMarkup = renderToStaticMarkup(
+      React.createElement(EstimateDocument, {
+        estimate: retailDocEstimate as any,
+        items: capexDocItems as any,
+        stores: mockStore as any,
+        clients: retailClient as any,
+        products: [],
+      })
+    );
+    assert.ok(!retailMarkup.includes("Material Code"), "Retail format must NOT include 'Material Code' column");
+    console.log("✓ Non-CAPEX and Retail formats preserved without Material Code column.");
+
+    // -------------------------------------------------------------
+    // Test 11: Excel Export Verification for CAPEX
+    // -------------------------------------------------------------
+    console.log("\n[Test 11] Testing Excel export for CAPEX estimate...");
+    const capexExcelResult = await exportEstimateToExcel(
+      capexDocEstimate,
+      capexDocItems,
+      mockClient[0].name,
+      { name: "Sunrise Media" },
+      mockStore,
+      [],
+    );
+    const capexWb = capexExcelResult.workbook;
+    const capexWs = capexWb.Sheets["Estimate"];
+    assert.ok(capexWs, "Worksheet 'Estimate' must exist in workbook");
+
+    // Inspect cells in sheet
+    let foundMaterialCodeHeader = false;
+    let foundManualCodeCell = false;
+    let foundPackingCodeCell = false;
+    let foundAutoCell = false;
+
+    for (const key of Object.keys(capexWs)) {
+      if (key.startsWith("!")) continue;
+      const cell = capexWs[key];
+      const val = String(cell?.v ?? "").trim();
+      if (val === "MATERIAL CODE") foundMaterialCodeHeader = true;
+      if (val === "MANUAL-ENG-001") foundManualCodeCell = true;
+      if (val === "OT_PACKING000N") foundPackingCodeCell = true;
+      if (val === "Auto") foundAutoCell = true;
+    }
+
+    assert.ok(foundMaterialCodeHeader, "Excel export must contain 'MATERIAL CODE' column header");
+    assert.ok(foundManualCodeCell, "Excel export must contain manual code 'MANUAL-ENG-001'");
+    assert.ok(foundPackingCodeCell, "Excel export must contain packing code 'OT_PACKING000N'");
+    assert.ok(!foundAutoCell, "Excel export must NEVER output 'Auto' in cells");
+    assert.strictEqual((capexWs["!cols"] || []).length, 15, "CAPEX Excel must have 15 columns defined");
+    console.log("✓ CAPEX Excel export verified with MATERIAL CODE column, correct values, and 15 columns.");
+
+    // -------------------------------------------------------------
+    // Test 12: Excel Export Verification for Non-CAPEX (SELEX)
+    // -------------------------------------------------------------
+    console.log("\n[Test 12] Testing Excel export for Non-CAPEX (SELEX)...");
+    const selexExcelResult = await exportEstimateToExcel(
+      selexDocEstimate,
+      capexDocItems,
+      mockClient[0].name,
+      { name: "Sunrise Media" },
+      mockStore,
+      [],
+    );
+    const selexWb = selexExcelResult.workbook;
+    const selexWs = selexWb.Sheets["Estimate"];
+    let selexHasMatCodeHeader = false;
+    for (const key of Object.keys(selexWs)) {
+      if (key.startsWith("!")) continue;
+      const cell = selexWs[key];
+      if (String(cell?.v ?? "").trim() === "MATERIAL CODE") selexHasMatCodeHeader = true;
+    }
+    assert.ok(!selexHasMatCodeHeader, "Non-CAPEX Excel export must NOT contain 'MATERIAL CODE' header");
+    assert.strictEqual((selexWs["!cols"] || []).length, 14, "Non-CAPEX Excel must have 14 columns defined");
+    console.log("✓ Non-CAPEX Excel export preserved with 14 columns.");
 
     console.log("\n=== ALL REGRESSION TESTS PASSED SUCCESSFULLY! ===");
   } catch (err: any) {

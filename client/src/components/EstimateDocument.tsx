@@ -163,6 +163,7 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
     hsn: string;
     stdLabel: string;
     description: string;
+    materialCode: string;
     width: string;
     height: string;
     qty: string;
@@ -196,6 +197,12 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
     transportBase: number;
   };
 
+  const cleanMaterialCode = (code?: string | null) => {
+    const c = String(code || "").trim();
+    if (!c || c.toLowerCase() === "auto") return "";
+    return c;
+  };
+
   const itemToRow = (item: EstimateItem, idx: number): SectionRow => ({
     label: String(idx + 1),
     type: item.itemName || "",
@@ -206,6 +213,7 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
       item.description || "",
       item.itemName || "",
     ),
+    materialCode: cleanMaterialCode(item.materialCode || (item as any).material_code),
     width: item.width ? Number(item.width).toFixed(2) : "",
     height: item.height ? Number(item.height).toFixed(2) : "",
     qty: item.quantity != null ? Number(item.quantity).toFixed(2) : "",
@@ -378,6 +386,8 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
   const isAbfrlFormat = formatProfile.code === "ABLBL" || formatProfile.printLayout === "abfrl_grouped";
   const isRetailStoreFormat = formatProfile.code === "RETAIL_SINGLE_STORE" || formatProfile.printLayout === "retail_single_store";
   const showMaterialCostRow = isAbfrlFormat && !isRetailStoreFormat;
+  const isCapex = isAbfrlFormat && String((est as any).abfrlProjectType || (est as any).abfrl_project_type || "").trim().toUpperCase() === "CAPEX";
+  const showMaterialCodeColumn = isCapex;
 
   // Cell + table styles for dense print-grade layout. Inline styles so
   // they survive print without depending on Tailwind classes.
@@ -416,9 +426,10 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
   };
   const totalRowStyle: React.CSSProperties = { backgroundColor: "#f8fafc" };
   const yellowRow: React.CSSProperties = { backgroundColor: "#f8fafc" };
-  // 14 columns: SL, Element, HSN, Std/Non, Product Details, Print Size (W),
+  // 15 columns for CAPEX (with Material Code), 14 columns otherwise:
+  // SL, Element, HSN, Std/Non, Product Details, [Material Code], Print Size (W),
   // Print Size (H), Qty, T.Sqft, Rate, Amount, GST%, GST Amount, Total.
-  const COL_COUNT = 14;
+  const COL_COUNT = showMaterialCodeColumn ? 15 : 14;
 
   // A service charges row (Packing / Installation / Transport).
   const serviceRow = (
@@ -427,6 +438,7 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
     percentLabel: string,
     base: number,
     sectionKey: string,
+    matCode = "",
   ) => {
     const firstTaxAmt = base * SERVICE_TAX_PCT / 100;
     const secondTaxAmt = isIgst ? 0 : base * SERVICE_TAX_PCT / 100;
@@ -438,6 +450,11 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
         <td style={cellCenter}>9987</td>
         <td style={cellCenter}>Standard</td>
         <td style={cellBase}>{descr}</td>
+        {showMaterialCodeColumn && (
+          <td style={{ ...cellCenter, fontFamily: "monospace", fontSize: "8px" }}>
+            {cleanMaterialCode(matCode)}
+          </td>
+        )}
         <td style={cellCenter}></td>
         <td style={cellCenter}></td>
         <td style={cellCenter}></td>
@@ -460,6 +477,7 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
       ? Number(item.igstAmount) || 0
       : (Number(item.sgstAmount) || 0) + (Number(item.cgstAmount) || 0);
     const label = service.label;
+    const matCode = cleanMaterialCode(item.materialCode || (item as any).material_code);
     return (
       <tr className="estimate-service-row-keep" data-pdf-row key={`${sectionKey}-${item.id || item.sl || item.itemName}`}>
         <td style={cellCenter}></td>
@@ -467,6 +485,11 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
         <td style={cellCenter}>9987</td>
         <td style={cellCenter}>Standard</td>
         <td style={cellBase}>{item.description || label}</td>
+        {showMaterialCodeColumn && (
+          <td style={{ ...cellCenter, fontFamily: "monospace", fontSize: "8px" }}>
+            {matCode}
+          </td>
+        )}
         <td style={cellCenter}></td>
         <td style={cellCenter}></td>
         <td style={cellCenter}></td>
@@ -481,9 +504,9 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
   };
 
   // Portrait A4 printable width is 194mm (~733px at 96 DPI).
-  // Defined, sufficient widths across all 14 columns to prevent
+  // Defined, sufficient widths across all columns to prevent
   // any overlapping or crowding across headings and numeric cells.
-  const columnWidths = [
+  const baseColumnWidths = [
     "3.5%",  // SL
     "9.5%",  // Element
     "5%",    // HSN
@@ -499,6 +522,26 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
     "7%",    // GST Amt
     "8%",    // Total
   ];
+
+  const capexColumnWidths = [
+    "3%",    // SL
+    "8.5%",  // Element
+    "4.5%",  // HSN
+    "5%",    // Std/Non
+    "15%",   // Product Details
+    "9%",    // Material Code
+    "6.5%",  // Print Size (W)
+    "6.5%",  // Print Size (H)
+    "4%",    // Qty
+    "5%",    // T.Sqft
+    "6.5%",  // Rate
+    "8%",    // Amount
+    "4.5%",  // GST %
+    "6.5%",  // GST Amt
+    "7.5%",  // Total
+  ];
+
+  const columnWidths = showMaterialCodeColumn ? capexColumnWidths : baseColumnWidths;
 
   const renderDocumentHeader = () => (
     <>
@@ -583,6 +626,7 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
           <div style={{ whiteSpace: "nowrap" }}>Non</div>
         </td>
         <td style={{ ...headCell, textAlign: "left", paddingLeft: "6px" }}>Product Details</td>
+        {showMaterialCodeColumn && <td style={headCell}>Material Code</td>}
         <td style={headCell}>
           <div style={{ whiteSpace: "nowrap" }}>(W)</div>
         </td>
@@ -640,6 +684,11 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
             <td style={cellCenter}>{row.hsn || ""}</td>
             <td style={{ ...cellCenter, fontSize: "9px" }}>{row.stdLabel}</td>
             <td style={cellBase}>{row.description}</td>
+            {showMaterialCodeColumn && (
+              <td style={{ ...cellCenter, fontFamily: "monospace", fontSize: "8px" }}>
+                {row.materialCode}
+              </td>
+            )}
             <td style={cellRight}>{row.width}</td>
             <td style={cellRight}>{row.height}</td>
             <td style={cellCenter}>{row.qty}</td>
@@ -653,7 +702,7 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
         ))}
         {showMaterialCostRow && (
           <tr className="estimate-store-total-keep" data-pdf-row data-pdf-material-cost-row="true" style={yellowRow}>
-            <td colSpan={10} style={{ ...cellBase, fontWeight: 700, padding: "4px 6px" }}>Total Material Cost</td>
+            <td colSpan={showMaterialCodeColumn ? 11 : 10} style={{ ...cellBase, fontWeight: 700, padding: "4px 6px" }}>Total Material Cost</td>
             <td style={{ ...cellRight, fontWeight: 700 }}>{num(sec.materialBase)}</td>
             <td style={{ ...cellCenter, fontWeight: 700 }}>{isIgst ? "18%" : "18%"}</td>
             <td style={{ ...cellRight, fontWeight: 700 }}>{num(isIgst ? sec.materialIgst : sec.materialSgst + sec.materialCgst)}</td>
@@ -662,9 +711,9 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
         )}
         {sec.serviceRows.length > 0 ? sec.serviceRows.map(item => savedServiceRow(item, `s${sIdx}`)) : (
           <>
-            {sec.packingPercent > 0 && (() => { const label = serviceProductLabel({ lineType: "packing", rate: sec.packingPercent, calculationType: "percentage" }, products); return serviceRow(label, label, `${sec.packingPercent}%`, sec.packingBase, `s${sIdx}`); })()}
-            {sec.implPercent > 0 && (() => { const label = serviceProductLabel({ lineType: "installation", rate: sec.implPercent, calculationType: "percentage" }, products); return serviceRow(label, label, `${sec.implPercent}%`, sec.implBase, `s${sIdx}`); })()}
-            {sec.transportAmt > 0 && (() => { const label = serviceProductLabel({ lineType: "transport", itemName: sec.transportDescription }, products); return serviceRow(label, label, "", sec.transportBase, `s${sIdx}`); })()}
+            {sec.packingPercent > 0 && (() => { const label = serviceProductLabel({ lineType: "packing", rate: sec.packingPercent, calculationType: "percentage" }, products); return serviceRow(label, label, `${sec.packingPercent}%`, sec.packingBase, `s${sIdx}`, "OT_PACKING000N"); })()}
+            {sec.implPercent > 0 && (() => { const label = serviceProductLabel({ lineType: "installation", rate: sec.implPercent, calculationType: "percentage" }, products); return serviceRow(label, label, `${sec.implPercent}%`, sec.implBase, `s${sIdx}`, "OT_INSTALLATION00N"); })()}
+            {sec.transportAmt > 0 && (() => { const label = serviceProductLabel({ lineType: "transport", itemName: sec.transportDescription }, products); return serviceRow(label, label, "", sec.transportBase, `s${sIdx}`, "OT_TRANSPORT001N"); })()}
           </>
         )}
         {sIdx < sections.length - 1 && (
@@ -696,21 +745,21 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
   const renderTotalsBody = () => (
     <tbody className="estimate-totals-keep">
       <tr data-pdf-row style={totalRowStyle}>
-        <td colSpan={10} style={{ ...cellRight, fontWeight: 700, paddingRight: "8px" }}>TOTAL</td>
+        <td colSpan={showMaterialCodeColumn ? 11 : 10} style={{ ...cellRight, fontWeight: 700, paddingRight: "8px" }}>TOTAL</td>
         <td style={{ ...cellRight, fontWeight: 700 }}>{num(grandBeforeTax)}</td>
         <td style={{ ...cellCenter, fontWeight: 700 }}>18%</td>
         <td style={{ ...cellRight, fontWeight: 700 }}>{num(isIgst ? grandIgst : grandSgst + grandCgst)}</td>
         <td style={{ ...cellRight, fontWeight: 700 }}>{num(grandTotal)}</td>
       </tr>
       <tr data-pdf-row style={totalRowStyle}>
-        <td colSpan={12} style={{ ...cellRight, fontWeight: 700, paddingRight: "10px" }}>
+        <td colSpan={showMaterialCodeColumn ? 13 : 12} style={{ ...cellRight, fontWeight: 700, paddingRight: "10px" }}>
           TOTAL AMOUNT BEFORE TAX
         </td>
         <td colSpan={2} style={{ ...cellRight, fontWeight: 700 }}>{num(grandBeforeTax)}</td>
       </tr>
       {isIgst ? (
         <tr data-pdf-row>
-          <td colSpan={12} style={{ ...cellRight, fontWeight: 700, paddingRight: "10px" }}>
+          <td colSpan={showMaterialCodeColumn ? 13 : 12} style={{ ...cellRight, fontWeight: 700, paddingRight: "10px" }}>
             Add : IGST 18%
           </td>
           <td colSpan={2} style={{ ...cellRight, fontWeight: 700 }}>{num(grandIgst)}</td>
@@ -718,13 +767,13 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
       ) : (
         <>
           <tr data-pdf-row>
-            <td colSpan={12} style={{ ...cellRight, fontWeight: 700, paddingRight: "10px" }}>
+            <td colSpan={showMaterialCodeColumn ? 13 : 12} style={{ ...cellRight, fontWeight: 700, paddingRight: "10px" }}>
               Add : CGST 9%
             </td>
             <td colSpan={2} style={{ ...cellRight, fontWeight: 700 }}>{num(grandCgst)}</td>
           </tr>
           <tr data-pdf-row>
-            <td colSpan={12} style={{ ...cellRight, fontWeight: 700, paddingRight: "10px" }}>
+            <td colSpan={showMaterialCodeColumn ? 13 : 12} style={{ ...cellRight, fontWeight: 700, paddingRight: "10px" }}>
               Add : SGST 9%
             </td>
             <td colSpan={2} style={{ ...cellRight, fontWeight: 700 }}>{num(grandSgst)}</td>
@@ -732,7 +781,7 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
         </>
       )}
       <tr data-pdf-row style={totalRowStyle}>
-        <td colSpan={12} style={{ ...cellRight, fontWeight: 700, paddingRight: "10px" }}>
+        <td colSpan={showMaterialCodeColumn ? 13 : 12} style={{ ...cellRight, fontWeight: 700, paddingRight: "10px" }}>
           TOTAL AMOUNT AFTER TAX
         </td>
         <td colSpan={2} style={{ ...cellRight, fontWeight: 700 }}>{num(grandTotal)}</td>

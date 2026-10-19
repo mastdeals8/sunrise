@@ -4,6 +4,7 @@ import { orderedEstimateItems, orderedStoreKeysFromItems } from "./estimateOrder
 import { getEstimateFormatProfile, resolveCustomerFormatProfile } from "../../../../../shared/estimateProfiles";
 
 export const downloadBlob = (blob: Blob, fileName: string) => {
+  if (typeof document === "undefined") return;
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
   a.download = fileName;
@@ -134,9 +135,11 @@ async function embedLogoInWorkbook(
   }
 }
 
-const COL_COUNT = 14;
-const LAST_COL = COL_COUNT - 1;
-const blankRow = () => Array(COL_COUNT).fill("");
+const cleanMaterialCode = (code?: string | null) => {
+  const c = String(code || "").trim();
+  if (!c || c.toLowerCase() === "auto") return "";
+  return c;
+};
 
 /** Client-side Excel export matching the PDF estimate layout. */
 export async function exportEstimateToExcel(
@@ -146,12 +149,23 @@ export async function exportEstimateToExcel(
   sellerProfile?: any,
   stores?: any[],
   products: any[] = [],
-): Promise<void> {
+): Promise<{ workbook: any; bytes: Uint8Array }> {
   const XLSX = (await import("xlsx-js-style")).default;
 
   const isIgst = estimate.gstType === "IGST";
   const storeGrouping = (estimate.storeGrouping as Record<string, any>) || {};
   const sortedItems = orderedEstimateItems(items);
+
+  const formatProfile = resolveCustomerFormatProfile(estimate, { name: clientName });
+  const isAbfrlFormat = formatProfile.code === "ABLBL" || formatProfile.printLayout === "abfrl_grouped";
+  const isRetailStoreFormat = formatProfile.code === "RETAIL_SINGLE_STORE" || formatProfile.printLayout === "retail_single_store";
+  const showMaterialCostRow = isAbfrlFormat && !isRetailStoreFormat;
+  const isCapex = isAbfrlFormat && String(estimate.abfrlProjectType || estimate.abfrl_project_type || "").trim().toUpperCase() === "CAPEX";
+  const showMaterialCodeColumn = isCapex;
+
+  const COL_COUNT = showMaterialCodeColumn ? 15 : 14;
+  const LAST_COL = COL_COUNT - 1;
+  const blankRow = () => Array(COL_COUNT).fill("");
 
   const sp = sellerProfile || {};
   const companyName = s(sp.name || "Sunrise Media");
@@ -277,34 +291,38 @@ export async function exportEstimateToExcel(
   };
 
   // ── Header: Logo rows (Billing To label left, logo/company name right) ──────
+  const metaLabelCol = showMaterialCodeColumn ? 11 : 10;
+  const metaValCol = showMaterialCodeColumn ? 12 : 11;
+  const leftEndCol = showMaterialCodeColumn ? 9 : 8;
+
   const logoR = addRow((() => {
     const r = blankRow();
     r[0] = "Billing To";
-    r[10] = logoPath ? "" : companyName;
+    r[metaLabelCol] = logoPath ? "" : companyName;
     return r;
   })());
-  pushMerge(logoR, 0, 8);
-  styleRange(logoR, 0, 8, S_BILL_LABEL);
-  pushMerge(logoR, 10, LAST_COL);
-  styleRange(logoR, 10, LAST_COL, S_LOGO);
+  pushMerge(logoR, 0, leftEndCol);
+  styleRange(logoR, 0, leftEndCol, S_BILL_LABEL);
+  pushMerge(logoR, metaLabelCol, LAST_COL);
+  styleRange(logoR, metaLabelCol, LAST_COL, S_LOGO);
 
   const logoSpacerR = addRow(blankRow());
-  pushMerge(logoSpacerR, 0, 8);
-  styleRange(logoSpacerR, 0, 8, S_BILL);
-  pushMerge(logoSpacerR, 10, LAST_COL);
-  styleRange(logoSpacerR, 10, LAST_COL, S_LOGO);
+  pushMerge(logoSpacerR, 0, leftEndCol);
+  styleRange(logoSpacerR, 0, leftEndCol, S_BILL);
+  pushMerge(logoSpacerR, metaLabelCol, LAST_COL);
+  styleRange(logoSpacerR, metaLabelCol, LAST_COL, S_LOGO);
 
-  // Billing + Meta rows: left (cols 0-8), meta label (col 10), meta value (cols 11-13)
+  // Billing + Meta rows: left (cols 0-leftEndCol), meta label (metaLabelCol), meta value (metaValCol-LAST_COL)
   const addHeaderRow = (left: string, leftStyle: any, metaLabel: string, metaValue: string) => {
     const row = blankRow();
     row[0] = left;
-    if (metaLabel) row[10] = metaLabel;
-    if (metaValue) row[11] = metaValue;
+    if (metaLabel) row[metaLabelCol] = metaLabel;
+    if (metaValue) row[metaValCol] = metaValue;
     const ri = addRow(row);
-    pushMerge(ri, 0, 8);
-    styleRange(ri, 0, 8, leftStyle);
-    if (metaLabel) setStyle(ri, 10, S_META_L);
-    if (metaValue) { pushMerge(ri, 11, LAST_COL); styleRange(ri, 11, LAST_COL, S_META_V); }
+    pushMerge(ri, 0, leftEndCol);
+    styleRange(ri, 0, leftEndCol, leftStyle);
+    if (metaLabel) setStyle(ri, metaLabelCol, S_META_L);
+    if (metaValue) { pushMerge(ri, metaValCol, LAST_COL); styleRange(ri, metaValCol, LAST_COL, S_META_V); }
   };
 
   addHeaderRow(`M/S : ${billingName}`, S_BILL_LABEL, "Date :", dateStr);
@@ -329,7 +347,10 @@ export async function exportEstimateToExcel(
   styleRange(subjR, 0, LAST_COL, S_SUBJECT);
 
   // ── Column header row ────────────────────────────────────────────────────────
-  const headR = addRow([
+  const headR = addRow(showMaterialCodeColumn ? [
+    "SL", "ELEMENT", "HSN", "Standard / Non", "PRODUCT DETAILS", "MATERIAL CODE",
+    "Print Size (W)", "Print Size (H)", "Qty", "T.Sqft", "Rate", "Amount", "GST %", "GST Amount", "Total",
+  ] : [
     "SL", "ELEMENT", "HSN", "Standard / Non", "PRODUCT DETAILS",
     "Print Size (W)", "Print Size (H)", "Qty", "T.Sqft", "Rate", "Amount", "GST %", "GST Amount", "Total",
   ]);
@@ -393,11 +414,6 @@ export async function exportEstimateToExcel(
   let grandCgst = 0;
   let grandIgst = 0;
 
-  const formatProfile = resolveCustomerFormatProfile(estimate, { name: clientName });
-  const isAbfrlFormat = formatProfile.code === "ABLBL" || formatProfile.printLayout === "abfrl_grouped";
-  const isRetailStoreFormat = formatProfile.code === "RETAIL_SINGLE_STORE" || formatProfile.printLayout === "retail_single_store";
-  const showMaterialCostRow = isAbfrlFormat && !isRetailStoreFormat;
-
   sections.forEach((sec, sIdx) => {
     const storeR = addRow((() => {
       const r = blankRow();
@@ -408,7 +424,24 @@ export async function exportEstimateToExcel(
     styleRange(storeR, 0, LAST_COL, S_STORE);
 
     sec.storeItems.forEach((item, idx) => {
-      const ri = addRow([
+      const mc = cleanMaterialCode(item.materialCode || item.material_code);
+      const rowData = showMaterialCodeColumn ? [
+        idx + 1,
+        item.itemName || "",
+        item.hsn || "",
+        item.isStandard ? "Standard" : "Non-standard",
+        item.description || "",
+        mc,
+        item.width != null ? r2(Number(item.width)) : "",
+        item.height != null ? r2(Number(item.height)) : "",
+        item.quantity != null ? r2(Number(item.quantity)) : "",
+        item.totalSize != null ? r2(Number(item.totalSize)) : "",
+        item.rate != null ? r2(Number(item.rate)) : "",
+        r2(Number(item.totalPrice) || 0),
+        isIgst ? Number(item.igstPercent) || 0 : (Number(item.sgstPercent) || 0) + (Number(item.cgstPercent) || 0),
+        r2(isIgst ? Number(item.igstAmount) || 0 : (Number(item.sgstAmount) || 0) + (Number(item.cgstAmount) || 0)),
+        r2(Number(item.totalAmount) || 0),
+      ] : [
         idx + 1,
         item.itemName || "",
         item.hsn || "",
@@ -423,10 +456,11 @@ export async function exportEstimateToExcel(
         isIgst ? Number(item.igstPercent) || 0 : (Number(item.sgstPercent) || 0) + (Number(item.cgstPercent) || 0),
         r2(isIgst ? Number(item.igstAmount) || 0 : (Number(item.sgstAmount) || 0) + (Number(item.cgstAmount) || 0)),
         r2(Number(item.totalAmount) || 0),
-      ]);
+      ];
+      const ri = addRow(rowData);
       setStyle(ri, 0, S_HEADER);
-      styleRange(ri, 1, 4, S_CELL);
-      styleRange(ri, 5, LAST_COL, S_NUM);
+      styleRange(ri, 1, showMaterialCodeColumn ? 5 : 4, S_CELL);
+      styleRange(ri, showMaterialCodeColumn ? 6 : 5, LAST_COL, S_NUM);
     });
 
     const materialBase = sec.storeItems.reduce((sum, it) => sum + Number(it.totalPrice || 0), 0);
@@ -435,17 +469,18 @@ export async function exportEstimateToExcel(
     const materialIgst = sec.storeItems.reduce((sum, it) => sum + Number(it.igstAmount || 0), 0);
 
     if (showMaterialCostRow) {
+      const amtCol = showMaterialCodeColumn ? 11 : 10;
       const tmcR = addRow((() => {
         const r = blankRow();
         r[1] = "Total Material Cost";
-        r[10] = r2(materialBase);
-        r[11] = 18;
-        r[12] = r2(isIgst ? materialIgst : materialSgst + materialCgst);
-        r[13] = r2(materialBase + materialSgst + materialCgst + materialIgst);
+        r[amtCol] = r2(materialBase);
+        r[amtCol + 1] = 18;
+        r[amtCol + 2] = r2(isIgst ? materialIgst : materialSgst + materialCgst);
+        r[amtCol + 3] = r2(materialBase + materialSgst + materialCgst + materialIgst);
         return r;
       })());
-      styleRange(tmcR, 0, 9, S_YELLOW);
-      styleRange(tmcR, 10, LAST_COL, S_YELLOW_NUM);
+      styleRange(tmcR, 0, amtCol - 1, S_YELLOW);
+      styleRange(tmcR, amtCol, LAST_COL, S_YELLOW_NUM);
     }
 
     const hasSavedServices = sec.serviceItems.length > 0;
@@ -459,38 +494,47 @@ export async function exportEstimateToExcel(
       ? sec.serviceItems.filter(it => it.lineType === "transport").reduce((sum, it) => sum + Number(it.totalPrice || 0), 0)
       : sec.transportAmt;
 
-    const addServiceRow = (label: string, descr: string, pctLabel: string, base: number) => {
+    const addServiceRow = (label: string, descr: string, pctLabel: string, base: number, matCode = "") => {
       if (base <= 0) return;
+      const amtCol = showMaterialCodeColumn ? 11 : 10;
+      const rateCol = showMaterialCodeColumn ? 10 : 9;
       const ri = addRow((() => {
         const r = blankRow();
         r[1] = label; r[2] = "9987"; r[3] = "Standard"; r[4] = descr;
-        r[9] = pctLabel; r[10] = r2(base); r[11] = 18;
-        r[12] = r2(base * 0.18); r[13] = r2(base * 1.18);
+        if (showMaterialCodeColumn) r[5] = cleanMaterialCode(matCode);
+        r[rateCol] = pctLabel; r[amtCol] = r2(base); r[amtCol + 1] = 18;
+        r[amtCol + 2] = r2(base * 0.18); r[amtCol + 3] = r2(base * 1.18);
         return r;
       })());
       setStyle(ri, 0, S_CELL);
-      styleRange(ri, 1, 4, S_CELL);
-      styleRange(ri, 5, LAST_COL, S_NUM);
+      styleRange(ri, 1, showMaterialCodeColumn ? 5 : 4, S_CELL);
+      styleRange(ri, showMaterialCodeColumn ? 6 : 5, LAST_COL, S_NUM);
     };
 
     const addSavedServiceRow = (item: any) => {
       const base = Number(item.totalPrice || 0);
       if (base <= 0) return;
       const service = resolveServiceProduct(item, products);
+      const amtCol = showMaterialCodeColumn ? 11 : 10;
+      const rateCol = showMaterialCodeColumn ? 10 : 9;
+      const qtyCol = showMaterialCodeColumn ? 8 : 7;
+      const mc = cleanMaterialCode(item.materialCode || item.material_code);
       const ri = addRow((() => {
         const r = blankRow();
         r[1] = service.label; r[2] = service.hsn || "9987";
         r[3] = item.isStandard === false ? "Non-standard" : "Standard";
-        r[4] = service.label; r[7] = r2(Number(item.quantity) || 1);
-        r[9] = service.rateLabel; r[10] = r2(base);
-        r[11] = service.gstPercent;
-        r[12] = r2(isIgst ? Number(item.igstAmount) || 0 : (Number(item.sgstAmount) || 0) + (Number(item.cgstAmount) || 0));
-        r[13] = r2(Number(item.totalAmount) || 0);
+        r[4] = service.label;
+        if (showMaterialCodeColumn) r[5] = mc;
+        r[qtyCol] = r2(Number(item.quantity) || 1);
+        r[rateCol] = service.rateLabel; r[amtCol] = r2(base);
+        r[amtCol + 1] = service.gstPercent;
+        r[amtCol + 2] = r2(isIgst ? Number(item.igstAmount) || 0 : (Number(item.sgstAmount) || 0) + (Number(item.cgstAmount) || 0));
+        r[amtCol + 3] = r2(Number(item.totalAmount) || 0);
         return r;
       })());
       setStyle(ri, 0, S_CELL);
-      styleRange(ri, 1, 4, S_CELL);
-      styleRange(ri, 5, LAST_COL, S_NUM);
+      styleRange(ri, 1, showMaterialCodeColumn ? 5 : 4, S_CELL);
+      styleRange(ri, showMaterialCodeColumn ? 6 : 5, LAST_COL, S_NUM);
     };
 
     if (hasSavedServices) {
@@ -499,9 +543,9 @@ export async function exportEstimateToExcel(
       const packingLabel = serviceProductLabel({ lineType: "packing", rate: sec.packingPercent, calculationType: "percentage" }, products);
       const installationLabel = serviceProductLabel({ lineType: "installation", rate: sec.implPercent, calculationType: "percentage" }, products);
       const transportLabel = serviceProductLabel({ lineType: "transport", itemName: sec.transportDescription }, products);
-      addServiceRow(packingLabel, packingLabel, `${sec.packingPercent}%`, packAmt);
-      addServiceRow(installationLabel, installationLabel, `${sec.implPercent}%`, implAmt);
-      addServiceRow(transportLabel, transportLabel, "", transAmt);
+      addServiceRow(packingLabel, packingLabel, `${sec.packingPercent}%`, packAmt, "OT_PACKING000N");
+      addServiceRow(installationLabel, installationLabel, `${sec.implPercent}%`, implAmt, "OT_INSTALLATION00N");
+      addServiceRow(transportLabel, transportLabel, "", transAmt, "OT_TRANSPORT001N");
     }
 
     if (sIdx < sections.length - 1) addRow(blankRow());
@@ -526,21 +570,23 @@ export async function exportEstimateToExcel(
   const grandTotal = grandBeforeTax + grandSgst + grandCgst + grandIgst;
 
   // ── Grand TOTAL row ───────────────────────────────────────────────────────────
+  const totLabelCol = showMaterialCodeColumn ? 10 : 9;
+  const totAmtCol = showMaterialCodeColumn ? 11 : 10;
   const totR = addRow((() => {
     const r = blankRow();
-    r[9] = "TOTAL"; r[10] = r2(grandBeforeTax); r[11] = 18;
-    r[12] = r2(isIgst ? grandIgst : grandSgst + grandCgst); r[13] = r2(grandTotal);
+    r[totLabelCol] = "TOTAL"; r[totAmtCol] = r2(grandBeforeTax); r[totAmtCol + 1] = 18;
+    r[totAmtCol + 2] = r2(isIgst ? grandIgst : grandSgst + grandCgst); r[totAmtCol + 3] = r2(grandTotal);
     return r;
   })());
-  styleRange(totR, 9, LAST_COL, S_TOTAL_NUM);
+  styleRange(totR, totLabelCol, LAST_COL, S_TOTAL_NUM);
 
   const stacked = (label: string, value: number) => {
     const r = blankRow();
-    r[9] = label; r[13] = r2(value);
+    r[totLabelCol] = label; r[LAST_COL] = r2(value);
     const ri = addRow(r);
-    pushMerge(ri, 9, 12);
-    styleRange(ri, 9, 12, S_TOTAL_LBL);
-    setStyle(ri, 13, S_TOTAL_NUM);
+    pushMerge(ri, totLabelCol, LAST_COL - 1);
+    styleRange(ri, totLabelCol, LAST_COL - 1, S_TOTAL_LBL);
+    setStyle(ri, LAST_COL, S_TOTAL_NUM);
   };
   stacked("TOTAL AMOUNT BEFORE TAX", grandBeforeTax);
   if (isIgst) {
@@ -565,12 +611,12 @@ export async function exportEstimateToExcel(
     const r = blankRow();
     r[0] = "Terms & Condition :";
     r[5] = "BANK ACCOUNT DETAILS";
-    r[10] = `For ${companyName.toUpperCase()}`;
+    r[showMaterialCodeColumn ? 11 : 10] = `For ${companyName.toUpperCase()}`;
     return r;
   })());
   pushMerge(termsHeadR, 0, 4); styleRange(termsHeadR, 0, 4, S_TERMS_HEAD);
-  pushMerge(termsHeadR, 5, 9); styleRange(termsHeadR, 5, 9, S_TERMS_BOLD);
-  pushMerge(termsHeadR, 10, LAST_COL); styleRange(termsHeadR, 10, LAST_COL, S_TERMS_BOLD);
+  pushMerge(termsHeadR, 5, showMaterialCodeColumn ? 10 : 9); styleRange(termsHeadR, 5, showMaterialCodeColumn ? 10 : 9, S_TERMS_BOLD);
+  pushMerge(termsHeadR, showMaterialCodeColumn ? 11 : 10, LAST_COL); styleRange(termsHeadR, showMaterialCodeColumn ? 11 : 10, LAST_COL, S_TERMS_BOLD);
 
   const tcLines: [string, string, string][] = [
     [sellerTerms[0] || "", `Bank Name : ${bankName}`, ""],
@@ -580,11 +626,11 @@ export async function exportEstimateToExcel(
   ];
   tcLines.forEach(([t, b, sig]) => {
     const ri = addRow((() => {
-      const r = blankRow(); r[0] = t; r[5] = b; r[10] = sig; return r;
+      const r = blankRow(); r[0] = t; r[5] = b; r[showMaterialCodeColumn ? 11 : 10] = sig; return r;
     })());
     pushMerge(ri, 0, 4); styleRange(ri, 0, 4, S_TERMS);
-    pushMerge(ri, 5, 9); styleRange(ri, 5, 9, S_TERMS);
-    pushMerge(ri, 10, LAST_COL); styleRange(ri, 10, LAST_COL, sig ? S_TERMS_BOLD : S_TERMS);
+    pushMerge(ri, 5, showMaterialCodeColumn ? 10 : 9); styleRange(ri, 5, showMaterialCodeColumn ? 10 : 9, S_TERMS);
+    pushMerge(ri, showMaterialCodeColumn ? 11 : 10, LAST_COL); styleRange(ri, showMaterialCodeColumn ? 11 : 10, LAST_COL, sig ? S_TERMS_BOLD : S_TERMS);
   });
 
   // Spacer
@@ -613,7 +659,23 @@ export async function exportEstimateToExcel(
   });
 
   // Column widths
-  ws["!cols"] = [
+  ws["!cols"] = showMaterialCodeColumn ? [
+    { wch: 5 },   // SL
+    { wch: 22 },  // ELEMENT
+    { wch: 8 },   // HSN
+    { wch: 13 },  // Standard/Non
+    { wch: 34 },  // PRODUCT DETAILS
+    { wch: 18 },  // MATERIAL CODE
+    { wch: 7 },   // W
+    { wch: 7 },   // H
+    { wch: 7 },   // Qty
+    { wch: 9 },   // T.Sqft
+    { wch: 9 },   // Rate
+    { wch: 11 },  // Amount
+    { wch: 8 },   // GST %
+    { wch: 13 },  // GST Amount
+    { wch: 12 },  // Total
+  ] : [
     { wch: 5 },   // SL
     { wch: 22 },  // ELEMENT
     { wch: 8 },   // HSN
@@ -668,8 +730,11 @@ export async function exportEstimateToExcel(
   }
 
   const fileName = `Estimate_${estNo.replace(/[\/\\:*?"<>|]+/g, "-")}.xlsx`;
-  downloadBlob(
-    new Blob([finalBytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }),
-    fileName,
-  );
+  if (typeof Blob !== "undefined") {
+    downloadBlob(
+      new Blob([finalBytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }),
+      fileName,
+    );
+  }
+  return { workbook: wb, bytes: finalBytes };
 }
