@@ -895,6 +895,27 @@ export async function fetchNotifications(token: string | null) {
   );
 }
 
+export async function markNotificationAsRead(id: number, token: string | null, read: boolean = true) {
+  if (!isBoltMode) {
+    const res = await apiFetch(`/api/notifications/${id}/read`, token, {
+      method: "POST",
+      body: JSON.stringify({ read }),
+    });
+    return res.ok;
+  }
+  return true;
+}
+
+export async function markAllNotificationsAsRead(token: string | null) {
+  if (!isBoltMode) {
+    const res = await apiFetch("/api/notifications/read-all", token, {
+      method: "POST",
+    });
+    return res.ok;
+  }
+  return true;
+}
+
 // ─── Company Settings ─────────────────────────────────────────────────────────
 
 export async function fetchCompanySettings(token: string | null, companyId?: number) {

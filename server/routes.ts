@@ -7643,8 +7643,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/notifications", authenticateToken, async (req: AuthRequest, res: Response) => {
     try {
       await refreshNotificationsThrottled(); // derive at most every 60s
+      const targetCompanyId = req.companyId || 1;
       const rows = await db.select().from(notifications)
-        .where(isNull(notifications.resolvedAt))
+        .where(andOp(
+          isNull(notifications.resolvedAt),
+          eq(notifications.companyId, targetCompanyId)
+        ))
         .orderBy(desc(notifications.createdAt))
         .limit(200);
       const role = req.user!.role;
@@ -7658,16 +7662,53 @@ export async function registerRoutes(app: Express): Promise<Server> {
     catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
-  app.post("/api/notifications/:id/read", authenticateToken, async (req: AuthRequest, res: Response) => {
+  app.post(["/api/notifications/:id/read", "/api/notifications/:id/mark-read"], authenticateToken, async (req: AuthRequest, res: Response) => {
     try {
       const id = Number(req.params.id);
+      if (!id || isNaN(id)) return res.status(400).json({ message: "Invalid notification ID" });
+      const targetCompanyId = req.companyId || 1;
       const [row] = await db.select().from(notifications).where(eq(notifications.id, id)).limit(1);
-      if (!row) return res.status(404).json({ message: "Not found" });
-      const readBy: number[] = Array.isArray((row as any).readBy) ? (row as any).readBy : [];
-      if (!readBy.includes(req.user!.id)) readBy.push(req.user!.id);
+      if (!row) return res.status(404).json({ message: "Notification not found" });
+
+      if (row.companyId !== targetCompanyId && req.user!.role !== "admin" && !req.user!.isSuperAdmin) {
+        return res.status(403).json({ message: "Forbidden: Notification belongs to a different workspace" });
+      }
+
+      if (row.forRole && row.forRole !== req.user!.role && req.user!.role !== "admin") {
+        return res.status(403).json({ message: "Forbidden: Role not authorized for this notification" });
+      }
+
+      const shouldMarkRead = req.body?.read !== false; // true by default, false to mark unread
+      let readBy: number[] = Array.isArray((row as any).readBy) ? [...(row as any).readBy] : [];
+      if (shouldMarkRead) {
+        if (!readBy.includes(req.user!.id)) readBy.push(req.user!.id);
+      } else {
+        readBy = readBy.filter(uid => uid !== req.user!.id);
+      }
       await db.update(notifications).set({ readBy }).where(eq(notifications.id, id));
-      res.json({ ok: true });
+      res.json({ ok: true, id, read: shouldMarkRead });
     } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  app.post(["/api/notifications/read-all", "/api/notifications/mark-all-read"], authenticateToken, async (req: AuthRequest, res: Response) => {
+    try {
+      const targetCompanyId = req.companyId || 1;
+      const userId = req.user!.id;
+      const role = req.user!.role;
+
+      const result = await db.execute(sql`
+        UPDATE notifications
+        SET read_by = COALESCE(read_by, '[]'::jsonb) || jsonb_build_array(${userId}::int)
+        WHERE resolved_at IS NULL
+          AND company_id = ${targetCompanyId}
+          AND (for_role IS NULL OR for_role = ${role} OR ${role} = 'admin')
+          AND NOT (COALESCE(read_by, '[]'::jsonb) @> jsonb_build_array(${userId}::int))
+      `);
+
+      res.json({ ok: true, count: result.rowCount || 0 });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
   });
 
   // ════════════════════ PHASE 3: APPROVAL WORKFLOW ════════════════════
