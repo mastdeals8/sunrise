@@ -11,6 +11,8 @@ import {
   botUploadInbox,
   webhookLogs,
   deliveryChallans,
+  companies,
+  companyUsers,
 } from "@shared/schema";
 import { eq, and, desc, sql, isNull, gt } from "drizzle-orm";
 import fs from "fs";
@@ -251,6 +253,174 @@ export const editMessageText = async (
   }
 };
 
+// ── Company-Isolated Telegram Approver Helpers ──
+export interface CompanyTelegramApprover {
+  phone: string;
+  chatId: string | null;
+  username: string | null;
+  fullName: string | null;
+  status: "not_configured" | "awaiting_link" | "verified" | "error";
+  linkCode: string | null;
+  linkedAt: string | null;
+  lastTestedAt: string | null;
+  lastError: string | null;
+}
+
+export const getCompanyTelegramApprover = async (companyId: number) => {
+  const [comp] = await db.select().from(companies).where(eq(companies.id, companyId)).limit(1);
+  if (!comp) throw new Error(`Company #${companyId} not found`);
+
+  const settings = (comp.settings as any) || {};
+  const rawApprover = settings.telegramApprover;
+
+  const approver: CompanyTelegramApprover = {
+    phone: rawApprover?.phone || "",
+    chatId: rawApprover?.chatId || null,
+    username: rawApprover?.username || null,
+    fullName: rawApprover?.fullName || null,
+    status: rawApprover?.status || (rawApprover?.phone ? (rawApprover?.chatId ? "verified" : "awaiting_link") : "not_configured"),
+    linkCode: rawApprover?.linkCode || null,
+    linkedAt: rawApprover?.linkedAt || null,
+    lastTestedAt: rawApprover?.lastTestedAt || null,
+    lastError: rawApprover?.lastError || null,
+  };
+
+  const botConfig = await getTelegramSettings();
+
+  return {
+    ...approver,
+    companyId: comp.id,
+    companyName: comp.displayName || comp.name,
+    botUsername: botConfig.botUsername || "SunriseMediaErpBot",
+  };
+};
+
+export const setCompanyTelegramApprover = async (companyId: number, rawPhone: string) => {
+  const phone = rawPhone ? rawPhone.trim().replace(/[\s\-\(\)]/g, "") : "";
+  if (!phone) {
+    return await unlinkCompanyTelegramApprover(companyId);
+  }
+  const E164_REGEX = /^\+[1-9]\d{6,14}$/;
+  if (!E164_REGEX.test(phone)) {
+    throw new Error("Invalid phone format. Please use international format starting with '+' (e.g. +628123456789 or +919876543210).");
+  }
+
+  const [comp] = await db.select().from(companies).where(eq(companies.id, companyId)).limit(1);
+  if (!comp) throw new Error(`Company #${companyId} not found`);
+
+  const settings = (comp.settings as any) || {};
+  const current = settings.telegramApprover || {};
+  const isSamePhone = current.phone === phone;
+  const isAlreadyVerified = isSamePhone && current.chatId && current.status === "verified";
+
+  const linkCode = isAlreadyVerified ? current.linkCode : `TG-${crypto.randomBytes(3).toString("hex").toUpperCase()}`;
+
+  const updatedApprover: CompanyTelegramApprover = {
+    phone,
+    chatId: isAlreadyVerified ? current.chatId : null,
+    username: isAlreadyVerified ? current.username : null,
+    fullName: isAlreadyVerified ? current.fullName : null,
+    status: isAlreadyVerified ? "verified" : "awaiting_link",
+    linkCode: isAlreadyVerified ? null : linkCode,
+    linkedAt: isAlreadyVerified ? current.linkedAt : null,
+    lastTestedAt: current.lastTestedAt || null,
+    lastError: null,
+  };
+
+  const newSettings = {
+    ...settings,
+    telegramApprover: updatedApprover,
+  };
+
+  await db.update(companies).set({ settings: newSettings, updatedAt: new Date() }).where(eq(companies.id, companyId));
+
+  const botConfig = await getTelegramSettings();
+  return {
+    ...updatedApprover,
+    companyId: comp.id,
+    companyName: comp.displayName || comp.name,
+    botUsername: botConfig.botUsername || "SunriseMediaErpBot",
+  };
+};
+
+export const unlinkCompanyTelegramApprover = async (companyId: number) => {
+  const [comp] = await db.select().from(companies).where(eq(companies.id, companyId)).limit(1);
+  if (!comp) throw new Error(`Company #${companyId} not found`);
+
+  const settings = (comp.settings as any) || {};
+  const updatedApprover: CompanyTelegramApprover = {
+    phone: "",
+    chatId: null,
+    username: null,
+    fullName: null,
+    status: "not_configured",
+    linkCode: null,
+    linkedAt: null,
+    lastTestedAt: null,
+    lastError: null,
+  };
+
+  const newSettings = {
+    ...settings,
+    telegramApprover: updatedApprover,
+  };
+
+  await db.update(companies).set({ settings: newSettings, updatedAt: new Date() }).where(eq(companies.id, companyId));
+  const botConfig = await getTelegramSettings();
+  return {
+    ...updatedApprover,
+    companyId: comp.id,
+    companyName: comp.displayName || comp.name,
+    botUsername: botConfig.botUsername || "SunriseMediaErpBot",
+  };
+};
+
+export const testCompanyTelegramApprover = async (companyId: number) => {
+  const [comp] = await db.select().from(companies).where(eq(companies.id, companyId)).limit(1);
+  if (!comp) throw new Error(`Company #${companyId} not found`);
+
+  const settings = (comp.settings as any) || {};
+  const approver = settings.telegramApprover as CompanyTelegramApprover | undefined;
+
+  if (!approver || approver.status !== "verified" || !approver.chatId) {
+    throw new Error("Cannot send test notification: Telegram approver is not verified for this company workspace.");
+  }
+
+  const botConfig = await getTelegramSettings();
+  const testMessage = [
+    `🧪 *Sunrise ERP — Telegram Notification Test*`,
+    ``,
+    `🏢 *Company Workspace:* ${comp.displayName || comp.name}`,
+    `📱 *Registered Phone:* \`${approver.phone}\``,
+    `🕒 *Sent At:* ${new Date().toLocaleString("en-IN")}`,
+    ``,
+    `✅ Your Telegram account is successfully verified and ready to receive field access requests with Approve/Reject actions.`,
+  ].join("\n");
+
+  const sendRes = await sendTelegramMessage(botConfig.token, String(approver.chatId), testMessage, {
+    parse_mode: "Markdown",
+  });
+
+  if (!sendRes.ok) {
+    const errorApprover = {
+      ...approver,
+      status: "error" as const,
+      lastError: sendRes.error,
+    };
+    await db.update(companies).set({ settings: { ...settings, telegramApprover: errorApprover }, updatedAt: new Date() }).where(eq(companies.id, companyId));
+    return { ok: false, error: sendRes.error };
+  }
+
+  const okApprover = {
+    ...approver,
+    status: "verified" as const,
+    lastTestedAt: new Date().toISOString(),
+    lastError: null,
+  };
+  await db.update(companies).set({ settings: { ...settings, telegramApprover: okApprover }, updatedAt: new Date() }).where(eq(companies.id, companyId));
+  return { ok: true, messageId: sendRes.messageId };
+};
+
 // ── Media Download Helper ──
 export const downloadTelegramFile = async (
   token: string | null,
@@ -437,7 +607,7 @@ export const revokeProjectAssignment = async (linkId: number, revokedBy?: number
 };
 
 // ── Webhook Handler & Bot State Engine ──
-export const handleTelegramWebhook = async (payload: any, uploadDir: string): Promise<{ handled: boolean; action?: string }> => {
+export const handleTelegramWebhook = async (payload: any, uploadDir: string): Promise<{ handled: boolean; action?: string; companyId?: number }> => {
   if (!payload) return { handled: false };
 
   // 1. Deduplication: reject repeated updates
@@ -470,18 +640,40 @@ export const handleTelegramWebhook = async (payload: any, uploadDir: string): Pr
     // A. Administrator Approval / Rejection
     if (data.startsWith("auth:approve:") || data.startsWith("auth:reject:")) {
       const isApprove = data.startsWith("auth:approve:");
-      const targetChatId = data.split(":")[2];
+      const parts = data.split(":");
+      const targetChatId = parts[2];
+      const targetCompanyId = parts[3] ? parseInt(parts[3], 10) : null;
 
       // Validate administrator identity
-      const isConfiguredAdmin = config.adminChatId && String(config.adminChatId) === fromId;
-      const [adminUser] = await db
-        .select()
-        .from(users)
-        .where(and(eq(users.telegramChatId, fromId), eq(users.role, "admin"), eq(users.isActive, true)))
-        .limit(1);
+      let isAuthorized = false;
+      let matchedCompanyName = "Sunrise Media ERP";
 
-      if (!isConfiguredAdmin && !adminUser) {
-        await answerCallbackQuery(botToken, cbId, "⛔ Unauthorized: Only configured Sunrise ERP administrators can approve requests.", true);
+      if (targetCompanyId) {
+        const [targetComp] = await db.select().from(companies).where(eq(companies.id, targetCompanyId)).limit(1);
+        if (targetComp) {
+          matchedCompanyName = targetComp.displayName || targetComp.name;
+          const compApprover = (targetComp.settings as any)?.telegramApprover;
+          if (compApprover && compApprover.status === "verified" && String(compApprover.chatId) === fromId) {
+            isAuthorized = true;
+          }
+        }
+      }
+
+      // Check global adminChatId or DB admin user as fallback
+      if (!isAuthorized) {
+        const isConfiguredAdmin = config.adminChatId && String(config.adminChatId) === fromId;
+        const [adminUser] = await db
+          .select()
+          .from(users)
+          .where(and(eq(users.telegramChatId, fromId), eq(users.role, "admin"), eq(users.isActive, true)))
+          .limit(1);
+        if (isConfiguredAdmin || adminUser) {
+          isAuthorized = true;
+        }
+      }
+
+      if (!isAuthorized) {
+        await answerCallbackQuery(botToken, cbId, "⛔ Unauthorized: Only configured company administrators can approve requests.", true);
         return { handled: true, action: "auth_callback_unauthorized" };
       }
 
@@ -529,7 +721,7 @@ export const handleTelegramWebhook = async (payload: any, uploadDir: string): Pr
               role: "staff",
               telegramChatId: targetChatId,
               isActive: true,
-              notes: "Registered via Telegram bot contact approval",
+              notes: `Registered via Telegram bot approval for ${matchedCompanyName}`,
             })
             .returning();
           matchedUser = newUser;
@@ -537,11 +729,28 @@ export const handleTelegramWebhook = async (payload: any, uploadDir: string): Pr
           await db.update(users).set({ isActive: true }).where(eq(users.id, matchedUser.id));
         }
 
+        // Add to companyUsers if workspace-specific
+        if (targetCompanyId && matchedUser) {
+          const [existingMembership] = await db
+            .select()
+            .from(companyUsers)
+            .where(and(eq(companyUsers.userId, matchedUser.id), eq(companyUsers.companyId, targetCompanyId)))
+            .limit(1);
+          if (!existingMembership) {
+            await db.insert(companyUsers).values({
+              userId: matchedUser.id,
+              companyId: targetCompanyId,
+              role: "company_user",
+              isDefault: true,
+            });
+          }
+        }
+
         // Notify user
         await sendTelegramMessage(
           botToken,
           targetChatId,
-          `🎉 *Access Approved!*\n\nWelcome to Sunrise Media ERP, *${targetReq.name}*.\nYour contact is now registered.\n\n⚠️ No projects are currently assigned to you. Once your supervisor assigns projects to you in Sunrise ERP, use /projects to begin uploading site photos and delivery challans.`,
+          `🎉 *Access Approved!*\n\nWelcome to *${matchedCompanyName}*, *${targetReq.name}*.\nYour contact is now registered.\n\n⚠️ No projects are currently assigned to you. Once your supervisor assigns projects to you in Sunrise ERP, use /projects to begin uploading site photos and delivery challans.`,
           { parse_mode: "Markdown" }
         );
 
@@ -550,7 +759,7 @@ export const handleTelegramWebhook = async (payload: any, uploadDir: string): Pr
           botToken,
           fromId,
           cb.message?.message_id,
-          `✅ *Approved:* Access granted for ${targetReq.name} (${targetReq.phone}).\n🆔 Telegram ID: \`${targetChatId}\`\n\n📌 Note: Assign projects to this user via Sunrise ERP.`,
+          `✅ *Approved:* Access granted for ${targetReq.name} (${targetReq.phone}) in ${matchedCompanyName}.\n🆔 Telegram ID: \`${targetChatId}\`\n\n📌 Note: Assign projects to this user via Sunrise ERP.`,
           { parse_mode: "Markdown" }
         );
 
@@ -560,7 +769,7 @@ export const handleTelegramWebhook = async (payload: any, uploadDir: string): Pr
         await sendTelegramMessage(
           botToken,
           targetChatId,
-          `❌ *Access Request Not Approved*\n\nYour request to access Sunrise Media ERP was declined. Please contact your administrator if you believe this is in error.`,
+          `❌ *Access Request Not Approved*\n\nYour request to access Sunrise Media ERP (${matchedCompanyName}) was declined. Please contact your administrator if you believe this is in error.`,
           { parse_mode: "Markdown" }
         );
 
@@ -568,7 +777,7 @@ export const handleTelegramWebhook = async (payload: any, uploadDir: string): Pr
           botToken,
           fromId,
           cb.message?.message_id,
-          `❌ *Rejected:* Access request for ${targetReq.name} (${targetReq.phone}) was declined.`,
+          `❌ *Rejected:* Access request for ${targetReq.name} (${targetReq.phone}) was declined for ${matchedCompanyName}.`,
           { parse_mode: "Markdown" }
         );
 
@@ -750,6 +959,38 @@ export const handleTelegramWebhook = async (payload: any, uploadDir: string): Pr
     const name = [contact.first_name, contact.last_name].filter(Boolean).join(" ") || from.first_name || "Field Contact";
     const phone = contact.phone_number;
 
+    // 0. Check if shared contact is a company approver awaiting link
+    const cleanContactPhone = phone.replace(/[^0-9]/g, "").slice(-10);
+    const allCompanies = await db.select().from(companies);
+    const matchedApproverComp = allCompanies.find((c) => {
+      const app = (c.settings as any)?.telegramApprover;
+      if (!app || app.status !== "awaiting_link" || !app.phone) return false;
+      const appClean = app.phone.replace(/[^0-9]/g, "").slice(-10);
+      return appClean === cleanContactPhone;
+    });
+
+    if (matchedApproverComp) {
+      const compSettings = (matchedApproverComp.settings as any) || {};
+      const approver = compSettings.telegramApprover;
+      approver.chatId = chatId;
+      approver.username = from.username || null;
+      approver.fullName = [from.first_name, from.last_name].filter(Boolean).join(" ") || null;
+      approver.status = "verified";
+      approver.linkedAt = new Date().toISOString();
+      approver.linkCode = null;
+      approver.lastError = null;
+
+      await db.update(companies).set({ settings: compSettings, updatedAt: new Date() }).where(eq(companies.id, matchedApproverComp.id));
+
+      await sendTelegramMessage(
+        botToken,
+        chatId,
+        `✅ *Telegram Account Verified!*\n\nYou are now registered as the *Main Telegram Approver* for:\n🏢 *${matchedApproverComp.displayName || matchedApproverComp.name}*\n\nYou will receive real-time notifications when field staff request access, with Approve/Reject buttons.`,
+        { parse_mode: "Markdown", reply_markup: { remove_keyboard: true } }
+      );
+      return { handled: true, action: "approver_linked_contact", companyId: matchedApproverComp.id };
+    }
+
     // Check if already approved
     const [existingApprovedUser] = await db
       .select()
@@ -802,8 +1043,40 @@ export const handleTelegramWebhook = async (payload: any, uploadDir: string): Pr
       { parse_mode: "Markdown", reply_markup: { remove_keyboard: true } }
     );
 
-    // Notify Administrator via Telegram if configured
-    if (config.adminChatId) {
+    // Notify Company Administrator(s) via Telegram
+    const notifiedChatIds = new Set<string>();
+    for (const comp of allCompanies) {
+      const app = (comp.settings as any)?.telegramApprover;
+      if (app && app.status === "verified" && app.chatId) {
+        notifiedChatIds.add(String(app.chatId));
+        const approverNotice = [
+          `🔔 *Sunrise ERP — New Telegram Access Request*`,
+          `🏢 *Workspace:* ${comp.displayName || comp.name}`,
+          ``,
+          `👤 *Name:* ${name}`,
+          `📱 *Phone:* ${phone}`,
+          `🆔 *Telegram ID:* \`${chatId}\``,
+          `🕒 *Requested:* ${new Date().toLocaleString("en-IN")}`,
+          ``,
+          `Do you want to approve this user for project evidence uploads?`,
+        ].join("\n");
+
+        await sendTelegramMessage(botToken, String(app.chatId), approverNotice, {
+          parse_mode: "Markdown",
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: `✅ Approve (${comp.displayName || comp.name})`, callback_data: `auth:approve:${chatId}:${comp.id}` },
+                { text: `❌ Reject`, callback_data: `auth:reject:${chatId}:${comp.id}` },
+              ]
+            ],
+          },
+        });
+      }
+    }
+
+    // Fallback to global adminChatId if configured and not already notified
+    if (config.adminChatId && !notifiedChatIds.has(String(config.adminChatId))) {
       const adminNotice = [
         `🔔 *Sunrise ERP — New Telegram Access Request*`,
         ``,
@@ -833,6 +1106,47 @@ export const handleTelegramWebhook = async (payload: any, uploadDir: string): Pr
 
   // B. /start Command
   if (text.startsWith("/start")) {
+    const startParts = text.trim().split(/\s+/);
+    const startParam = startParts[1]?.trim() || "";
+
+    // 0. Check for link code e.g. /start link_TG123456 or /start TG-123456
+    if (startParam) {
+      const cleanParam = startParam.replace(/^(link_|LINK_|tg_|TG_)/i, "").trim().toUpperCase();
+      const allCompanies = await db.select().from(companies);
+      const matchedComp = allCompanies.find((c) => {
+        const app = (c.settings as any)?.telegramApprover;
+        if (!app || !app.linkCode) return false;
+        const cCode = String(app.linkCode).replace(/^(TG-|LINK-)/i, "").trim().toUpperCase();
+        return (
+          app.linkCode.toUpperCase() === cleanParam ||
+          app.linkCode.toUpperCase() === `TG-${cleanParam}` ||
+          app.linkCode.toUpperCase() === `LINK-${cleanParam}` ||
+          cCode === cleanParam
+        );
+      });
+
+      if (matchedComp) {
+        const compSettings = (matchedComp.settings as any) || {};
+        const approver = compSettings.telegramApprover;
+        approver.chatId = chatId;
+        approver.username = from.username || null;
+        approver.fullName = [from.first_name, from.last_name].filter(Boolean).join(" ") || null;
+        approver.status = "verified";
+        approver.linkedAt = new Date().toISOString();
+        approver.linkCode = null;
+        approver.lastError = null;
+
+        await db.update(companies).set({ settings: compSettings, updatedAt: new Date() }).where(eq(companies.id, matchedComp.id));
+
+        await sendTelegramMessage(
+          botToken,
+          chatId,
+          `✅ *Telegram Account Verified!*\n\nYou are now registered as the *Main Telegram Approver* for:\n🏢 *${matchedComp.displayName || matchedComp.name}*\n\nYou will receive real-time notifications when field staff request access, with Approve/Reject buttons.`,
+          { parse_mode: "Markdown", reply_markup: { remove_keyboard: true } }
+        );
+        return { handled: true, action: "approver_linked", companyId: matchedComp.id };
+      }
+    }
     // 1. Check if user is known and approved
     const [user] = await db.select().from(users).where(eq(users.telegramChatId, chatId)).limit(1);
 

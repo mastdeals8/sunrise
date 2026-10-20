@@ -16,6 +16,10 @@ import {
   CheckCircle2,
   Trash2,
   ExternalLink,
+  Send,
+  PhoneCall,
+  AlertCircle,
+  RefreshCw,
 } from "lucide-react";
 import { INDIA_STATES, getStateCode } from "@/utils/indiaLocations";
 import { isBoltMode } from "../lib/supabase";
@@ -35,6 +39,11 @@ import {
   createUser,
   fetchUsers,
   fetchAllUsers,
+  fetchCompanyTelegramApprover,
+  updateCompanyTelegramApprover,
+  testCompanyTelegramApprover,
+  unlinkCompanyTelegramApprover,
+  type CompanyTelegramApproverData,
 } from "../lib/api";
 
 interface SettingsState {
@@ -268,6 +277,97 @@ const SettingsPage: React.FC = () => {
   const isAdmin = user?.role === "admin" || user?.isSuperAdmin;
   const isSuperAdmin = user?.isSuperAdmin;
 
+  // Telegram Approver State
+  const [approverData, setApproverData] = useState<CompanyTelegramApproverData | null>(null);
+  const [approverPhone, setApproverPhone] = useState("");
+  const [loadingApprover, setLoadingApprover] = useState(false);
+  const [savingApprover, setSavingApprover] = useState(false);
+  const [testingApprover, setTestingApprover] = useState(false);
+  const [approverMsg, setApproverMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+
+  const loadApprover = async (cId: number) => {
+    setLoadingApprover(true);
+    try {
+      const data = await fetchCompanyTelegramApprover(token, cId);
+      setApproverData(data);
+      setApproverPhone(data.phone || "");
+    } catch (err: any) {
+      console.warn("Failed to load company telegram approver:", err.message);
+    } finally {
+      setLoadingApprover(false);
+    }
+  };
+
+  const handleSaveApproverPhone = async () => {
+    const raw = approverPhone.trim();
+    if (!raw) {
+      setApproverMsg({ kind: "err", text: "Please enter a phone number in international format (e.g. +628123456789 or +919876543210)." });
+      return;
+    }
+    const clean = raw.replace(/[\s\-\(\)]/g, "");
+    const E164_REGEX = /^\+[1-9]\d{6,14}$/;
+    if (!E164_REGEX.test(clean)) {
+      setApproverMsg({ kind: "err", text: "Invalid format. Phone number must start with '+' followed by country code and digits (e.g. +62... or +91...)." });
+      return;
+    }
+
+    setSavingApprover(true);
+    setApproverMsg(null);
+    try {
+      const updated = await updateCompanyTelegramApprover(token, selectedCompanyId, clean);
+      setApproverData(updated);
+      setApproverPhone(updated.phone || clean);
+      if (updated.status === "verified") {
+        setApproverMsg({ kind: "ok", text: "Main approval contact verified and active for this company workspace." });
+      } else {
+        setApproverMsg({ kind: "ok", text: "Approval contact phone saved! Launch the bot to complete account linking." });
+      }
+    } catch (err: any) {
+      setApproverMsg({ kind: "err", text: err.message || "Failed to save approver contact" });
+    } finally {
+      setSavingApprover(false);
+    }
+  };
+
+  const handleTestApprover = async () => {
+    if (!approverData || approverData.status !== "verified") return;
+    setTestingApprover(true);
+    setApproverMsg(null);
+    try {
+      const res = await testCompanyTelegramApprover(token, selectedCompanyId);
+      if (res.success) {
+        setApproverMsg({ kind: "ok", text: "Test notification delivered successfully to verified Telegram chat!" });
+        loadApprover(selectedCompanyId);
+      } else {
+        setApproverMsg({ kind: "err", text: res.error || "Failed to deliver test notification to Telegram chat." });
+        loadApprover(selectedCompanyId);
+      }
+    } catch (err: any) {
+      setApproverMsg({ kind: "err", text: err.message || "Failed to send test notification" });
+      loadApprover(selectedCompanyId);
+    } finally {
+      setTestingApprover(false);
+    }
+  };
+
+  const handleUnlinkApprover = async () => {
+    if (!window.confirm("Are you sure you want to unlink the Telegram approval contact for this company workspace? Access request notifications will stop being sent to this contact.")) {
+      return;
+    }
+    setSavingApprover(true);
+    setApproverMsg(null);
+    try {
+      const reset = await unlinkCompanyTelegramApprover(token, selectedCompanyId);
+      setApproverData(reset);
+      setApproverPhone("");
+      setApproverMsg({ kind: "ok", text: "Telegram approval contact unlinked successfully." });
+    } catch (err: any) {
+      setApproverMsg({ kind: "err", text: err.message || "Failed to unlink approver contact" });
+    } finally {
+      setSavingApprover(false);
+    }
+  };
+
   // Load settings for selectedCompanyId
   const loadSettings = async (cId: number) => {
     setLoading(true);
@@ -343,6 +443,7 @@ const SettingsPage: React.FC = () => {
 
   useEffect(() => {
     loadSettings(selectedCompanyId);
+    loadApprover(selectedCompanyId);
     if (isAdmin) {
       loadCompanyUsersList(selectedCompanyId);
       loadAllSystemUsers();
@@ -1239,6 +1340,212 @@ const SettingsPage: React.FC = () => {
               <Save className="w-4 h-4" />
               {saving ? "Saving…" : "Save Company Settings"}
             </button>
+          </div>
+
+          {/* Telegram Approval Contact */}
+          <div className="glass-panel p-5 border border-slate-200/80 rounded-xl bg-white shadow-xs">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3 border-b border-slate-100 pb-3">
+              <div>
+                <h3 className="font-bold text-slate-900 flex items-center gap-2 text-base">
+                  <Send className="w-5 h-5 text-sky-600" />
+                  Telegram Approval Contact ({form.displayName || form.companyName || `Workspace #${selectedCompanyId}`})
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Main administrator Telegram contact for this company workspace. Field access requests and verification notifications are routed securely to this verified identity.
+                </p>
+              </div>
+
+              {/* Status Badge */}
+              <div>
+                {approverData?.status === "verified" ? (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                    Verified
+                  </span>
+                ) : approverData?.status === "awaiting_link" ? (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                    <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+                    Awaiting Telegram link
+                  </span>
+                ) : approverData?.status === "error" ? (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-rose-50 text-rose-700 border border-rose-200">
+                    <AlertCircle className="w-3.5 h-3.5 text-rose-600" />
+                    Connection error
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-slate-100 text-slate-600 border border-slate-200">
+                    Not configured
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {approverMsg && (
+              <div className={`mb-4 p-3 rounded-lg text-xs font-medium flex items-center justify-between ${approverMsg.kind === "ok" ? "bg-emerald-50 text-emerald-800 border border-emerald-200" : "bg-rose-50 text-rose-800 border border-rose-200"}`}>
+                <span>{approverMsg.text}</span>
+                <button onClick={() => setApproverMsg(null)} className="text-xs font-bold ml-2 hover:opacity-75">✕</button>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+              <div className="md:col-span-2">
+                <label className="text-xs font-bold uppercase text-slate-700 flex items-center justify-between">
+                  <span>Main Approver Phone Number</span>
+                  <span className="text-[11px] text-slate-400 font-normal lowercase">international format with country code (e.g. +62... or +91...)</span>
+                </label>
+                <div className="relative mt-1">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                    <PhoneCall className="w-4 h-4" />
+                  </div>
+                  <input
+                    type="text"
+                    value={approverPhone}
+                    onChange={(e) => setApproverPhone(e.target.value)}
+                    placeholder="+628123456789 or +919876543210"
+                    disabled={!isAdmin || savingApprover}
+                    className="w-full pl-9 pr-3 py-2 border border-slate-200 rounded-lg text-sm font-mono font-medium focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 outline-hidden"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleSaveApproverPhone}
+                  disabled={!isAdmin || savingApprover || !approverPhone.trim()}
+                  className="flex-1 flex items-center justify-center gap-1.5 px-4 py-2 bg-sky-600 hover:bg-sky-700 text-white rounded-lg text-xs font-bold shadow-xs disabled:opacity-50 transition-colors"
+                >
+                  <Save className="w-3.5 h-3.5" />
+                  {savingApprover ? "Saving…" : "Save Contact"}
+                </button>
+
+                {approverData?.status !== "not_configured" && (
+                  <button
+                    type="button"
+                    onClick={handleUnlinkApprover}
+                    disabled={!isAdmin || savingApprover}
+                    title="Unlink Contact"
+                    className="px-3 py-2 border border-slate-200 hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200 text-slate-600 rounded-lg text-xs font-semibold transition-colors"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Awaiting Link Flow instructions */}
+            {approverData?.status === "awaiting_link" && approverData.linkCode && (
+              <div className="mt-4 p-4 rounded-xl border border-amber-200 bg-amber-50/50 space-y-3 animate-in fade-in duration-200">
+                <div className="flex items-start gap-2.5">
+                  <Sparkles className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
+                  <div className="space-y-1">
+                    <h4 className="text-xs font-bold text-amber-900 uppercase tracking-wide">
+                      Link Administrator Telegram Account
+                    </h4>
+                    <p className="text-xs text-amber-800 leading-relaxed">
+                      Phone number saved. A phone number alone is not a Telegram destination: you must open the bot and link your Telegram account to receive private approval notifications for this company workspace.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="bg-white p-3 rounded-lg border border-amber-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="space-y-0.5">
+                    <p className="text-[11px] font-bold uppercase text-slate-500">Workspace Linking Code</p>
+                    <div className="flex items-center gap-2">
+                      <code className="text-sm font-mono font-black text-amber-900 bg-amber-100 px-2.5 py-1 rounded">
+                        {approverData.linkCode}
+                      </code>
+                      <span className="text-[11px] text-slate-500 font-medium">
+                        or click below to launch Telegram directly
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <a
+                      href={`https://t.me/${approverData.botUsername || "SunriseMediaErpBot"}?start=link_${approverData.linkCode}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1.5 px-4 py-2 bg-sky-500 hover:bg-sky-600 text-white rounded-lg text-xs font-bold shadow-xs transition-colors"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      Launch @{approverData.botUsername || "SunriseMediaErpBot"}
+                    </a>
+                    <button
+                      type="button"
+                      onClick={() => loadApprover(selectedCompanyId)}
+                      disabled={loadingApprover}
+                      title="Refresh link status"
+                      className="p-2 border border-slate-200 hover:bg-white rounded-lg text-slate-600 text-xs font-bold transition-colors"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${loadingApprover ? "animate-spin" : ""}`} />
+                    </button>
+                  </div>
+                </div>
+                <p className="text-[11px] text-amber-700 italic">
+                  Tip: Alternatively, start the bot and tap "📱 Share Contact" from the saved phone number ({approverData.phone}).
+                </p>
+              </div>
+            )}
+
+            {/* Verified State Info & Test Notification Action */}
+            {approverData?.status === "verified" && (
+              <div className="mt-4 p-4 rounded-xl border border-emerald-200 bg-emerald-50/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold text-emerald-900">
+                      Linked Telegram Chat:
+                    </span>
+                    <code className="text-xs font-mono font-bold bg-white px-2 py-0.5 rounded border border-emerald-200 text-emerald-800">
+                      {approverData.chatId}
+                    </code>
+                    {approverData.username && (
+                      <span className="text-xs text-emerald-700">(@{approverData.username})</span>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-slate-500">
+                    {approverData.fullName && `${approverData.fullName} • `}
+                    Verified at: {approverData.linkedAt ? new Date(approverData.linkedAt).toLocaleString() : "Recently"}
+                    {approverData.lastTestedAt && ` • Last test: ${new Date(approverData.lastTestedAt).toLocaleTimeString()}`}
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleTestApprover}
+                    disabled={!isAdmin || testingApprover}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold shadow-xs disabled:opacity-50 transition-colors"
+                  >
+                    <Send className="w-3.5 h-3.5" />
+                    {testingApprover ? "Sending…" : "Send Test Notification"}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Connection Error State */}
+            {approverData?.status === "error" && (
+              <div className="mt-4 p-4 rounded-xl border border-rose-200 bg-rose-50/50 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="space-y-0.5">
+                  <h4 className="text-xs font-bold text-rose-900 uppercase tracking-wide flex items-center gap-1.5">
+                    <AlertCircle className="w-4 h-4 text-rose-600" />
+                    Telegram Notification Delivery Error
+                  </h4>
+                  <p className="text-xs text-rose-700">
+                    {approverData.lastError || "Failed to deliver message to Telegram chat. The bot may have been stopped or blocked by the user."}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleTestApprover}
+                  disabled={!isAdmin || testingApprover}
+                  className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold shadow-xs transition-colors shrink-0"
+                >
+                  Retry Test
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Tally Alignment */}

@@ -1278,6 +1278,138 @@ export async function removeCompanyUser(token: string | null, companyId: number,
   return res.ok;
 }
 
+// ─── Company Telegram Approver API ───────────────────────────────────────────
+
+export interface CompanyTelegramApproverData {
+  phone: string;
+  chatId: string | null;
+  username: string | null;
+  fullName: string | null;
+  status: "not_configured" | "awaiting_link" | "verified" | "error";
+  linkCode: string | null;
+  linkedAt: string | null;
+  lastTestedAt: string | null;
+  lastError: string | null;
+  companyId: number;
+  companyName: string;
+  botUsername: string;
+}
+
+export async function fetchCompanyTelegramApprover(token: string | null, companyId: number): Promise<CompanyTelegramApproverData> {
+  if (isBoltMode) {
+    const { data: comp } = await supabase.from("companies").select("*").eq("id", companyId).single();
+    const settings = comp?.settings || {};
+    const approver = settings.telegramApprover || {};
+    return {
+      phone: approver.phone || "",
+      chatId: approver.chatId || null,
+      username: approver.username || null,
+      fullName: approver.fullName || null,
+      status: approver.status || (approver.phone ? (approver.chatId ? "verified" : "awaiting_link") : "not_configured"),
+      linkCode: approver.linkCode || null,
+      linkedAt: approver.linkedAt || null,
+      lastTestedAt: approver.lastTestedAt || null,
+      lastError: approver.lastError || null,
+      companyId: comp?.id || companyId,
+      companyName: comp?.display_name || comp?.name || "Company Workspace",
+      botUsername: "SunriseMediaErpBot",
+    };
+  }
+  const res = await apiFetch(`/api/companies/${companyId}/telegram-approver`, token);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.message || "Failed to load company Telegram approver");
+  }
+  return res.json();
+}
+
+export async function updateCompanyTelegramApprover(token: string | null, companyId: number, phone: string): Promise<CompanyTelegramApproverData> {
+  if (isBoltMode) {
+    const cleanPhone = phone.trim().replace(/[\s\-\(\)]/g, "");
+    if (cleanPhone) {
+      const E164_REGEX = /^\+[1-9]\d{6,14}$/;
+      if (!E164_REGEX.test(cleanPhone)) {
+        throw new Error("Invalid phone format. Please use international format starting with '+' (e.g. +628123456789 or +919876543210).");
+      }
+    }
+    const { data: comp } = await supabase.from("companies").select("*").eq("id", companyId).single();
+    const settings = comp?.settings || {};
+    const current = settings.telegramApprover || {};
+    const isSamePhone = current.phone === cleanPhone;
+    const isAlreadyVerified = isSamePhone && current.chatId && current.status === "verified";
+    const linkCode = cleanPhone ? (isAlreadyVerified ? current.linkCode : `TG-${Math.random().toString(36).substring(2, 8).toUpperCase()}`) : null;
+
+    const newApprover = cleanPhone ? {
+      phone: cleanPhone,
+      chatId: isAlreadyVerified ? current.chatId : null,
+      username: isAlreadyVerified ? current.username : null,
+      fullName: isAlreadyVerified ? current.fullName : null,
+      status: (isAlreadyVerified ? "verified" : "awaiting_link") as "verified" | "awaiting_link",
+      linkCode,
+      linkedAt: isAlreadyVerified ? current.linkedAt : null,
+      lastTestedAt: current.lastTestedAt || null,
+      lastError: null,
+    } : {
+      phone: "",
+      chatId: null,
+      username: null,
+      fullName: null,
+      status: "not_configured" as const,
+      linkCode: null,
+      linkedAt: null,
+      lastTestedAt: null,
+      lastError: null,
+    };
+
+    const updatedSettings = { ...settings, telegramApprover: newApprover };
+    await supabase.from("companies").update({ settings: updatedSettings }).eq("id", companyId);
+    return {
+      ...newApprover,
+      companyId,
+      companyName: comp?.display_name || comp?.name || "Company Workspace",
+      botUsername: "SunriseMediaErpBot",
+    };
+  }
+
+  const res = await apiFetch(`/api/companies/${companyId}/telegram-approver`, token, {
+    method: "PUT",
+    body: JSON.stringify({ phone }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.message || "Failed to update company Telegram approver");
+  }
+  return res.json();
+}
+
+export async function testCompanyTelegramApprover(token: string | null, companyId: number): Promise<{ success: boolean; messageId?: string; error?: string }> {
+  if (isBoltMode) {
+    return { success: true, messageId: `mock-bolt-${Date.now()}` };
+  }
+  const res = await apiFetch(`/api/companies/${companyId}/telegram-approver/test`, token, {
+    method: "POST",
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || err.message || "Failed to send test notification");
+  }
+  return res.json();
+}
+
+export async function unlinkCompanyTelegramApprover(token: string | null, companyId: number): Promise<CompanyTelegramApproverData> {
+  if (isBoltMode) {
+    return updateCompanyTelegramApprover(token, companyId, "");
+  }
+  const res = await apiFetch(`/api/companies/${companyId}/telegram-approver/unlink`, token, {
+    method: "POST",
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.message || "Failed to unlink company Telegram approver");
+  }
+  return res.json();
+}
+
 // ─── Client Ledger Statement ──────────────────────────────────────────────────
 
 export async function fetchClientLedger(token: string | null, clientId: number) {

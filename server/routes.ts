@@ -23,6 +23,10 @@ import {
   getUserAssignedProjects,
   assignProjectToTelegramUser,
   revokeProjectAssignment,
+  getCompanyTelegramApprover,
+  setCompanyTelegramApprover,
+  unlinkCompanyTelegramApprover,
+  testCompanyTelegramApprover,
 } from "./telegram";
 import { auditLogs, notifications } from "@shared/schema";
 import { desc, asc, isNull, and as andOp } from "drizzle-orm";
@@ -5794,6 +5798,77 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const removed = await storage.removeUserFromCompany(targetUserId, targetId);
       res.json({ success: removed });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // ==========================================
+  // Company Workspace Telegram Approver API
+  // ==========================================
+  app.get("/api/companies/:id/telegram-approver", authenticateToken, async (req: AuthRequest, res: Response) => {
+    try {
+      const companyId = parseInt(req.params.id, 10);
+      const isSuper = req.user?.isSuperAdmin;
+      const isGlobalAdmin = req.user?.role === "admin";
+      const memberRole = req.user?.memberships?.find(m => m.companyId === companyId)?.role;
+      if (!isSuper && !isGlobalAdmin && memberRole !== "company_admin" && memberRole !== "super_admin") {
+        return res.status(403).json({ message: "Forbidden: Company Administrator permissions required." });
+      }
+      const data = await getCompanyTelegramApprover(companyId);
+      res.json(data);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.put("/api/companies/:id/telegram-approver", authenticateToken, async (req: AuthRequest, res: Response) => {
+    try {
+      const companyId = parseInt(req.params.id, 10);
+      const isSuper = req.user?.isSuperAdmin;
+      const isGlobalAdmin = req.user?.role === "admin";
+      const memberRole = req.user?.memberships?.find(m => m.companyId === companyId)?.role;
+      if (!isSuper && !isGlobalAdmin && memberRole !== "company_admin" && memberRole !== "super_admin") {
+        return res.status(403).json({ message: "Forbidden: Company Administrator permissions required." });
+      }
+      const { phone } = req.body;
+      const data = await setCompanyTelegramApprover(companyId, String(phone || ""));
+      res.json(data);
+    } catch (err: any) {
+      res.status(400).json({ message: err.message });
+    }
+  });
+
+  app.post("/api/companies/:id/telegram-approver/test", authenticateToken, async (req: AuthRequest, res: Response) => {
+    try {
+      const companyId = parseInt(req.params.id, 10);
+      const isSuper = req.user?.isSuperAdmin;
+      const isGlobalAdmin = req.user?.role === "admin";
+      const memberRole = req.user?.memberships?.find(m => m.companyId === companyId)?.role;
+      if (!isSuper && !isGlobalAdmin && memberRole !== "company_admin" && memberRole !== "super_admin") {
+        return res.status(403).json({ message: "Forbidden: Company Administrator permissions required." });
+      }
+      const result = await testCompanyTelegramApprover(companyId);
+      if (!result.ok) {
+        return res.status(502).json({ success: false, error: result.error });
+      }
+      res.json({ success: true, messageId: result.messageId });
+    } catch (err: any) {
+      res.status(400).json({ message: err.message });
+    }
+  });
+
+  app.post("/api/companies/:id/telegram-approver/unlink", authenticateToken, async (req: AuthRequest, res: Response) => {
+    try {
+      const companyId = parseInt(req.params.id, 10);
+      const isSuper = req.user?.isSuperAdmin;
+      const isGlobalAdmin = req.user?.role === "admin";
+      const memberRole = req.user?.memberships?.find(m => m.companyId === companyId)?.role;
+      if (!isSuper && !isGlobalAdmin && memberRole !== "company_admin" && memberRole !== "super_admin") {
+        return res.status(403).json({ message: "Forbidden: Company Administrator permissions required." });
+      }
+      const data = await unlinkCompanyTelegramApprover(companyId);
+      res.json(data);
     } catch (err: any) {
       res.status(500).json({ message: err.message });
     }
