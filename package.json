@@ -15,6 +15,7 @@
     "test:project-store-scope": "tsx scripts/test-project-store-scope.ts",
     "test:service-exports": "tsx scripts/test-service-product-display.ts",
     "test:tally": "tsx scripts/test-tally-export.ts",
+    "test:telegram": "tsx scripts/test-telegram-workflow.ts",
     "db:push": "drizzle-kit push",
     "postinstall": "node scripts/generate-templates.mjs"
   },

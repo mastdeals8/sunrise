@@ -315,7 +315,7 @@ const BotInbox: React.FC = () => {
                     <p className="text-sm font-bold text-slate-900">{item.senderName || item.senderId}</p>
                     {item.senderId && (
                       <span className="text-xs font-mono text-slate-500 bg-slate-100 px-2 py-0.5 rounded-md">
-                        +{item.senderId.replace(/^\+/, "")}
+                        {item.source === "telegram" ? `Chat ID: ${item.senderId}` : `+${item.senderId.replace(/^\+/, "")}`}
                       </span>
                     )}
                   </div>

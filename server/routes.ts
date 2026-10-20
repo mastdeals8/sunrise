@@ -11,7 +11,19 @@ import rateLimit from "express-rate-limit";
 import { ensureIndexes } from "./indexes";
 import { audit, diffForAudit } from "./audit";
 import { deriveNotifications, refreshNotificationsThrottled } from "./notifications";
-import { dispatchDelivery, buildDeliveryMessage, discoverChats, getBotToken, sendTelegramMessage } from "./telegram";
+import {
+  dispatchDelivery,
+  buildDeliveryMessage,
+  discoverChats,
+  getBotToken,
+  sendTelegramMessage,
+  handleTelegramWebhook,
+  getTelegramSettings,
+  saveTelegramSettings,
+  getUserAssignedProjects,
+  assignProjectToTelegramUser,
+  revokeProjectAssignment,
+} from "./telegram";
 import { auditLogs, notifications } from "@shared/schema";
 import { desc, asc, isNull, and as andOp } from "drizzle-orm";
 import path from "path";
@@ -6091,75 +6103,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
       const payload = req.body;
-      const botToken = settings[0].botToken || process.env.TELEGRAM_BOT_TOKEN || null;
 
-      // Log the webhook
-      await db.insert(webhookLogs).values({ platform: "telegram", direction: "inbound", event: payload?.message ? "message" : "update", payload, status: "received" });
-      
-      // Handle message
-      const msg = payload?.message;
-      if (msg) {
-        const text = msg.text || msg.caption || "";
-        const chatId = String(msg.chat?.id || msg.from?.id);
-        let senderName = [msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(" ") || msg.from?.username || chatId;
-        let companyId = 1;
+      // Log the inbound webhook
+      await db.insert(webhookLogs).values({
+        platform: "telegram",
+        direction: "inbound",
+        event: payload?.callback_query ? "callback_query" : payload?.message ? "message" : "update",
+        payload,
+        status: "received",
+      }).catch(() => {});
 
-        // Try matching Telegram user to ERP staff
-        const matchedUser = await db.select().from(users).where(eq(users.telegramChatId, chatId)).limit(1);
-        if (matchedUser.length > 0) {
-          senderName = matchedUser[0].name;
-          const userCompany = await db.select().from(companyUsers).where(eq(companyUsers.userId, matchedUser[0].id)).limit(1);
-          if (userCompany.length > 0) {
-            companyId = userCompany[0].companyId;
-          }
-        }
+      // Hand over to full Telegram state engine
+      await handleTelegramWebhook(payload, UPLOAD_DIR);
 
-        const photo = msg.photo?.[msg.photo.length - 1];
-        const doc = msg.document;
-        const fileId = photo?.file_id || doc?.file_id;
-        let mediaUrl: string | null = null;
-
-        if (fileId && botToken) {
-          try {
-            const fileRes = await fetch(`https://api.telegram.org/bot${botToken}/getFile?file_id=${fileId}`);
-            if (fileRes.ok) {
-              const fileData: any = await fileRes.json();
-              if (fileData.result?.file_path) {
-                mediaUrl = `https://api.telegram.org/file/bot${botToken}/${fileData.result.file_path}`;
-              }
-            }
-          } catch (fileErr) {
-            console.warn("[Telegram Webhook] Failed to resolve media file:", fileErr);
-          }
-        }
-
-        // Save to bot upload inbox
-        if (photo || doc || text) {
-          await db.insert(botUploadInbox).values({
-            companyId,
-            source: "telegram",
-            senderId: chatId,
-            senderName,
-            messageText: text || (photo ? "Telegram Photo" : doc ? (doc.file_name || "Telegram Document") : null),
-            mediaUrl,
-            mediaType: photo ? "photo" : doc ? "document" : "text",
-            uploadType: "extra",
-            rawPayload: payload,
-            status: "unlinked",
-          });
-        }
-
-        // Auto-reply with Chat ID when user sends /start
-        if (text.startsWith("/start") && botToken) {
-          await sendTelegramMessage(
-            botToken,
-            chatId,
-            `👋 Welcome to Sunrise Media ERP Bot!\n\nYour Telegram Chat ID is: ${chatId}\n\nPlease share this Chat ID with your ERP Administrator or save it in your Staff Profile to receive project deliveries and work updates.`
-          ).catch((e) => console.warn("[Telegram Webhook] Auto-reply error:", e));
-        }
-
-        await db.update(webhookLogs).set({ status: "processed" }).where(eq(webhookLogs.platform, "telegram"));
-      }
+      await db.update(webhookLogs).set({ status: "processed" }).where(eq(webhookLogs.platform, "telegram")).catch(() => {});
       res.sendStatus(200);
     } catch (err: any) {
       await db.insert(webhookLogs).values({ platform: "telegram", direction: "inbound", event: "error", payload: req.body, status: "error", error: err.message }).catch(() => {});
@@ -6193,6 +6150,213 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const result = await discoverChats(token);
       if (!result.ok) return res.status(502).json({ message: result.error });
       res.json(result.chats);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // GET Telegram Access Requests (for ERP admin)
+  app.get("/api/automation/telegram/requests", authenticateToken, requireRole(["admin", "manager"]), async (_req: AuthRequest, res: Response) => {
+    try {
+      const config = await getTelegramSettings();
+      res.json(config.accessRequests);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // POST Approve Telegram Access Request (from ERP admin UI)
+  app.post("/api/automation/telegram/requests/:chatId/approve", authenticateToken, requireRole(["admin"]), async (req: AuthRequest, res: Response) => {
+    try {
+      const chatId = req.params.chatId;
+      const config = await getTelegramSettings();
+      const requests = config.accessRequests;
+      const targetReq = requests.find((r) => r.chatId === chatId);
+      if (!targetReq) return res.status(404).json({ message: "Request not found" });
+
+      targetReq.status = "approved";
+      targetReq.reviewedAt = new Date().toISOString();
+      targetReq.reviewedBy = String(req.user?.id || "admin");
+      await saveTelegramSettings({ accessRequests: requests });
+
+      // Link or create user in users table
+      let [matchedUser] = await db.select().from(users).where(eq(users.telegramChatId, chatId)).limit(1);
+      if (!matchedUser) {
+        const cleanPhone = targetReq.phone.replace(/[^0-9]/g, "").slice(-10);
+        if (cleanPhone) {
+          const byPhone = await db.select().from(users).where(sql`RIGHT(phone, 10) = ${cleanPhone}`).limit(1);
+          if (byPhone.length) {
+            matchedUser = byPhone[0];
+            await db.update(users).set({ telegramChatId: chatId, isActive: true }).where(eq(users.id, matchedUser.id));
+          }
+        }
+      }
+      if (!matchedUser) {
+        const [newUser] = await db
+          .insert(users)
+          .values({
+            username: `tg_${chatId}`,
+            email: `tg_${chatId}@sunrisemedia.local`,
+            password: crypto.randomBytes(16).toString("hex"),
+            name: targetReq.name,
+            phone: targetReq.phone,
+            role: "staff",
+            telegramChatId: chatId,
+            isActive: true,
+            notes: "Registered via Sunrise ERP Telegram admin approval",
+          })
+          .returning();
+        matchedUser = newUser;
+      } else {
+        await db.update(users).set({ isActive: true }).where(eq(users.id, matchedUser.id));
+      }
+
+      // Notify user on Telegram
+      if (config.token) {
+        await sendTelegramMessage(
+          config.token,
+          chatId,
+          `🎉 *Access Approved!*\n\nYour Sunrise Media ERP field account has been approved by the Administrator.\n\n⚠️ No projects are assigned yet. Once projects are assigned in Sunrise ERP, send /projects to upload photos and delivery challans.`,
+          { parse_mode: "Markdown" }
+        ).catch(() => {});
+      }
+
+      res.json({ success: true, request: targetReq, user: matchedUser });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // POST Reject Telegram Access Request (from ERP admin UI)
+  app.post("/api/automation/telegram/requests/:chatId/reject", authenticateToken, requireRole(["admin"]), async (req: AuthRequest, res: Response) => {
+    try {
+      const chatId = req.params.chatId;
+      const config = await getTelegramSettings();
+      const requests = config.accessRequests;
+      const targetReq = requests.find((r) => r.chatId === chatId);
+      if (!targetReq) return res.status(404).json({ message: "Request not found" });
+
+      targetReq.status = "rejected";
+      targetReq.reviewedAt = new Date().toISOString();
+      targetReq.reviewedBy = String(req.user?.id || "admin");
+      await saveTelegramSettings({ accessRequests: requests });
+
+      if (config.token) {
+        await sendTelegramMessage(
+          config.token,
+          chatId,
+          `❌ *Access Request Declined*\n\nYour access request to Sunrise Media ERP was not approved. Please contact your supervisor.`,
+          { parse_mode: "Markdown" }
+        ).catch(() => {});
+      }
+
+      res.json({ success: true, request: targetReq });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // POST Verify Administrator Chat Connection
+  app.post("/api/automation/telegram/verify-admin", authenticateToken, requireRole(["admin"]), async (req: AuthRequest, res: Response) => {
+    try {
+      const { adminChatId } = req.body;
+      if (!adminChatId) return res.status(400).json({ message: "adminChatId is required" });
+      const config = await getTelegramSettings();
+      if (!config.token) return res.status(400).json({ message: "Telegram bot token is not configured" });
+
+      await saveTelegramSettings({ adminChatId: String(adminChatId).trim() });
+
+      const testMsg = [
+        `🔐 *Sunrise Media ERP — Administrator Verification*`,
+        ``,
+        `Hello Administrator! This Telegram chat is configured to receive access approval requests from field staff.`,
+        ``,
+        `Please tap the button below to confirm connection:`,
+      ].join("\n");
+
+      const result = await sendTelegramMessage(config.token, String(adminChatId).trim(), testMsg, {
+        parse_mode: "Markdown",
+        reply_markup: {
+          inline_keyboard: [[{ text: "🛡️ Verify Admin Connection", callback_data: "admin:verify" }]],
+        },
+      });
+
+      if (!result.ok) return res.status(502).json({ message: result.error });
+      res.json({ success: true, messageId: result.messageId });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // GET Field Staff Project Assignments for Telegram
+  app.get("/api/automation/telegram/assignments", authenticateToken, requireRole(["admin", "manager"]), async (_req: AuthRequest, res: Response) => {
+    try {
+      const staffList = await db
+        .select({
+          id: users.id,
+          name: users.name,
+          phone: users.phone,
+          role: users.role,
+          telegramChatId: users.telegramChatId,
+          isActive: users.isActive,
+        })
+        .from(users)
+        .where(sql`${users.telegramChatId} IS NOT NULL`);
+
+      const assignments = await Promise.all(
+        staffList.map(async (u) => {
+          const projects = u.telegramChatId ? await getUserAssignedProjects(u.telegramChatId) : [];
+          return {
+            ...u,
+            assignedProjects: projects,
+          };
+        })
+      );
+      res.json(assignments);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // POST Assign Project to Telegram User
+  app.post("/api/automation/telegram/assign", authenticateToken, requireRole(["admin", "manager"]), async (req: AuthRequest, res: Response) => {
+    try {
+      const { userId, estimateId } = req.body;
+      if (!userId || !estimateId) return res.status(400).json({ message: "userId and estimateId are required" });
+
+      const link = await assignProjectToTelegramUser({
+        userId: Number(userId),
+        estimateId: Number(estimateId),
+        createdBy: req.user?.id,
+      });
+
+      // Optionally notify user on Telegram
+      const [u] = await db.select().from(users).where(eq(users.id, Number(userId))).limit(1);
+      const [est] = await db.select().from(estimates).where(eq(estimates.id, Number(estimateId))).limit(1);
+      const token = await getBotToken();
+      if (token && u?.telegramChatId && est) {
+        await sendTelegramMessage(
+          token,
+          u.telegramChatId,
+          `📁 *New Project Assigned:*\n*${est.estimateNumber}* — ${est.title}\n\nYou can now send /projects to view and upload installation photos and delivery challans.`,
+          { parse_mode: "Markdown" }
+        ).catch(() => {});
+      }
+
+      res.status(201).json({ success: true, link });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // POST Revoke Project Assignment
+  app.post("/api/automation/telegram/revoke", authenticateToken, requireRole(["admin", "manager"]), async (req: AuthRequest, res: Response) => {
+    try {
+      const { linkId } = req.body;
+      if (!linkId) return res.status(400).json({ message: "linkId is required" });
+
+      const revoked = await revokeProjectAssignment(Number(linkId), req.user?.id);
+      res.json({ success: true, revoked });
     } catch (err: any) {
       res.status(500).json({ message: err.message });
     }

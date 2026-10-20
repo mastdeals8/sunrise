@@ -1,27 +1,1089 @@
 import { db } from "./db";
-import { botSettings, telegramDeliveries } from "@shared/schema";
-import { eq } from "drizzle-orm";
+import {
+  botSettings,
+  telegramDeliveries,
+  users,
+  fieldAccessLinks,
+  estimates,
+  clients,
+  stores,
+  executionDocuments,
+  botUploadInbox,
+  webhookLogs,
+  deliveryChallans,
+} from "@shared/schema";
+import { eq, and, desc, sql, isNull, gt } from "drizzle-orm";
+import fs from "fs";
+import path from "path";
+import crypto from "crypto";
 
 /**
- * Phase 5A: Telegram bot delivery service.
+ * Telegram Bot Integration Service for Sunrise Media ERP.
  *
- * Reads the bot token from bot_settings (server-side only — NEVER returned to
- * client). Sends via the Telegram Bot API sendMessage method. Designed to be
- * mockable for QA without a live token: set TELEGRAM_MOCK=1 to short-circuit
- * the network call and simulate success.
+ * Implements end-to-end field photo and delivery challan evidence workflow:
+ * 1. Administrator contact registration & project assignment.
+ * 2. Unknown user /start contact verification (request_contact: true).
+ * 3. Administrator approval/rejection via private Telegram notification with inline buttons.
+ * 4. Project selection by authorized Telegram identity.
+ * 5. Evidence upload (Installation photos, Delivery Challan photos, Other documents).
+ * 6. Storage in executionDocuments and botUploadInbox with deduplication & company isolation.
  *
- * SECURITY: bot token and token hashes are never logged or returned.
+ * Designed to be testable with TELEGRAM_MOCK=1 without external network calls.
+ * SECURITY: Bot token and webhook secrets are never returned to frontend.
  */
 
 const TELEGRAM_API = "https://api.telegram.org";
 
+// ── In-Memory Session & Deduplication Caches ──
+export interface TelegramUserSession {
+  state: "IDLE" | "AWAITING_CONTACT" | "PROJECT_SELECTED" | "UPLOADING";
+  selectedEstimateId?: number;
+  uploadType?: "photo" | "dc" | "extra";
+  lastInteraction: number;
+}
+
+const userSessions = new Map<string, TelegramUserSession>();
+const processedUpdates = new Map<number, number>(); // update_id -> timestamp
+const mediaGroupDebounce = new Map<string, { count: number; timer?: any }>();
+
+export const getUserSession = (chatId: string): TelegramUserSession => {
+  const existing = userSessions.get(chatId);
+  if (existing) return existing;
+  const init: TelegramUserSession = { state: "IDLE", lastInteraction: Date.now() };
+  userSessions.set(chatId, init);
+  return init;
+};
+
+export const setUserSession = (chatId: string, update: Partial<TelegramUserSession>) => {
+  const current = getUserSession(chatId);
+  userSessions.set(chatId, { ...current, ...update, lastInteraction: Date.now() });
+};
+
+export const clearUserSession = (chatId: string) => {
+  userSessions.set(chatId, { state: "IDLE", lastInteraction: Date.now() });
+};
+
+// ── Token & Settings Helpers ──
+export const getBotToken = async (): Promise<string | null> => {
+  const [row] = await db.select().from(botSettings).where(eq(botSettings.platform, "telegram")).limit(1);
+  if (!row || !row.enabled) return null;
+  return row.botToken || null;
+};
+
+export interface TelegramAccessRequest {
+  id: string;
+  chatId: string;
+  name: string;
+  phone: string;
+  username?: string;
+  requestedAt: string;
+  status: "pending" | "approved" | "rejected";
+  reviewedAt?: string;
+  reviewedBy?: string;
+}
+
+export const getTelegramSettings = async () => {
+  const [row] = await db.select().from(botSettings).where(eq(botSettings.platform, "telegram")).limit(1);
+  if (!row) {
+    return {
+      row: null,
+      token: process.env.TELEGRAM_BOT_TOKEN || null,
+      enabled: false,
+      botUsername: null,
+      webhookUrl: null,
+      adminChatId: process.env.TELEGRAM_ADMIN_CHAT_ID || null,
+      adminChatVerified: false,
+      webhookSecret: process.env.TELEGRAM_WEBHOOK_SECRET || "",
+      accessRequests: [] as TelegramAccessRequest[],
+    };
+  }
+  const settings = (row.settings as any) || {};
+  return {
+    row,
+    token: row.botToken || process.env.TELEGRAM_BOT_TOKEN || null,
+    enabled: !!row.enabled,
+    botUsername: row.botUsername,
+    webhookUrl: row.webhookUrl,
+    adminChatId: settings.adminChatId || process.env.TELEGRAM_ADMIN_CHAT_ID || null,
+    adminChatVerified: !!settings.adminChatVerified,
+    webhookSecret: process.env.TELEGRAM_WEBHOOK_SECRET || settings.webhookSecret || "",
+    accessRequests: Array.isArray(settings.accessRequests) ? (settings.accessRequests as TelegramAccessRequest[]) : [],
+  };
+};
+
+export const saveTelegramSettings = async (update: {
+  adminChatId?: string | null;
+  adminChatVerified?: boolean;
+  webhookSecret?: string;
+  accessRequests?: TelegramAccessRequest[];
+  enabled?: boolean;
+  botUsername?: string;
+  webhookUrl?: string;
+  botToken?: string;
+}) => {
+  const existing = await db.select().from(botSettings).where(eq(botSettings.platform, "telegram")).limit(1);
+  const currentSettings = (existing[0]?.settings as any) || {};
+  const newSettings = { ...currentSettings };
+
+  if (update.adminChatId !== undefined) newSettings.adminChatId = update.adminChatId;
+  if (update.adminChatVerified !== undefined) newSettings.adminChatVerified = update.adminChatVerified;
+  if (update.webhookSecret !== undefined) newSettings.webhookSecret = update.webhookSecret;
+  if (update.accessRequests !== undefined) newSettings.accessRequests = update.accessRequests;
+
+  const updateData: any = {
+    platform: "telegram",
+    settings: newSettings,
+    updatedAt: new Date(),
+  };
+  if (update.enabled !== undefined) updateData.enabled = update.enabled;
+  if (update.botUsername !== undefined) updateData.botUsername = update.botUsername;
+  if (update.webhookUrl !== undefined) updateData.webhookUrl = update.webhookUrl;
+  if (update.botToken !== undefined) updateData.botToken = update.botToken;
+
+  if (existing.length) {
+    await db.update(botSettings).set(updateData).where(eq(botSettings.platform, "telegram"));
+  } else {
+    updateData.enabled = updateData.enabled ?? false;
+    await db.insert(botSettings).values(updateData);
+  }
+  return newSettings;
+};
+
+// ── Telegram Low-Level Messaging ──
+export type SendResult =
+  | { ok: true; messageId: string; mock?: boolean }
+  | { ok: false; error: string; mock?: boolean };
+
+export const sendTelegramMessage = async (
+  token: string | null,
+  chatId: string,
+  text: string,
+  options?: {
+    reply_markup?: any;
+    parse_mode?: string;
+    disable_web_page_preview?: boolean;
+  }
+): Promise<SendResult> => {
+  if (process.env.TELEGRAM_MOCK === "1") {
+    if (!chatId) return { ok: false, error: "Missing chat id", mock: true };
+    return { ok: true, messageId: `mock-${Date.now()}-${Math.floor(Math.random() * 1000)}`, mock: true };
+  }
+
+  if (!token) return { ok: false, error: "Telegram bot is not configured or disabled" };
+  if (!chatId) return { ok: false, error: "Recipient has no Telegram chat id" };
+
+  try {
+    const payload: any = {
+      chat_id: chatId,
+      text,
+      disable_web_page_preview: options?.disable_web_page_preview ?? false,
+    };
+    if (options?.reply_markup) payload.reply_markup = options.reply_markup;
+    if (options?.parse_mode) payload.parse_mode = options.parse_mode;
+
+    const res = await fetch(`${TELEGRAM_API}/bot${token}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data: any = await res.json().catch(() => ({}));
+    if (!res.ok || !data?.ok) {
+      return { ok: false, error: data?.description || `HTTP ${res.status}` };
+    }
+    return { ok: true, messageId: String(data.result?.message_id ?? "") };
+  } catch (err: any) {
+    return { ok: false, error: err?.message || "Network error" };
+  }
+};
+
+export const answerCallbackQuery = async (
+  token: string | null,
+  callbackQueryId: string,
+  text?: string,
+  showAlert: boolean = false
+): Promise<boolean> => {
+  if (process.env.TELEGRAM_MOCK === "1") return true;
+  if (!token || !callbackQueryId) return false;
+  try {
+    const res = await fetch(`${TELEGRAM_API}/bot${token}/answerCallbackQuery`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        callback_query_id: callbackQueryId,
+        text: text || "",
+        show_alert: showAlert,
+      }),
+    });
+    const data: any = await res.json().catch(() => ({}));
+    return !!data?.ok;
+  } catch {
+    return false;
+  }
+};
+
+export const editMessageText = async (
+  token: string | null,
+  chatId: string,
+  messageId: number | string,
+  text: string,
+  options?: { reply_markup?: any; parse_mode?: string }
+): Promise<boolean> => {
+  if (process.env.TELEGRAM_MOCK === "1") return true;
+  if (!token || !chatId || !messageId) return false;
+  try {
+    const payload: any = {
+      chat_id: chatId,
+      message_id: messageId,
+      text,
+    };
+    if (options?.reply_markup) payload.reply_markup = options.reply_markup;
+    if (options?.parse_mode) payload.parse_mode = options.parse_mode;
+
+    const res = await fetch(`${TELEGRAM_API}/bot${token}/editMessageText`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data: any = await res.json().catch(() => ({}));
+    return !!data?.ok;
+  } catch {
+    return false;
+  }
+};
+
+// ── Media Download Helper ──
+export const downloadTelegramFile = async (
+  token: string | null,
+  fileId: string,
+  uploadDir: string
+): Promise<{ ok: true; filePath: string; localPath: string; fileName: string; mimeType: string; fileSize: number } | { ok: false; error: string }> => {
+  if (process.env.TELEGRAM_MOCK === "1") {
+    const fileName = `mock-telegram-${fileId}.jpg`;
+    const localPath = path.join(uploadDir, fileName);
+    if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+    if (!fs.existsSync(localPath)) {
+      fs.writeFileSync(localPath, Buffer.from("MOCK_TELEGRAM_EVIDENCE_IMAGE_PAYLOAD"));
+    }
+    return {
+      ok: true,
+      filePath: `/uploads/${fileName}`,
+      localPath,
+      fileName,
+      mimeType: "image/jpeg",
+      fileSize: 38,
+    };
+  }
+
+  if (!token) return { ok: false, error: "Bot token is missing" };
+  try {
+    const fileRes = await fetch(`${TELEGRAM_API}/bot${token}/getFile?file_id=${fileId}`);
+    const fileData: any = await fileRes.json().catch(() => ({}));
+    if (!fileRes.ok || !fileData?.ok || !fileData.result?.file_path) {
+      return { ok: false, error: fileData?.description || "Unable to get Telegram file metadata" };
+    }
+    const remotePath = fileData.result.file_path;
+    const ext = path.extname(remotePath) || ".jpg";
+    const uniqueName = `telegram-${Date.now()}-${Math.round(Math.random() * 1e6)}${ext}`;
+    if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+    const localPath = path.join(uploadDir, uniqueName);
+
+    const downloadRes = await fetch(`${TELEGRAM_API}/file/bot${token}/${remotePath}`);
+    if (!downloadRes.ok) {
+      return { ok: false, error: `Failed to download file stream: HTTP ${downloadRes.status}` };
+    }
+    const buffer = Buffer.from(await downloadRes.arrayBuffer());
+    await fs.promises.writeFile(localPath, buffer);
+
+    let mimeType = "image/jpeg";
+    if (ext === ".pdf") mimeType = "application/pdf";
+    else if (ext === ".png") mimeType = "image/png";
+    else if (ext === ".webp") mimeType = "image/webp";
+
+    return {
+      ok: true,
+      filePath: `/uploads/${uniqueName}`,
+      localPath,
+      fileName: path.basename(remotePath) || uniqueName,
+      mimeType,
+      fileSize: buffer.length,
+    };
+  } catch (err: any) {
+    return { ok: false, error: err.message || "Failed to download Telegram file" };
+  }
+};
+
+// ── Project Assignment & Authorization Helpers ──
+export const getUserAssignedProjects = async (chatId: string) => {
+  const [user] = await db.select().from(users).where(eq(users.telegramChatId, chatId)).limit(1);
+  if (!user || !user.isActive) return [];
+
+  // Query active fieldAccessLinks assigned to this user
+  const links = await db.select().from(fieldAccessLinks).where(
+    and(
+      sql`(${fieldAccessLinks.recipientContact} = ${chatId} OR ${fieldAccessLinks.metadata}->>'telegramChatId' = ${chatId} OR ${fieldAccessLinks.metadata}->>'userId' = ${String(user.id)})`,
+      isNull(fieldAccessLinks.revokedAt),
+      gt(fieldAccessLinks.expiresAt, new Date())
+    )
+  );
+
+  if (!links.length) return [];
+
+  const estimateIds = Array.from(new Set(links.map((l) => l.estimateId)));
+  const assignedList: Array<{
+    linkId: number;
+    estimateId: number;
+    estimateNumber: string;
+    title: string;
+    subject: string;
+    clientName: string;
+    storeName: string;
+  }> = [];
+
+  for (const estId of estimateIds) {
+    const link = links.find((l) => l.estimateId === estId);
+    const [est] = await db.select().from(estimates).where(eq(estimates.id, estId)).limit(1);
+    if (!est) continue;
+
+    let clientName = "";
+    if (est.clientId) {
+      const [c] = await db.select().from(clients).where(eq(clients.id, est.clientId)).limit(1);
+      if (c) clientName = c.name;
+    }
+    let storeName = "";
+    if (est.storeId) {
+      const [s] = await db.select().from(stores).where(eq(stores.id, est.storeId)).limit(1);
+      if (s) storeName = s.name || s.storeCode || "";
+    }
+
+    assignedList.push({
+      linkId: link ? link.id : 0,
+      estimateId: est.id,
+      estimateNumber: est.estimateNumber,
+      title: est.title,
+      subject: est.subject || "",
+      clientName,
+      storeName,
+    });
+  }
+  return assignedList;
+};
+
+export const assignProjectToTelegramUser = async ({
+  estimateId,
+  userId,
+  createdBy,
+}: {
+  estimateId: number;
+  userId: number;
+  createdBy?: number;
+}) => {
+  const [user] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+  if (!user) throw new Error("Staff contact not found");
+  const [est] = await db.select().from(estimates).where(eq(estimates.id, estimateId)).limit(1);
+  if (!est) throw new Error("Estimate not found");
+
+  // Check if active assignment already exists
+  const existing = await db
+    .select()
+    .from(fieldAccessLinks)
+    .where(
+      and(
+        eq(fieldAccessLinks.estimateId, estimateId),
+        sql`(${fieldAccessLinks.recipientContact} = ${user.telegramChatId || ""} OR ${fieldAccessLinks.metadata}->>'userId' = ${String(user.id)})`,
+        isNull(fieldAccessLinks.revokedAt)
+      )
+    )
+    .limit(1);
+
+  if (existing.length) {
+    return existing[0];
+  }
+
+  const token = crypto.randomBytes(32).toString("base64url");
+  const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+  const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 days
+
+  const [created] = await db
+    .insert(fieldAccessLinks)
+    .values({
+      estimateId,
+      tokenHash,
+      tokenPrefix: token.slice(0, 8),
+      channel: "telegram",
+      recipientName: user.name,
+      recipientContact: user.telegramChatId || user.phone || null,
+      allowedDocumentTypes: ["photo", "signed_dc", "extra"],
+      expiresAt,
+      createdBy: createdBy || null,
+      metadata: {
+        userId: user.id,
+        telegramChatId: user.telegramChatId,
+        assignedVia: "telegram_admin",
+        estimateNumber: est.estimateNumber,
+      },
+    })
+    .returning();
+
+  return created;
+};
+
+export const revokeProjectAssignment = async (linkId: number, revokedBy?: number) => {
+  const [updated] = await db
+    .update(fieldAccessLinks)
+    .set({ revokedAt: new Date(), revokedBy: revokedBy || null, updatedAt: new Date() })
+    .where(eq(fieldAccessLinks.id, linkId))
+    .returning();
+  return updated;
+};
+
+// ── Webhook Handler & Bot State Engine ──
+export const handleTelegramWebhook = async (payload: any, uploadDir: string): Promise<{ handled: boolean; action?: string }> => {
+  if (!payload) return { handled: false };
+
+  // 1. Deduplication: reject repeated updates
+  const updateId = payload.update_id;
+  if (updateId) {
+    if (processedUpdates.has(updateId)) {
+      console.log(`[Telegram Bot] Ignoring duplicate update_id: ${updateId}`);
+      return { handled: true, action: "duplicate_ignored" };
+    }
+    processedUpdates.set(updateId, Date.now());
+    // Prune cache to keep under 10000 entries
+    if (processedUpdates.size > 10000) {
+      const cutoff = Date.now() - 3600000;
+      for (const [k, v] of Array.from(processedUpdates.entries())) {
+        if (v < cutoff) processedUpdates.delete(k);
+      }
+    }
+  }
+
+  const config = await getTelegramSettings();
+  const botToken = config.token;
+
+  // 2. Handle Callback Queries (Inline buttons)
+  if (payload.callback_query) {
+    const cb = payload.callback_query;
+    const data = cb.data || "";
+    const fromId = String(cb.from?.id);
+    const cbId = cb.id;
+
+    // A. Administrator Approval / Rejection
+    if (data.startsWith("auth:approve:") || data.startsWith("auth:reject:")) {
+      const isApprove = data.startsWith("auth:approve:");
+      const targetChatId = data.split(":")[2];
+
+      // Validate administrator identity
+      const isConfiguredAdmin = config.adminChatId && String(config.adminChatId) === fromId;
+      const [adminUser] = await db
+        .select()
+        .from(users)
+        .where(and(eq(users.telegramChatId, fromId), eq(users.role, "admin"), eq(users.isActive, true)))
+        .limit(1);
+
+      if (!isConfiguredAdmin && !adminUser) {
+        await answerCallbackQuery(botToken, cbId, "⛔ Unauthorized: Only configured Sunrise ERP administrators can approve requests.", true);
+        return { handled: true, action: "auth_callback_unauthorized" };
+      }
+
+      // Find pending request in settings
+      const requests = config.accessRequests;
+      const targetReq = requests.find((r) => r.chatId === targetChatId && r.status === "pending");
+
+      if (!targetReq) {
+        await answerCallbackQuery(botToken, cbId, "⚠️ This request has already been processed or does not exist.", true);
+        return { handled: true, action: "auth_callback_already_processed" };
+      }
+
+      // Update request state
+      targetReq.status = isApprove ? "approved" : "rejected";
+      targetReq.reviewedAt = new Date().toISOString();
+      targetReq.reviewedBy = fromId;
+      await saveTelegramSettings({ accessRequests: requests });
+
+      if (isApprove) {
+        // Link or create user in ERP users table
+        let [matchedUser] = await db.select().from(users).where(eq(users.telegramChatId, targetChatId)).limit(1);
+
+        if (!matchedUser) {
+          // Check by phone
+          const cleanPhone = targetReq.phone.replace(/[^0-9]/g, "").slice(-10);
+          if (cleanPhone) {
+            const byPhone = await db.select().from(users).where(sql`RIGHT(phone, 10) = ${cleanPhone}`).limit(1);
+            if (byPhone.length) {
+              matchedUser = byPhone[0];
+              await db.update(users).set({ telegramChatId: targetChatId, isActive: true }).where(eq(users.id, matchedUser.id));
+            }
+          }
+        }
+
+        if (!matchedUser) {
+          // Create new staff contact
+          const [newUser] = await db
+            .insert(users)
+            .values({
+              username: `tg_${targetChatId}`,
+              email: `tg_${targetChatId}@sunrisemedia.local`,
+              password: crypto.randomBytes(16).toString("hex"),
+              name: targetReq.name,
+              phone: targetReq.phone,
+              role: "staff",
+              telegramChatId: targetChatId,
+              isActive: true,
+              notes: "Registered via Telegram bot contact approval",
+            })
+            .returning();
+          matchedUser = newUser;
+        } else {
+          await db.update(users).set({ isActive: true }).where(eq(users.id, matchedUser.id));
+        }
+
+        // Notify user
+        await sendTelegramMessage(
+          botToken,
+          targetChatId,
+          `🎉 *Access Approved!*\n\nWelcome to Sunrise Media ERP, *${targetReq.name}*.\nYour contact is now registered.\n\n⚠️ No projects are currently assigned to you. Once your supervisor assigns projects to you in Sunrise ERP, use /projects to begin uploading site photos and delivery challans.`,
+          { parse_mode: "Markdown" }
+        );
+
+        // Edit Admin message
+        await editMessageText(
+          botToken,
+          fromId,
+          cb.message?.message_id,
+          `✅ *Approved:* Access granted for ${targetReq.name} (${targetReq.phone}).\n🆔 Telegram ID: \`${targetChatId}\`\n\n📌 Note: Assign projects to this user via Sunrise ERP.`,
+          { parse_mode: "Markdown" }
+        );
+
+        await answerCallbackQuery(botToken, cbId, `Approved access for ${targetReq.name}`);
+      } else {
+        // Rejected
+        await sendTelegramMessage(
+          botToken,
+          targetChatId,
+          `❌ *Access Request Not Approved*\n\nYour request to access Sunrise Media ERP was declined. Please contact your administrator if you believe this is in error.`,
+          { parse_mode: "Markdown" }
+        );
+
+        await editMessageText(
+          botToken,
+          fromId,
+          cb.message?.message_id,
+          `❌ *Rejected:* Access request for ${targetReq.name} (${targetReq.phone}) was declined.`,
+          { parse_mode: "Markdown" }
+        );
+
+        await answerCallbackQuery(botToken, cbId, `Rejected access for ${targetReq.name}`);
+      }
+      return { handled: true, action: isApprove ? "approved_user" : "rejected_user" };
+    }
+
+    // B. Administrator Verification Callback
+    if (data === "admin:verify") {
+      await saveTelegramSettings({ adminChatId: fromId, adminChatVerified: true });
+      await editMessageText(
+        botToken,
+        fromId,
+        cb.message?.message_id,
+        `🛡️ *Administrator Chat Verified!*\n\nChat ID: \`${fromId}\` is confirmed. You will now receive private Telegram approval requests whenever new field contacts request access.`,
+        { parse_mode: "Markdown" }
+      );
+      await answerCallbackQuery(botToken, cbId, "Admin connection verified successfully!");
+      return { handled: true, action: "admin_verified" };
+    }
+
+    // C. User Project Selection: proj:<estimateId>
+    if (data.startsWith("proj:")) {
+      const estimateId = parseInt(data.split(":")[1], 10);
+      const assigned = await getUserAssignedProjects(fromId);
+      const project = assigned.find((p) => p.estimateId === estimateId);
+
+      if (!project) {
+        await answerCallbackQuery(botToken, cbId, "⚠️ You are not assigned to this project or assignment was revoked.", true);
+        return { handled: true, action: "project_not_assigned" };
+      }
+
+      setUserSession(fromId, { state: "PROJECT_SELECTED", selectedEstimateId: estimateId });
+
+      const msg = [
+        `📁 *Project Selected:* ${project.estimateNumber}`,
+        `🏢 *Client:* ${project.clientName || "Sunrise Client"}`,
+        `📍 *Subject/Store:* ${project.subject || project.storeName || "Site Execution"}`,
+        ``,
+        `Choose what you want to upload:`,
+      ].join("\n");
+
+      await editMessageText(botToken, fromId, cb.message?.message_id, msg, {
+        parse_mode: "Markdown",
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "📸 Installation Photos", callback_data: `up:photo:${estimateId}` }],
+            [{ text: "📄 Delivery Challan (DC)", callback_data: `up:dc:${estimateId}` }],
+            [{ text: "📑 Other Documents", callback_data: `up:extra:${estimateId}` }],
+            [{ text: "🔙 Switch Project", callback_data: "nav:projects" }],
+          ],
+        },
+      });
+      await answerCallbackQuery(botToken, cbId);
+      return { handled: true, action: "project_selected" };
+    }
+
+    // D. User Category Action Selection: up:<type>:<estimateId>
+    if (data.startsWith("up:")) {
+      const parts = data.split(":");
+      const uploadType = parts[1] as "photo" | "dc" | "extra";
+      const estimateId = parseInt(parts[2], 10);
+
+      const assigned = await getUserAssignedProjects(fromId);
+      const project = assigned.find((p) => p.estimateId === estimateId);
+      if (!project) {
+        await answerCallbackQuery(botToken, cbId, "⚠️ Project assignment expired or revoked.", true);
+        return { handled: true, action: "project_assignment_invalid" };
+      }
+
+      setUserSession(fromId, { state: "UPLOADING", selectedEstimateId: estimateId, uploadType });
+
+      const typeLabel = uploadType === "photo" ? "Installation Photos" : uploadType === "dc" ? "Delivery Challan (DC)" : "Documents";
+      const prompt = [
+        `📸 *Ready for ${typeLabel}*`,
+        `Project: *${project.estimateNumber}*`,
+        ``,
+        `Please send your photo(s) or document now. You can send single items or albums.`,
+        ``,
+        `When finished, tap *Finish Upload* below.`,
+      ].join("\n");
+
+      await editMessageText(botToken, fromId, cb.message?.message_id, prompt, {
+        parse_mode: "Markdown",
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "🏁 Finish Upload", callback_data: "nav:finish" }],
+            [{ text: "🔙 Switch Category", callback_data: `proj:${estimateId}` }],
+            [{ text: "❌ Cancel", callback_data: "nav:cancel" }],
+          ],
+        },
+      });
+      await answerCallbackQuery(botToken, cbId);
+      return { handled: true, action: "upload_category_selected" };
+    }
+
+    // E. Navigation & Control Callbacks
+    if (data === "nav:projects") {
+      const assigned = await getUserAssignedProjects(fromId);
+      if (!assigned.length) {
+        await editMessageText(
+          botToken,
+          fromId,
+          cb.message?.message_id,
+          "📋 You have no active projects assigned. Contact your ERP administrator to assign projects to you."
+        );
+        await answerCallbackQuery(botToken, cbId);
+        return { handled: true, action: "no_projects" };
+      }
+
+      const buttons = assigned.map((p) => [
+        {
+          text: `🔘 ${p.estimateNumber} — ${p.clientName || p.title}`,
+          callback_data: `proj:${p.estimateId}`,
+        },
+      ]);
+
+      await editMessageText(
+        botToken,
+        fromId,
+        cb.message?.message_id,
+        "📋 *Your Assigned Projects*\n\nSelect a project to upload site evidence:",
+        {
+          parse_mode: "Markdown",
+          reply_markup: { inline_keyboard: buttons },
+        }
+      );
+      await answerCallbackQuery(botToken, cbId);
+      return { handled: true, action: "nav_projects" };
+    }
+
+    if (data === "nav:finish" || data === "nav:cancel") {
+      clearUserSession(fromId);
+      await editMessageText(
+        botToken,
+        fromId,
+        cb.message?.message_id,
+        data === "nav:finish"
+          ? "✅ *Upload Session Completed.*\n\nThank you for uploading project evidence. Send /projects anytime to select another project."
+          : "❌ *Upload Cancelled.*\n\nSend /projects anytime to select an assigned project.",
+        { parse_mode: "Markdown" }
+      );
+      await answerCallbackQuery(botToken, cbId);
+      return { handled: true, action: "nav_finished" };
+    }
+  }
+
+  // 3. Handle Regular Inbound Messages
+  const msg = payload.message;
+  if (!msg) return { handled: false };
+
+  const chatId = String(msg.chat?.id || msg.from?.id);
+  const from = msg.from;
+  const text = (msg.text || "").trim();
+
+  // A. Contact Sharing Message (Access Request)
+  if (msg.contact) {
+    const contact = msg.contact;
+
+    // SECURITY CHECK: Verify contact belongs to the sender
+    if (contact.user_id && contact.user_id !== from.id) {
+      await sendTelegramMessage(
+        botToken,
+        chatId,
+        "⚠️ *Security Notice:*\nPlease share your *OWN* contact using the button below. Forwarded contacts cannot be verified.",
+        {
+          parse_mode: "Markdown",
+          reply_markup: {
+            keyboard: [[{ text: "📱 Share My Contact", request_contact: true }]],
+            resize_keyboard: true,
+            one_time_keyboard: true,
+          },
+        }
+      );
+      return { handled: true, action: "contact_forged_rejected" };
+    }
+
+    const name = [contact.first_name, contact.last_name].filter(Boolean).join(" ") || from.first_name || "Field Contact";
+    const phone = contact.phone_number;
+
+    // Check if already approved
+    const [existingApprovedUser] = await db
+      .select()
+      .from(users)
+      .where(and(eq(users.telegramChatId, chatId), eq(users.isActive, true)))
+      .limit(1);
+
+    if (existingApprovedUser) {
+      await sendTelegramMessage(
+        botToken,
+        chatId,
+        `👋 Welcome back, *${existingApprovedUser.name}*! Your account is already approved.\nSend /projects to view your assigned projects.`,
+        { parse_mode: "Markdown", reply_markup: { remove_keyboard: true } }
+      );
+      return { handled: true, action: "already_approved_contact" };
+    }
+
+    // Add or update access request
+    const requests = config.accessRequests;
+    const existingReq = requests.find((r) => r.chatId === chatId);
+
+    if (existingReq && existingReq.status === "pending") {
+      await sendTelegramMessage(
+        botToken,
+        chatId,
+        `⏳ *Access Request Pending*\n\nThank you, *${name}*. Your access request is already awaiting administrator approval. You will receive a notification here once approved.`,
+        { parse_mode: "Markdown", reply_markup: { remove_keyboard: true } }
+      );
+      return { handled: true, action: "request_already_pending" };
+    }
+
+    const newReq: TelegramAccessRequest = {
+      id: `req_${chatId}_${Date.now()}`,
+      chatId,
+      name,
+      phone,
+      username: from.username,
+      requestedAt: new Date().toISOString(),
+      status: "pending",
+    };
+
+    const updatedRequests = [...requests.filter((r) => r.chatId !== chatId), newReq];
+    await saveTelegramSettings({ accessRequests: updatedRequests });
+
+    // Acknowledge to user
+    await sendTelegramMessage(
+      botToken,
+      chatId,
+      `⏳ *Request Submitted*\n\nThank you, *${name}*! Your contact (*${phone}*) has been submitted to the Sunrise ERP Administrator for approval.\n\nYou cannot view projects or upload evidence until approved. We will notify you here once access is granted.`,
+      { parse_mode: "Markdown", reply_markup: { remove_keyboard: true } }
+    );
+
+    // Notify Administrator via Telegram if configured
+    if (config.adminChatId) {
+      const adminNotice = [
+        `🔔 *Sunrise ERP — New Telegram Access Request*`,
+        ``,
+        `👤 *Name:* ${name}`,
+        `📱 *Phone:* ${phone}`,
+        `🆔 *Telegram ID:* \`${chatId}\``,
+        `🕒 *Requested:* ${new Date().toLocaleString("en-IN")}`,
+        ``,
+        `Do you want to approve this user for project evidence uploads?`,
+      ].join("\n");
+
+      await sendTelegramMessage(botToken, String(config.adminChatId), adminNotice, {
+        parse_mode: "Markdown",
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: "✅ Approve", callback_data: `auth:approve:${chatId}` },
+              { text: "❌ Reject", callback_data: `auth:reject:${chatId}` },
+            ]
+          ],
+        },
+      });
+    }
+
+    return { handled: true, action: "access_requested" };
+  }
+
+  // B. /start Command
+  if (text.startsWith("/start")) {
+    // 1. Check if user is known and approved
+    const [user] = await db.select().from(users).where(eq(users.telegramChatId, chatId)).limit(1);
+
+    if (user && user.isActive) {
+      const assigned = await getUserAssignedProjects(chatId);
+      if (!assigned.length) {
+        await sendTelegramMessage(
+          botToken,
+          chatId,
+          `👋 Welcome back, *${user.name}*!\n\n📋 You currently have *no active projects assigned*. Please contact your ERP administrator to assign projects to you.`,
+          { parse_mode: "Markdown", reply_markup: { remove_keyboard: true } }
+        );
+        return { handled: true, action: "start_approved_no_projects" };
+      }
+
+      const buttons = assigned.map((p) => [
+        {
+          text: `🔘 ${p.estimateNumber} — ${p.clientName || p.title}`,
+          callback_data: `proj:${p.estimateId}`,
+        },
+      ]);
+
+      await sendTelegramMessage(
+        botToken,
+        chatId,
+        `👋 Welcome back, *${user.name}*!\n\n📋 *Your Assigned Projects:*\nSelect a project below to upload installation photos or delivery challans:`,
+        {
+          parse_mode: "Markdown",
+          reply_markup: { inline_keyboard: buttons },
+        }
+      );
+      return { handled: true, action: "start_approved_projects_listed" };
+    }
+
+    // 2. Check if pending request exists
+    const pendingReq = config.accessRequests.find((r) => r.chatId === chatId && r.status === "pending");
+    if (pendingReq) {
+      await sendTelegramMessage(
+        botToken,
+        chatId,
+        `⏳ *Access Awaiting Approval*\n\nHello *${pendingReq.name}*, your access request is currently pending review by the Sunrise ERP Administrator. No project access or uploads are permitted while pending.`,
+        { parse_mode: "Markdown", reply_markup: { remove_keyboard: true } }
+      );
+      return { handled: true, action: "start_pending" };
+    }
+
+    // 3. Unknown user — request contact verification
+    const welcome = [
+      `👋 *Welcome to Sunrise Media ERP Bot*`,
+      ``,
+      `To access your assigned installation projects and upload photo evidence or delivery challans, please verify your identity by sharing your contact.`,
+      ``,
+      `Tap the button below to request access.`,
+    ].join("\n");
+
+    await sendTelegramMessage(botToken, chatId, welcome, {
+      parse_mode: "Markdown",
+      reply_markup: {
+        keyboard: [[{ text: "📱 Share Contact to Request Access", request_contact: true }]],
+        resize_keyboard: true,
+        one_time_keyboard: true,
+      },
+    });
+    return { handled: true, action: "start_prompt_contact" };
+  }
+
+  // C. /projects Command
+  if (text.startsWith("/projects")) {
+    const [user] = await db.select().from(users).where(eq(users.telegramChatId, chatId)).limit(1);
+    if (!user || !user.isActive) {
+      await sendTelegramMessage(
+        botToken,
+        chatId,
+        `⛔ You are not an approved user. Send /start to request access.`
+      );
+      return { handled: true, action: "projects_unauthorized" };
+    }
+
+    const assigned = await getUserAssignedProjects(chatId);
+    if (!assigned.length) {
+      await sendTelegramMessage(
+        botToken,
+        chatId,
+        `📋 You have no active projects assigned. Please ask your administrator to assign projects to you in Sunrise ERP.`
+      );
+      return { handled: true, action: "projects_none" };
+    }
+
+    const buttons = assigned.map((p) => [
+      {
+        text: `🔘 ${p.estimateNumber} — ${p.clientName || p.title}`,
+        callback_data: `proj:${p.estimateId}`,
+      },
+    ]);
+
+    await sendTelegramMessage(
+      botToken,
+      chatId,
+      `📋 *Your Assigned Projects*\n\nSelect a project to upload evidence:`,
+      {
+        parse_mode: "Markdown",
+        reply_markup: { inline_keyboard: buttons },
+      }
+    );
+    return { handled: true, action: "projects_listed" };
+  }
+
+  // D. Photo and Document Uploads
+  const photo = msg.photo ? msg.photo[msg.photo.length - 1] : null;
+  const doc = msg.document;
+
+  if (photo || doc) {
+    // 1. Verify user is approved
+    const [user] = await db.select().from(users).where(eq(users.telegramChatId, chatId)).limit(1);
+    if (!user || !user.isActive) {
+      await sendTelegramMessage(
+        botToken,
+        chatId,
+        `⛔ *Access Denied:* You cannot upload evidence without an approved Sunrise ERP account. Send /start to request access.`
+      );
+      return { handled: true, action: "upload_rejected_unapproved" };
+    }
+
+    // 2. Verify active project session
+    const session = getUserSession(chatId);
+    if (!session.selectedEstimateId) {
+      await sendTelegramMessage(
+        botToken,
+        chatId,
+        `⚠️ *No Project Selected*\nPlease send /projects first to choose which project you are uploading for.`
+      );
+      return { handled: true, action: "upload_rejected_no_project" };
+    }
+
+    // 3. Verify server-side project assignment is still valid and unrevoked
+    const assigned = await getUserAssignedProjects(chatId);
+    const activeProject = assigned.find((p) => p.estimateId === session.selectedEstimateId);
+    if (!activeProject) {
+      clearUserSession(chatId);
+      await sendTelegramMessage(
+        botToken,
+        chatId,
+        `⛔ *Assignment Revoked:* Your access to this project has ended. Send /projects to see your current projects.`
+      );
+      return { handled: true, action: "upload_rejected_revoked" };
+    }
+
+    const [estimate] = await db.select().from(estimates).where(eq(estimates.id, session.selectedEstimateId)).limit(1);
+    if (!estimate) {
+      await sendTelegramMessage(botToken, chatId, `❌ Error: Target project record not found in database.`);
+      return { handled: true, action: "upload_error_estimate_missing" };
+    }
+
+    const fileId = photo?.file_id || doc?.file_id;
+    if (!fileId) {
+      await sendTelegramMessage(botToken, chatId, `❌ Error: Missing file identifier.`);
+      return { handled: true, action: "upload_error_no_file_id" };
+    }
+
+    // 4. Download file from Telegram Bot API
+    const download = await downloadTelegramFile(botToken, fileId, uploadDir);
+    if (!download.ok) {
+      await sendTelegramMessage(botToken, chatId, `❌ Upload failed: ${download.error}. Please retry.`);
+      return { handled: true, action: "upload_download_failed" };
+    }
+
+    // 5. Determine upload category
+    const category = session.uploadType === "dc" ? "signed_dc" : session.uploadType === "extra" ? "extra" : "photo";
+
+    // 6. Link to executionDocuments
+    const [execDoc] = await db
+      .insert(executionDocuments)
+      .values({
+        companyId: estimate.companyId || 1,
+        estimateId: estimate.id,
+        documentType: category,
+        filePath: download.filePath,
+        originalFileName: download.fileName,
+        mimeType: download.mimeType,
+        fileSize: download.fileSize,
+        status: "active",
+        uploadedBy: user.id,
+        uploadedVia: "telegram",
+        uploadedAt: new Date(),
+        metadata: {
+          telegramChatId: chatId,
+          telegramMessageId: msg.message_id,
+          mediaGroupId: msg.media_group_id || null,
+          caption: msg.caption || null,
+        },
+      })
+      .returning();
+
+    // 7. Insert into botUploadInbox
+    await db.insert(botUploadInbox).values({
+      companyId: estimate.companyId || 1,
+      source: "telegram",
+      senderId: chatId,
+      senderName: user.name,
+      messageText: msg.caption || `Telegram ${category.replace("_", " ")}`,
+      mediaUrl: download.filePath,
+      mediaLocalPath: download.localPath,
+      mediaType: photo ? "photo" : "document",
+      uploadType: category,
+      mappedEstimateId: estimate.id,
+      mappedClientId: estimate.clientId,
+      status: "mapped",
+      mappedAt: new Date(),
+      mappedBy: user.id,
+      remarks: `Auto-linked via Telegram bot to project ${estimate.estimateNumber}`,
+      rawPayload: payload,
+    });
+
+    // 8. Handle media group deduplication / response
+    const mediaGroupId = msg.media_group_id;
+    if (mediaGroupId) {
+      const existing = mediaGroupDebounce.get(mediaGroupId) || { count: 0 };
+      existing.count += 1;
+      mediaGroupDebounce.set(mediaGroupId, existing);
+
+      // Send single confirmation after 1.5 seconds if album
+      if (!existing.timer) {
+        existing.timer = setTimeout(async () => {
+          mediaGroupDebounce.delete(mediaGroupId);
+          await sendTelegramMessage(
+            botToken,
+            chatId,
+            `✅ Received *${existing.count}* ${category === "photo" ? "photos" : "documents"} for project *${estimate.estimateNumber}*.\n\nSend more or send /projects to switch projects.`,
+            { parse_mode: "Markdown" }
+          );
+        }, 1500);
+        if (typeof existing.timer?.unref === "function") existing.timer.unref();
+      }
+    } else {
+      await sendTelegramMessage(
+        botToken,
+        chatId,
+        `✅ *Saved:* ${category === "photo" ? "Photo" : "Document"} uploaded and linked to project *${estimate.estimateNumber}*.\n\nSend more or send /projects to finish.`,
+        { parse_mode: "Markdown" }
+      );
+    }
+
+    return { handled: true, action: "upload_saved" };
+  }
+
+  return { handled: false };
+};
+
 /**
  * Chat-ID discovery: reads recent bot updates (getUpdates) so an admin can
- * find the chat IDs of people who have messaged the bot. This is the standard
- * Telegram onboarding flow — a user sends /start to the bot, then the admin
- * reads their chat.id here and saves it to that user's profile.
- * Returns a de-duplicated list of {chatId, name, username, lastText}.
- * Mockable for QA via TELEGRAM_MOCK.
+ * find the chat IDs of people who have messaged the bot.
  */
 export const discoverChats = async (
   token: string | null
@@ -42,67 +1104,18 @@ export const discoverChats = async (
     if (!res.ok || !data?.ok) return { ok: false, error: data?.description || `HTTP ${res.status}` };
     const byChat = new Map<string, { chatId: string; name: string; username?: string; lastText?: string }>();
     for (const upd of data.result || []) {
-      const msg = upd.message || upd.edited_message || upd.channel_post;
-      const chat = msg?.chat;
+      const m = upd.message || upd.edited_message || upd.channel_post;
+      const chat = m?.chat;
       if (!chat?.id) continue;
       const name = [chat.first_name, chat.last_name].filter(Boolean).join(" ") || chat.title || chat.username || String(chat.id);
       byChat.set(String(chat.id), {
         chatId: String(chat.id),
         name,
         username: chat.username,
-        lastText: msg.text,
+        lastText: m.text,
       });
     }
     return { ok: true, chats: Array.from(byChat.values()) };
-  } catch (err: any) {
-    return { ok: false, error: err?.message || "Network error" };
-  }
-};
-
-export const getBotToken = async (): Promise<string | null> => {
-  const [row] = await db.select().from(botSettings).where(eq(botSettings.platform, "telegram")).limit(1);
-  if (!row || !row.enabled) return null;
-  return row.botToken || null;
-};
-
-export type SendResult =
-  | { ok: true; messageId: string; mock?: boolean }
-  | { ok: false; error: string; mock?: boolean };
-
-/**
- * Low-level send. Returns a structured result; never throws.
- * Token is passed in by the caller (already fetched) so this stays pure.
- */
-export const sendTelegramMessage = async (
-  token: string | null,
-  chatId: string,
-  text: string
-): Promise<SendResult> => {
-  // Mock mode for QA without live credentials.
-  if (process.env.TELEGRAM_MOCK === "1") {
-    if (!chatId) return { ok: false, error: "Missing chat id", mock: true };
-    return { ok: true, messageId: `mock-${Date.now()}`, mock: true };
-  }
-
-  if (!token) return { ok: false, error: "Telegram bot is not configured or disabled" };
-  if (!chatId) return { ok: false, error: "Recipient has no Telegram chat id" };
-
-  try {
-    const res = await fetch(`${TELEGRAM_API}/bot${token}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text,
-        disable_web_page_preview: false,
-      }),
-    });
-    const data: any = await res.json().catch(() => ({}));
-    if (!res.ok || !data?.ok) {
-      // Telegram returns { ok:false, description: "..." }
-      return { ok: false, error: data?.description || `HTTP ${res.status}` };
-    }
-    return { ok: true, messageId: String(data.result?.message_id ?? "") };
   } catch (err: any) {
     return { ok: false, error: err?.message || "Network error" };
   }
@@ -118,7 +1131,11 @@ export const buildDeliveryMessage = (opts: {
   expiresAt: Date | string;
 }): string => {
   const expiry = new Date(opts.expiresAt).toLocaleString("en-IN", {
-    day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit",
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
   });
   return [
     `Project: ${opts.estimateNumber}`,
@@ -137,7 +1154,6 @@ export const buildDeliveryMessage = (opts: {
 
 /**
  * Send a delivery row (pending → sent/failed) and persist the outcome.
- * Used by both initial send and retry. Returns the updated row.
  */
 export const dispatchDelivery = async (deliveryId: number): Promise<any> => {
   const [delivery] = await db.select().from(telegramDeliveries).where(eq(telegramDeliveries.id, deliveryId)).limit(1);
