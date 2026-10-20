@@ -1,7 +1,7 @@
 import React from "react";
 import { isBoltMode } from "../../../lib/supabase";
 import { fetchExecutionStores, createInvoice, uploadToStorage, registerExecutionDocument, openExecutionDocument, submitEstimate } from "../../../lib/api";
-import { TriangleAlert as AlertTriangle, Archive, Briefcase, Camera, CircleCheck as CheckCircle2, ChevronRight, Copy, Download, CreditCard as Edit3, Eye, File, FileCheck2, FilePlus, FileSpreadsheet, FileText, FileUp, History, Image as ImageIcon, Paperclip, Pen, Plus, Printer, ScanLine, SlidersHorizontal, Store as StoreIcon, Upload, X } from "lucide-react";
+import { TriangleAlert as AlertTriangle, Archive, Briefcase, Camera, CircleCheck as CheckCircle2, ChevronRight, Copy, Download, CreditCard as Edit3, Eye, File, FileCheck2, FilePlus, FileSpreadsheet, FileText, FileUp, History, Image as ImageIcon, Paperclip, Pen, Plus, Printer, ScanLine, SlidersHorizontal, Store as StoreIcon, Upload, X, MessageCircle } from "lucide-react";
 import { isAblblFormat } from "../../../../../shared/textFormat";
 import { isServiceEstimateItem, serviceProductLabel } from "../../../../../shared/serviceProductDisplay";
 import { formatCurrency } from "../utils/formatters";
@@ -11,6 +11,7 @@ import { estimateItemsToInvoiceLines } from "../utils/invoiceConversion";
 import type { Brand, Client, Estimate, EstimateItem, Product, Store } from "../types";
 import EstimateDocument from "../../../components/EstimateDocument";
 import { EstimateRevisionsModal } from "./EstimateRevisionsModal";
+import { WhatsAppShareModal } from "../../../components/WhatsAppShareModal";
 
 interface EstimatePreviewProps {
   clients: Client[];
@@ -337,6 +338,7 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
 	        const [copyStatus, setCopyStatus] = React.useState("");
           const [showEstimateDocument, setShowEstimateDocument] = React.useState(false);
           const [showRevisionHistory, setShowRevisionHistory] = React.useState(false);
+          const [showWhatsAppModal, setShowWhatsAppModal] = React.useState(false);
           const [openDocSections, setOpenDocSections] = React.useState<string[]>(["PO", "Photos", "WCC", "Signed WCC", "Transport", "Extra", "Delivery Challan"]);
           const [documentStoreFilter, setDocumentStoreFilter] = React.useState("all");
           const [documentTypeFilter, setDocumentTypeFilter] = React.useState("all");
@@ -1181,6 +1183,18 @@ Sunrise Media`;
                     Detailed Excel
                   </button>
                 )}
+                {selectedEstimate && (
+                  <button
+                    type="button"
+                    onClick={() => setShowWhatsAppModal(true)}
+                    className="inline-flex items-center gap-1.5 py-1 px-3 bg-emerald-50 border border-emerald-300 text-emerald-800 text-xs font-bold rounded-lg hover:bg-emerald-100 transition shadow-xs cursor-pointer"
+                    title="Send Estimate / Quotation via WhatsApp"
+                  >
+                    <MessageCircle className="w-3.5 h-3.5 text-emerald-600" />
+                    Share via WhatsApp
+                  </button>
+                )}
+
 		                <button
 		                  type="button"
 		                  onClick={handlePrintClick}
@@ -2401,6 +2415,19 @@ Sunrise Media`;
             </div>
           </div>
         </div>
+      )}
+
+      {showWhatsAppModal && selectedEstimate && (
+        <WhatsAppShareModal
+          isOpen={showWhatsAppModal}
+          onClose={() => setShowWhatsAppModal(false)}
+          defaultPhone={clients.find((c: any) => c.id === selectedEstimate.clientId)?.mobile || ""}
+          recipientName={clients.find((c: any) => c.id === selectedEstimate.clientId)?.name || "Client"}
+          documentType="estimate"
+          documentNumber={selectedEstimate.estimateNumber}
+          documentUrl={`/api/operations/estimates/${selectedEstimate.id}/export-pdf`}
+          totalAmount={selectedEstimate.totalAmount || undefined}
+        />
       )}
 
       {showRevisionHistory && selectedEstimate && (

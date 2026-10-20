@@ -32,6 +32,7 @@ import { formatProductDetails } from "../shared/productDetails";
 import { isServiceEstimateItem, resolveServiceProduct, serviceProductLabel } from "../shared/serviceProductDisplay";
 import { computeStoreBreakdown } from "../shared/storeBreakdown";
 import { estimateItemsToInvoiceLines } from "../shared/invoiceConversion";
+import { whatsappEvolution } from "./services/whatsappEvolution";
 
 export async function registerRoutes(app: Express): Promise<Server> {
   if (process.env.BOLT_SAFE_BOOT === "true") {
@@ -6047,13 +6048,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (body.verifyToken !== undefined) updateData.verifyToken = body.verifyToken;
       if (body.phoneNumberId !== undefined) updateData.phoneNumberId = body.phoneNumberId;
       if (body.wabaId !== undefined) updateData.wabaId = body.wabaId;
-      if (body.settings !== undefined) updateData.settings = body.settings;
-      // Only update token if a real token (not masked) is sent
-      if (body.botToken && !body.botToken.startsWith("••••")) {
-        updateData.botToken = body.botToken;
-        updateData.accessTokenHint = body.botToken.slice(-4);
-      }
       const existing = await db.select().from(botSettings).where(eq(botSettings.platform, platform)).limit(1);
+      if (body.settings !== undefined) {
+        const prevSettings = (existing[0]?.settings as any) || {};
+        updateData.settings = { ...prevSettings, ...body.settings };
+      }
+      // Support apiKey or botToken
+      const rawToken = body.apiKey || body.botToken;
+      if (rawToken && !rawToken.startsWith("••••")) {
+        updateData.botToken = rawToken;
+        updateData.accessTokenHint = rawToken.slice(-4);
+      }
       let row: any;
       if (existing.length) {
         const updated = await db.update(botSettings).set(updateData).where(eq(botSettings.platform, platform)).returning();
@@ -6116,7 +6121,84 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // WhatsApp Cloud API webhook verification
+  // ==========================================
+  // WHATSAPP (Evolution API & Baileys QR-pairing)
+  // ==========================================
+
+  // GET WhatsApp service health & real-time connection status
+  app.get("/api/whatsapp/status", authenticateToken, async (req: AuthRequest, res: Response) => {
+    try {
+      const companyId = req.companyId || 1;
+      const status = await whatsappEvolution.getStatus(companyId);
+      const health = await whatsappEvolution.checkHealth(companyId);
+      res.json({
+        ...status,
+        latencyMs: health.latencyMs,
+        version: health.version,
+      });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // POST Connect / initialize instance & fetch QR code
+  app.post("/api/whatsapp/connect", authenticateToken, requireRole(["admin", "manager"]), async (req: AuthRequest, res: Response) => {
+    try {
+      const companyId = req.companyId || 1;
+      const result = await whatsappEvolution.connectInstance(companyId);
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // POST Disconnect / logout session
+  app.post("/api/whatsapp/disconnect", authenticateToken, requireRole(["admin"]), async (req: AuthRequest, res: Response) => {
+    try {
+      const companyId = req.companyId || 1;
+      const result = await whatsappEvolution.disconnectInstance(companyId);
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // POST Send WhatsApp message (text or document/media)
+  app.post("/api/whatsapp/send", authenticateToken, requireRole(["admin", "manager"]), async (req: AuthRequest, res: Response) => {
+    try {
+      const { to, text, mediaUrl, caption, fileName, mediaType } = req.body;
+      const companyId = req.companyId || 1;
+      const userId = req.user?.id;
+
+      if (!to) {
+        return res.status(400).json({ message: "Recipient phone number ('to') is required" });
+      }
+
+      if (mediaUrl) {
+        const result = await whatsappEvolution.sendMediaMessage(
+          to,
+          mediaUrl,
+          caption || text || "",
+          fileName || "document.pdf",
+          mediaType || "document",
+          { companyId, userId }
+        );
+        if (!result.success) return res.status(500).json({ message: result.error });
+        return res.json(result);
+      } else {
+        if (!text) {
+          return res.status(400).json({ message: "Message text is required when mediaUrl is not provided" });
+        }
+        const result = await whatsappEvolution.sendTextMessage(to, text, { companyId, userId });
+        if (!result.success) return res.status(500).json({ message: result.error });
+        return res.json(result);
+      }
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // WhatsApp Cloud API webhook verification (legacy Meta webhook support)
   app.get("/api/webhook/whatsapp", async (req, res) => {
     try {
       const settings = await db.select().from(botSettings).where(eq(botSettings.platform, "whatsapp")).limit(1);
@@ -6134,14 +6216,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // WhatsApp inbound messages
+  // WhatsApp inbound webhook (Evolution API + Meta Cloud fallback)
   app.post("/api/webhook/whatsapp", async (req, res) => {
     try {
+      const payload = req.body;
+      const incomingSecret = (req.headers["x-webhook-secret"] || req.headers["apikey"]) as string | undefined;
+
+      // 1. Evolution API webhook event (e.g. messages.upsert, connection.update, qrcode.updated)
+      if (payload?.event) {
+        const result = await whatsappEvolution.handleWebhook(payload, incomingSecret);
+        return res.status(200).json(result);
+      }
+
+      // 2. Legacy Meta Cloud API fallback
       const settings = await db.select().from(botSettings).where(eq(botSettings.platform, "whatsapp")).limit(1);
       if (!settings.length || !settings[0].enabled) return res.sendStatus(200);
-      const payload = req.body;
-      await db.insert(webhookLogs).values({ platform: "whatsapp", direction: "inbound", event: "message", payload, status: "received" });
-      // Extract message
+
+      await db.insert(webhookLogs).values({ platform: "whatsapp", direction: "inbound", event: "meta_message", payload, status: "received" });
       const entry = payload?.entry?.[0];
       const changes = entry?.changes?.[0];
       const value = changes?.value;
@@ -6152,18 +6243,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const contact = contacts.find((c: any) => c.wa_id === from);
         const senderName = contact?.profile?.name || from;
         const msgType = msg.type;
-        if (msgType === "image" || msgType === "document" || msgType === "video") {
-          await db.insert(botUploadInbox).values({
-            source: "whatsapp",
-            senderId: from,
-            senderName,
-            messageText: msg.text?.body || msg.image?.caption || null,
-            mediaType: msgType === "image" ? "photo" : "document",
-            uploadType: "extra",
-            rawPayload: payload,
-            status: "unlinked",
-          });
-        }
+        await db.insert(botUploadInbox).values({
+          source: "whatsapp",
+          senderId: from,
+          senderName,
+          messageText: msg.text?.body || msg.image?.caption || null,
+          mediaType: msgType === "image" ? "photo" : msgType === "document" ? "document" : "text",
+          uploadType: "extra",
+          rawPayload: payload,
+          status: "unlinked",
+        });
       }
       res.sendStatus(200);
     } catch (err: any) {
@@ -6171,6 +6260,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.sendStatus(200);
     }
   });
+
 
   // GET bot upload inbox
   app.get("/api/bot-inbox", authenticateToken, requireRole(["admin", "manager"]), async (req: AuthRequest, res: Response) => {

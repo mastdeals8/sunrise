@@ -3,9 +3,10 @@ import { useAuth } from "../../../contexts/AuthContext";
 import { isBoltMode } from "../../../lib/supabase";
 import { fetchEstimates, fetchEstimateItems, fetchDeliveryChallans, fetchInvoiceById, createInvoice, updateInvoice, refreshInvoiceFromEstimate, fetchExecutionDocuments, openExecutionDocument, fetchNextInvoiceNumber } from "../../../lib/api";
 import { Link } from "wouter";
-import { X, Plus, Trash2, Save, Send, Printer, ChevronLeft, RefreshCw } from "lucide-react";
+import { X, Plus, Trash2, Save, Send, Printer, ChevronLeft, RefreshCw, MessageCircle } from "lucide-react";
 import { normalizeDisplayName } from "../../../../../shared/textFormat";
 import { estimateItemsToInvoiceLines, invoiceLineToEditorLine } from "../utils/invoiceConversion";
+import { WhatsAppShareModal } from "../../../components/WhatsAppShareModal";
 
 export interface InvoiceLineItem {
   itemName: string;
@@ -59,6 +60,20 @@ const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ open, invoiceId, estimate
   const [attachments, setAttachments] = useState<any[]>([]);
   const [selectedAttachments, setSelectedAttachments] = useState<number[]>([]);
   const [updatingFromEstimate, setUpdatingFromEstimate] = useState(false);
+  const [showWhatsAppModal, setShowWhatsAppModal] = useState(false);
+  const [clientPhone, setClientPhone] = useState("");
+
+  useEffect(() => {
+    if (clientId && token) {
+      fetch(`/api/operations/clients`, { headers: { Authorization: `Bearer ${token}` } })
+        .then((r) => (r.ok ? r.json() : []))
+        .then((clients: any[]) => {
+          const c = clients.find((x: any) => x.id === clientId);
+          if (c?.mobile) setClientPhone(c.mobile);
+        })
+        .catch(() => {});
+    }
+  }, [clientId, token]);
 
   // Load: either an existing invoice OR build a draft from estimate + DC.
   useEffect(() => {
@@ -413,9 +428,19 @@ const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ open, invoiceId, estimate
               <Send className="w-3.5 h-3.5" /> Approve
             </button>
             {invoiceId && (
-              <a href={`/invoice-packet?id=${invoiceId}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 px-3 py-1.5 bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-700 text-xs font-bold rounded">
-                <Printer className="w-3.5 h-3.5" /> Print / PDF
-              </a>
+              <>
+                <a href={`/invoice-packet?id=${invoiceId}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 px-3 py-1.5 bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-700 text-xs font-bold rounded">
+                  <Printer className="w-3.5 h-3.5" /> Print / PDF
+                </a>
+                <button
+                  type="button"
+                  onClick={() => setShowWhatsAppModal(true)}
+                  className="inline-flex items-center gap-1 px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-800 text-xs font-bold rounded transition shadow-xs"
+                  title="Share invoice via WhatsApp"
+                >
+                  <MessageCircle className="w-3.5 h-3.5" /> WhatsApp
+                </button>
+              </>
             )}
           </div>
 
@@ -552,6 +577,16 @@ const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ open, invoiceId, estimate
           </div>
         </div>
       )}
+      <WhatsAppShareModal
+        isOpen={showWhatsAppModal}
+        onClose={() => setShowWhatsAppModal(false)}
+        defaultPhone={clientPhone}
+        recipientName={partyName}
+        documentType="invoice"
+        documentNumber={invoiceNumber}
+        documentUrl={invoiceId ? `/api/invoices/${invoiceId}/packet-pdf` : undefined}
+        totalAmount={grandTotal}
+      />
     </div>
   );
 };
