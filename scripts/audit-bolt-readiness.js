@@ -55,6 +55,7 @@ const SAFE_FILES_WITH_TOP_GUARD = new Set([
   "pages/ClientWorkspace.tsx",           // client workspace - Express-only
   "pages/TelegramSettings.tsx",          // telegram settings - checked with isBoltMode fallback
   "pages/WhatsAppSettings.tsx",          // whatsapp settings - checked with isBoltMode fallback
+  "pages/TallySettings.tsx",             // tally settings - checked with isBoltMode fallback
   "components/WhatsAppShareModal.tsx",   // whatsapp modal - guarded with isBoltMode check
   "pages/operations/components/MasterDataImportExportPanel.tsx", // template/export hrefs (non-critical, no fetch())
 ]);

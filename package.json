@@ -14,6 +14,7 @@
     "check:bolt": "node scripts/audit-bolt-readiness.js",
     "test:project-store-scope": "tsx scripts/test-project-store-scope.ts",
     "test:service-exports": "tsx scripts/test-service-product-display.ts",
+    "test:tally": "tsx scripts/test-tally-export.ts",
     "db:push": "drizzle-kit push",
     "postinstall": "node scripts/generate-templates.mjs"
   },

@@ -4,8 +4,9 @@ import { useAuth } from "../contexts/AuthContext";
 import { useGlobalDate } from "../contexts/GlobalDateContext";
 import { Link } from "wouter";
 import { Receipt, Search, ExternalLink, FileText, FileCode2, Settings as SettingsIcon, Send, Loader2 } from "lucide-react";
-import { isBoltMode } from "../lib/supabase";
-import { fetchInvoices } from "../lib/api";
+import { supabase, isBoltMode } from "../lib/supabase";
+import { fetchInvoices, fetchCompany, fetchClients } from "../lib/api";
+import { fetchTallySettings, buildTallyInvoiceXml, downloadTallyXml } from "../lib/tally";
 
 interface Invoice {
   id: number;
@@ -22,6 +23,7 @@ interface Invoice {
   status: string;
   estimateId?: number | null;
   clientId?: number | null;
+  companyId?: number | null;
   remarks?: string | null;
   createdAt?: string;
   tallyExportStatus?: string | null;
@@ -52,10 +54,107 @@ const SubmittedInvoicesPage: React.FC = () => {
   const [filterStatus, setFilterStatus] = useState<string>("all");
   const [filterType, setFilterType] = useState<string>("sales");
   const [pushingId, setPushingId] = useState<number | null>(null);
+  const [exportingId, setExportingId] = useState<number | null>(null);
+
+  const handleExportXml = async (inv: Invoice) => {
+    setExportingId(inv.id);
+    try {
+      if (isBoltMode) {
+        const [settings, company, allClients] = await Promise.all([
+          fetchTallySettings(token),
+          fetchCompany(token, inv.companyId || 1).catch(() => null),
+          fetchClients(token).catch(() => []),
+        ]);
+        const client = (allClients || []).find((c: any) => c.id === inv.clientId);
+        const xml = buildTallyInvoiceXml(inv, { settings, company, client });
+        downloadTallyXml(xml, inv.invoiceNumber);
+
+        // Update status in Supabase
+        await supabase
+          .from("invoices")
+          .update({
+            tally_export_status: "exported_xml",
+            tally_exported_at: new Date().toISOString(),
+          })
+          .eq("id", inv.id);
+
+        setInvoices((prev) =>
+          prev.map((i) =>
+            i.id === inv.id ? { ...i, tallyExportStatus: "exported_xml", tallyExportedAt: new Date().toISOString() } : i
+          )
+        );
+        return;
+      }
+
+      window.open(`/api/tally/export-xml/${inv.id}`, "_blank");
+      setInvoices((prev) =>
+        prev.map((i) =>
+          i.id === inv.id ? { ...i, tallyExportStatus: "exported_xml", tallyExportedAt: new Date().toISOString() } : i
+        )
+      );
+    } catch (err: any) {
+      alert("Error generating Tally XML: " + err.message);
+    } finally {
+      setExportingId(null);
+    }
+  };
 
   const handlePushToTally = async (id: number) => {
     setPushingId(id);
     try {
+      const inv = invoices.find((i) => i.id === id);
+      if (!inv) return;
+
+      if (isBoltMode) {
+        const [settings, company, allClients] = await Promise.all([
+          fetchTallySettings(token),
+          fetchCompany(token, inv.companyId || 1).catch(() => null),
+          fetchClients(token).catch(() => []),
+        ]);
+        const client = (allClients || []).find((c: any) => c.id === inv.clientId);
+        const xml = buildTallyInvoiceXml(inv, { settings, company, client });
+        const tallyUrl = settings.tallyUrl || "http://localhost:9000";
+
+        let pushed = false;
+        try {
+          const resp = await fetch(tallyUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/xml" },
+            body: xml,
+            signal: AbortSignal.timeout(5000),
+          });
+          if (resp.ok) {
+            pushed = true;
+          }
+        } catch {
+          // Browser CORS restricts direct reading of localhost POST
+        }
+
+        downloadTallyXml(xml, inv.invoiceNumber);
+
+        const newStatus = pushed ? "pushed_to_tally" : "exported_xml";
+        await supabase
+          .from("invoices")
+          .update({
+            tally_export_status: newStatus,
+            tally_exported_at: new Date().toISOString(),
+          })
+          .eq("id", id);
+
+        setInvoices((prev) =>
+          prev.map((i) =>
+            i.id === id ? { ...i, tallyExportStatus: newStatus, tallyExportedAt: new Date().toISOString() } : i
+          )
+        );
+
+        if (pushed) {
+          alert(`Successfully pushed invoice ${inv.invoiceNumber} to Tally!`);
+        } else {
+          alert(`Tally XML for ${inv.invoiceNumber} downloaded! In Tally, click Gateway of Tally → Import Data → Vouchers to import.`);
+        }
+        return;
+      }
+
       const res = await fetch(`/api/tally/push/${id}`, {
         method: "POST",
         headers: {
@@ -66,8 +165,8 @@ const SubmittedInvoicesPage: React.FC = () => {
       if (res.ok && data.success) {
         alert(data.message || "Successfully pushed to Tally!");
         setInvoices((prev) =>
-          prev.map((inv) =>
-            inv.id === id ? { ...inv, tallyExportStatus: "pushed_to_tally", tallyExportedAt: new Date().toISOString() } : inv
+          prev.map((i) =>
+            i.id === id ? { ...i, tallyExportStatus: "pushed_to_tally", tallyExportedAt: new Date().toISOString() } : i
           )
         );
       } else {
@@ -276,13 +375,19 @@ const SubmittedInvoicesPage: React.FC = () => {
                             )}
                             Push
                           </button>
-                          <a
-                            href={`/api/tally/export-xml/${inv.id}`}
-                            className="inline-flex items-center gap-1 text-xs text-emerald-700 hover:underline"
+                          <button
+                            onClick={() => handleExportXml(inv)}
+                            disabled={exportingId === inv.id}
+                            className="inline-flex items-center gap-1 text-xs text-emerald-700 hover:text-emerald-800 disabled:opacity-50"
                             title="Download Tally XML"
                           >
-                            <FileCode2 className="w-3 h-3" /> XML
-                          </a>
+                            {exportingId === inv.id ? (
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                            ) : (
+                              <FileCode2 className="w-3 h-3" />
+                            )}
+                            XML
+                          </button>
                           <Link
                             href={`/invoice-packet?id=${inv.id}`}
                             className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline"
