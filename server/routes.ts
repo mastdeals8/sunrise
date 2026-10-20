@@ -11,7 +11,7 @@ import rateLimit from "express-rate-limit";
 import { ensureIndexes } from "./indexes";
 import { audit, diffForAudit } from "./audit";
 import { deriveNotifications, refreshNotificationsThrottled } from "./notifications";
-import { dispatchDelivery, buildDeliveryMessage, discoverChats, getBotToken } from "./telegram";
+import { dispatchDelivery, buildDeliveryMessage, discoverChats, getBotToken, sendTelegramMessage } from "./telegram";
 import { auditLogs, notifications } from "@shared/schema";
 import { desc, asc, isNull, and as andOp } from "drizzle-orm";
 import path from "path";
@@ -2060,7 +2060,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const category = req.query.category as string | undefined;
       const status = req.query.status as string | undefined;
-      const list = await storage.getAllPettyCashExpenses({ category, status });
+      const companyId = req.companyId || (req.query.companyId ? Number(req.query.companyId) : undefined);
+      const list = await storage.getAllPettyCashExpenses({ category, status, companyId });
       res.json(list);
     } catch (err: any) {
       res.status(500).json({ message: err.message });
@@ -2070,10 +2071,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/petty-cash", authenticateToken, async (req: AuthRequest, res: Response) => {
     try {
       if (!req.user) return res.status(401).json({ message: "Unauthorized" });
+      const targetCompanyId = req.companyId || req.body.companyId || 1;
       // Drizzle timestamp columns -> z.date() (no coercion). See server/utils/dateFields.ts.
       const parsed = insertPettyCashExpenseSchema.safeParse(
         preprocessDateFields(
-          { ...req.body, addedBy: req.user.id },
+          { ...req.body, addedBy: req.user.id, companyId: targetCompanyId },
           [{ field: "expenseDate", defaultTo: nowDefault }],
         ),
       );
@@ -6089,35 +6091,110 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
       const payload = req.body;
+      const botToken = settings[0].botToken || process.env.TELEGRAM_BOT_TOKEN || null;
+
       // Log the webhook
       await db.insert(webhookLogs).values({ platform: "telegram", direction: "inbound", event: payload?.message ? "message" : "update", payload, status: "received" });
+      
       // Handle message
       const msg = payload?.message;
       if (msg) {
-        const text = msg.text || "";
+        const text = msg.text || msg.caption || "";
         const chatId = String(msg.chat?.id || msg.from?.id);
-        const senderName = [msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(" ") || msg.from?.username;
-        // Save to bot inbox if has media or looks like an upload
+        let senderName = [msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(" ") || msg.from?.username || chatId;
+        let companyId = 1;
+
+        // Try matching Telegram user to ERP staff
+        const matchedUser = await db.select().from(users).where(eq(users.telegramChatId, chatId)).limit(1);
+        if (matchedUser.length > 0) {
+          senderName = matchedUser[0].name;
+          const userCompany = await db.select().from(companyUsers).where(eq(companyUsers.userId, matchedUser[0].id)).limit(1);
+          if (userCompany.length > 0) {
+            companyId = userCompany[0].companyId;
+          }
+        }
+
         const photo = msg.photo?.[msg.photo.length - 1];
         const doc = msg.document;
-        if (photo || doc) {
+        const fileId = photo?.file_id || doc?.file_id;
+        let mediaUrl: string | null = null;
+
+        if (fileId && botToken) {
+          try {
+            const fileRes = await fetch(`https://api.telegram.org/bot${botToken}/getFile?file_id=${fileId}`);
+            if (fileRes.ok) {
+              const fileData: any = await fileRes.json();
+              if (fileData.result?.file_path) {
+                mediaUrl = `https://api.telegram.org/file/bot${botToken}/${fileData.result.file_path}`;
+              }
+            }
+          } catch (fileErr) {
+            console.warn("[Telegram Webhook] Failed to resolve media file:", fileErr);
+          }
+        }
+
+        // Save to bot upload inbox
+        if (photo || doc || text) {
           await db.insert(botUploadInbox).values({
+            companyId,
             source: "telegram",
             senderId: chatId,
-            senderName: senderName || chatId,
-            messageText: text || null,
-            mediaType: photo ? "photo" : "document",
+            senderName,
+            messageText: text || (photo ? "Telegram Photo" : doc ? (doc.file_name || "Telegram Document") : null),
+            mediaUrl,
+            mediaType: photo ? "photo" : doc ? "document" : "text",
             uploadType: "extra",
             rawPayload: payload,
             status: "unlinked",
           });
         }
+
+        // Auto-reply with Chat ID when user sends /start
+        if (text.startsWith("/start") && botToken) {
+          await sendTelegramMessage(
+            botToken,
+            chatId,
+            `👋 Welcome to Sunrise Media ERP Bot!\n\nYour Telegram Chat ID is: ${chatId}\n\nPlease share this Chat ID with your ERP Administrator or save it in your Staff Profile to receive project deliveries and work updates.`
+          ).catch((e) => console.warn("[Telegram Webhook] Auto-reply error:", e));
+        }
+
         await db.update(webhookLogs).set({ status: "processed" }).where(eq(webhookLogs.platform, "telegram"));
       }
       res.sendStatus(200);
     } catch (err: any) {
       await db.insert(webhookLogs).values({ platform: "telegram", direction: "inbound", event: "error", payload: req.body, status: "error", error: err.message }).catch(() => {});
       res.sendStatus(200);
+    }
+  });
+
+  // POST Send test Telegram message
+  app.post("/api/automation/telegram/test", authenticateToken, requireRole(["admin"]), async (req: AuthRequest, res: Response) => {
+    try {
+      const { chatId, message } = req.body;
+      if (!chatId) return res.status(400).json({ message: "Chat ID is required" });
+      const token = await getBotToken();
+      if (!token) return res.status(400).json({ message: "Telegram bot is not configured or disabled" });
+      const result = await sendTelegramMessage(
+        token,
+        String(chatId).trim(),
+        message || "Hello from Sunrise Media ERP! Telegram bot connection is active and working."
+      );
+      if (!result.ok) return res.status(502).json({ message: result.error });
+      res.json({ success: true, messageId: result.messageId });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // GET Discovered Telegram chats
+  app.get("/api/automation/telegram/discover-chats", authenticateToken, requireRole(["admin", "manager"]), async (_req: AuthRequest, res: Response) => {
+    try {
+      const token = await getBotToken();
+      const result = await discoverChats(token);
+      if (!result.ok) return res.status(502).json({ message: result.error });
+      res.json(result.chats);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
     }
   });
 
@@ -6266,9 +6343,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/bot-inbox", authenticateToken, requireRole(["admin", "manager"]), async (req: AuthRequest, res: Response) => {
     try {
       const status = req.query.status as string | undefined;
-      let query = db.select().from(botUploadInbox).orderBy(botUploadInbox.createdAt);
-      const items = await (status ? db.select().from(botUploadInbox).where(eq(botUploadInbox.status, status)) : db.select().from(botUploadInbox));
-      res.json(items.sort((a: any, b: any) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()));
+      const targetCompanyId = req.companyId || (req.query.companyId ? Number(req.query.companyId) : undefined);
+      
+      const conditions = [];
+      if (status) {
+        conditions.push(eq(botUploadInbox.status, status));
+      }
+      if (targetCompanyId) {
+        conditions.push(eq(botUploadInbox.companyId, targetCompanyId));
+      }
+
+      const items = await (conditions.length > 0
+        ? db.select().from(botUploadInbox).where(and(...conditions)).orderBy(desc(botUploadInbox.createdAt))
+        : db.select().from(botUploadInbox).orderBy(desc(botUploadInbox.createdAt)));
+      res.json(items);
     } catch (err: any) {
       res.status(500).json({ message: err.message });
     }
@@ -6694,8 +6782,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.delete("/api/advances/:id", authenticateToken, requireRole(["admin"]), async (req: AuthRequest, res: Response) => {
     try {
       const id = parseInt(req.params.id, 10);
-      const deleted = await db.delete(staffAdvances).where(eq(staffAdvances.id, id)).returning();
-      if (!deleted[0]) return res.status(404).json({ message: "Advance not found" });
+      const success = await storage.deleteAdvance(id);
+      if (!success) return res.status(404).json({ message: "Advance not found" });
       res.json({ success: true });
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
@@ -6889,27 +6977,65 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Tally XML Export
   // ==========================================
 
-  app.get("/api/tally/export-xml/:invoiceId", authenticateBrowserRequest, requireRole(["admin", "accounts", "manager"]), async (req: AuthRequest, res: Response) => {
-    try {
-      const id = parseInt(req.params.invoiceId, 10);
-      const allInvoices = await storage.getAllInvoices();
-      const invoice = allInvoices.find(i => i.id === id);
-      if (!invoice) return res.status(404).json({ message: "Invoice not found" });
+  function escapeXml(unsafe: string): string {
+    if (!unsafe) return "";
+    return String(unsafe).replace(/[<>&'"]/g, (c) => {
+      switch (c) {
+        case '<': return '&lt;';
+        case '>': return '&gt;';
+        case '&': return '&amp;';
+        case '\'': return '&apos;';
+        case '"': return '&quot;';
+        default: return c;
+      }
+    });
+  }
 
-      const allClients = await storage.getAllClients();
-      const client = allClients.find((c: any) => c.id === invoice.clientId);
-      const partyName = (invoice as any).partyName || client?.name || "Unknown";
-      const gstin = client?.gstNumber || "";
-      const invoiceDate = invoice.date ? new Date(invoice.date as any).toISOString().split("T")[0].replace(/-/g, "") : "";
-      const dueDate = (invoice as any).dueDate ? new Date((invoice as any).dueDate as any).toISOString().split("T")[0].replace(/-/g, "") : invoiceDate;
-      const amount = Number(invoice.totalAmount || 0);
-      const taxable = Number(invoice.amount || amount);
-      const cgst = Number(invoice.taxAmount ? Number(invoice.taxAmount) / 2 : 0);
-      const sgst = Number(invoice.taxAmount ? Number(invoice.taxAmount) / 2 : 0);
-      const igst = 0;
-      const narration = `${invoice.invoiceNumber} — ${partyName}`;
+  async function buildTallyXml(invoiceId: number) {
+    const allInvoices = await storage.getAllInvoices();
+    const invoice = allInvoices.find(i => i.id === invoiceId);
+    if (!invoice) throw new Error("Invoice not found");
 
-      const xml = `<?xml version="1.0" encoding="UTF-8"?>
+    const companyId = invoice.companyId || 1;
+    const company = await storage.getCompany(companyId);
+    const rawSettings = await storage.getAppSetting("tally_settings");
+    const settings = rawSettings ? (typeof rawSettings === "string" ? JSON.parse(rawSettings) : rawSettings) : {};
+
+    const companyName = settings.companyName || company?.name || company?.legalName || "Sunrise Media";
+    const salesLedger = settings.salesLedger || "Sales";
+    const cgstLedger = settings.cgstLedger || "CGST";
+    const sgstLedger = settings.sgstLedger || "SGST";
+    const igstLedger = settings.igstLedger || "IGST";
+    const voucherType = settings.voucherType || "Sales";
+
+    const allClients = await storage.getAllClients();
+    const client = allClients.find((c: any) => c.id === invoice.clientId);
+    const partyName = (invoice as any).partyName || client?.name || "Unknown Party";
+
+    const companyStateCode = company?.stateCode ? String(company.stateCode).padStart(2, "0") : (company?.gstin ? company.gstin.slice(0, 2) : "27");
+    const clientStateCode = (client as any)?.stateCode ? String((client as any).stateCode).padStart(2, "0") : (client?.gstNumber ? client.gstNumber.slice(0, 2) : companyStateCode);
+
+    const isInterstate = Boolean(clientStateCode && clientStateCode !== companyStateCode);
+
+    const invoiceDate = invoice.date ? new Date(invoice.date as any).toISOString().split("T")[0].replace(/-/g, "") : "";
+    const amount = Number(invoice.totalAmount || 0);
+    const taxable = Number(invoice.amount || (amount - Number(invoice.taxAmount || 0)));
+    const totalTax = Number(invoice.taxAmount || 0);
+
+    let cgst = 0;
+    let sgst = 0;
+    let igst = 0;
+
+    if (isInterstate) {
+      igst = totalTax;
+    } else {
+      cgst = Number((totalTax / 2).toFixed(2));
+      sgst = Number((totalTax - cgst).toFixed(2));
+    }
+
+    const narration = `${invoice.invoiceNumber} — ${partyName}`;
+
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <ENVELOPE>
   <HEADER>
     <TALLYREQUEST>Import Data</TALLYREQUEST>
@@ -6919,45 +7045,45 @@ export async function registerRoutes(app: Express): Promise<Server> {
       <REQUESTDESC>
         <REPORTNAME>Vouchers</REPORTNAME>
         <STATICVARIABLES>
-          <SVCURRENTCOMPANY>##COMPANYNAME##</SVCURRENTCOMPANY>
+          <SVCURRENTCOMPANY>${escapeXml(companyName)}</SVCURRENTCOMPANY>
         </STATICVARIABLES>
       </REQUESTDESC>
       <REQUESTDATA>
         <TALLYMESSAGE xmlns:UDF="TallyUDF">
-          <VOUCHER REMOTEID="${invoice.invoiceNumber}" VCHTYPE="Sales" ACTION="Create">
+          <VOUCHER REMOTEID="${escapeXml(invoice.invoiceNumber)}" VCHTYPE="${escapeXml(voucherType)}" ACTION="Create">
             <DATE>${invoiceDate}</DATE>
-            <NARRATION>${narration}</NARRATION>
-            <VOUCHERTYPENAME>Sales</VOUCHERTYPENAME>
-            <VOUCHERNUMBER>${invoice.invoiceNumber}</VOUCHERNUMBER>
-            <PARTYLEDGERNAME>${partyName}</PARTYLEDGERNAME>
-            <GUID>${invoice.invoiceNumber}</GUID>
+            <NARRATION>${escapeXml(narration)}</NARRATION>
+            <VOUCHERTYPENAME>${escapeXml(voucherType)}</VOUCHERTYPENAME>
+            <VOUCHERNUMBER>${escapeXml(invoice.invoiceNumber)}</VOUCHERNUMBER>
+            <PARTYLEDGERNAME>${escapeXml(partyName)}</PARTYLEDGERNAME>
+            <GUID>${escapeXml(invoice.invoiceNumber)}</GUID>
             <ALLLEDGERENTRIES.LIST>
-              <LEDGERNAME>${partyName}</LEDGERNAME>
+              <LEDGERNAME>${escapeXml(partyName)}</LEDGERNAME>
               <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
               <AMOUNT>-${amount.toFixed(2)}</AMOUNT>
               <BILLALLOCATIONS.LIST>
-                <NAME>${invoice.invoiceNumber}</NAME>
+                <NAME>${escapeXml(invoice.invoiceNumber)}</NAME>
                 <BILLTYPE>New Ref</BILLTYPE>
                 <AMOUNT>-${amount.toFixed(2)}</AMOUNT>
               </BILLALLOCATIONS.LIST>
             </ALLLEDGERENTRIES.LIST>
             <ALLLEDGERENTRIES.LIST>
-              <LEDGERNAME>Sales</LEDGERNAME>
+              <LEDGERNAME>${escapeXml(salesLedger)}</LEDGERNAME>
               <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
               <AMOUNT>${taxable.toFixed(2)}</AMOUNT>
             </ALLLEDGERENTRIES.LIST>
             ${cgst > 0 ? `<ALLLEDGERENTRIES.LIST>
-              <LEDGERNAME>CGST</LEDGERNAME>
+              <LEDGERNAME>${escapeXml(cgstLedger)}</LEDGERNAME>
               <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
               <AMOUNT>${cgst.toFixed(2)}</AMOUNT>
             </ALLLEDGERENTRIES.LIST>` : ""}
             ${sgst > 0 ? `<ALLLEDGERENTRIES.LIST>
-              <LEDGERNAME>SGST</LEDGERNAME>
+              <LEDGERNAME>${escapeXml(sgstLedger)}</LEDGERNAME>
               <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
               <AMOUNT>${sgst.toFixed(2)}</AMOUNT>
             </ALLLEDGERENTRIES.LIST>` : ""}
             ${igst > 0 ? `<ALLLEDGERENTRIES.LIST>
-              <LEDGERNAME>IGST</LEDGERNAME>
+              <LEDGERNAME>${escapeXml(igstLedger)}</LEDGERNAME>
               <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
               <AMOUNT>${igst.toFixed(2)}</AMOUNT>
             </ALLLEDGERENTRIES.LIST>` : ""}
@@ -6967,6 +7093,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
     </IMPORTDATA>
   </BODY>
 </ENVELOPE>`;
+
+    return { xml, invoice, settings, companyName };
+  }
+
+  app.get("/api/tally/export-xml/:invoiceId", authenticateBrowserRequest, requireRole(["admin", "accounts", "manager"]), async (req: AuthRequest, res: Response) => {
+    try {
+      const id = parseInt(req.params.invoiceId, 10);
+      const { xml, invoice } = await buildTallyXml(id);
 
       // Mark invoice as exported
       await db.update(invoices).set({
@@ -6978,6 +7112,57 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.setHeader("Content-Disposition", `attachment; filename="tally_${invoice.invoiceNumber}.xml"`);
       res.send(xml);
     } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  app.post("/api/tally/push/:invoiceId", authenticateToken, requireRole(["admin", "accounts", "manager"]), async (req: AuthRequest, res: Response) => {
+    try {
+      const id = parseInt(req.params.invoiceId, 10);
+      const { xml, invoice, settings } = await buildTallyXml(id);
+      const tallyUrl = settings.tallyUrl || "http://localhost:9000";
+
+      let responseText = "";
+      try {
+        const response = await fetch(tallyUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/xml" },
+          body: xml,
+          signal: AbortSignal.timeout(6000),
+        });
+        responseText = await response.text();
+      } catch (networkErr: any) {
+        return res.status(502).json({
+          success: false,
+          message: `Could not connect to Tally at ${tallyUrl} (${networkErr.message}). Ensure Tally is running with XML/ODBC import server enabled on port 9000, or download the XML file for manual import.`,
+        });
+      }
+
+      // Check if Tally accepted or rejected the XML
+      const hasErrors = /<ERRORS>[1-9]\d*<\/ERRORS>/i.test(responseText);
+      const createdCount = /<CREATED>([1-9]\d*)<\/CREATED>/i.exec(responseText)?.[1] ||
+                           /<ALTERED>([1-9]\d*)<\/ALTERED>/i.exec(responseText)?.[1];
+
+      if (hasErrors || (!createdCount && /<LINEERROR>/i.test(responseText))) {
+        return res.status(400).json({
+          success: false,
+          message: "Tally returned an error while importing voucher.",
+          tallyResponse: responseText,
+        });
+      }
+
+      // Success: mark invoice as pushed
+      await db.update(invoices).set({
+        tallyExportStatus: "pushed_to_tally",
+        tallyExportedAt: new Date(),
+      } as any).where(eq(invoices.id, id));
+
+      res.json({
+        success: true,
+        message: `Successfully pushed invoice ${invoice.invoiceNumber} to Tally!`,
+        tallyResponse: responseText,
+      });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
   });
 
   // Manually flip an invoice's Tally status. Used by accounts after they

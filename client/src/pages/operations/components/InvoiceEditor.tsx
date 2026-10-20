@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useAuth } from "../../../contexts/AuthContext";
 import { isBoltMode } from "../../../lib/supabase";
-import { fetchEstimates, fetchEstimateItems, fetchDeliveryChallans, fetchInvoiceById, createInvoice, updateInvoice, refreshInvoiceFromEstimate, fetchExecutionDocuments, openExecutionDocument, fetchNextInvoiceNumber } from "../../../lib/api";
+import { fetchClients, fetchEstimates, fetchEstimateItems, fetchDeliveryChallans, fetchInvoiceById, createInvoice, updateInvoice, refreshInvoiceFromEstimate, fetchExecutionDocuments, openExecutionDocument, fetchNextInvoiceNumber } from "../../../lib/api";
 import { Link } from "wouter";
 import { X, Plus, Trash2, Save, Send, Printer, ChevronLeft, RefreshCw, MessageCircle } from "lucide-react";
 import { normalizeDisplayName } from "../../../../../shared/textFormat";
@@ -65,8 +65,7 @@ const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ open, invoiceId, estimate
 
   useEffect(() => {
     if (clientId && token) {
-      fetch(`/api/operations/clients`, { headers: { Authorization: `Bearer ${token}` } })
-        .then((r) => (r.ok ? r.json() : []))
+      fetchClients(token)
         .then((clients: any[]) => {
           const c = clients.find((x: any) => x.id === clientId);
           if (c?.mobile) setClientPhone(c.mobile);
@@ -584,7 +583,7 @@ const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ open, invoiceId, estimate
         recipientName={partyName}
         documentType="invoice"
         documentNumber={invoiceNumber}
-        documentUrl={invoiceId ? `/api/invoices/${invoiceId}/packet-pdf` : undefined}
+        documentUrl={invoiceId && !isBoltMode ? `/api/invoices/${invoiceId}/packet-pdf` : undefined}
         totalAmount={grandTotal}
       />
     </div>

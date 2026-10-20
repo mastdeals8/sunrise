@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from "react";
 import { useAuth } from "../contexts/AuthContext";
 import { Send, CheckCircle, XCircle, RefreshCw, Save, AlertTriangle, Terminal, Trash2, AlertCircle } from "lucide-react";
-import { isBoltMode } from "../lib/supabase";
+import { supabase, isBoltMode } from "../lib/supabase";
+import { Copy, Check, Users as UsersIcon } from "lucide-react";
 
 interface TelegramConfig {
   platform: string;
@@ -22,6 +23,13 @@ interface WebhookLog {
   createdAt: string;
 }
 
+interface DiscoveredChat {
+  chatId: string;
+  name: string;
+  username?: string;
+  lastText?: string;
+}
+
 const TelegramSettings: React.FC = () => {
   const { token } = useAuth();
   const [config, setConfig] = useState<TelegramConfig>({ platform: "telegram", enabled: false, botToken: null, botUsername: null, webhookUrl: null, settings: {} });
@@ -32,31 +40,115 @@ const TelegramSettings: React.FC = () => {
   const [logs, setLogs] = useState<WebhookLog[]>([]);
   const [logsLoading, setLogsLoading] = useState(false);
 
+  // Discovery & Test
+  const [discoveredChats, setDiscoveredChats] = useState<DiscoveredChat[]>([]);
+  const [loadingChats, setLoadingChats] = useState(false);
+  const [testChatId, setTestChatId] = useState("");
+  const [testMessage, setTestMessage] = useState("Hello from Sunrise Media ERP! Telegram bot is operational.");
+  const [sendingTest, setSendingTest] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
   const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
 
-  useEffect(() => { if (!isBoltMode) { fetchConfig(); fetchLogs(); } }, []);
+  useEffect(() => {
+    fetchConfig();
+    fetchLogs();
+    fetchDiscoveredChats();
+  }, []);
 
   const fetchConfig = async () => {
-    if (isBoltMode) return;
     setLoading(true);
     try {
+      if (isBoltMode) {
+        const { data, error } = await supabase.from("bot_settings").select("*").eq("platform", "telegram").limit(1).maybeSingle();
+        if (data && !error) {
+          setConfig({
+            platform: data.platform,
+            enabled: !!data.enabled,
+            botToken: data.bot_token ? "••••" + data.bot_token.slice(-4) : null,
+            botUsername: data.bot_username,
+            webhookUrl: data.webhook_url,
+            settings: data.settings || {},
+          });
+        }
+        return;
+      }
       const r = await fetch("/api/automation/telegram", { headers });
       if (r.ok) setConfig(await r.json());
     } finally { setLoading(false); }
   };
 
   const fetchLogs = async () => {
-    if (isBoltMode) return;
     setLogsLoading(true);
     try {
+      if (isBoltMode) {
+        const { data } = await supabase.from("webhook_logs").select("*").eq("platform", "telegram").order("created_at", { ascending: false }).limit(50);
+        if (data) {
+          setLogs(data.map((d: any) => ({
+            id: d.id,
+            platform: d.platform,
+            direction: d.direction,
+            event: d.event,
+            status: d.status,
+            error: d.error,
+            createdAt: d.created_at,
+          })));
+        }
+        return;
+      }
       const r = await fetch("/api/automation/logs/telegram", { headers });
       if (r.ok) setLogs(await r.json());
     } finally { setLogsLoading(false); }
   };
 
+  const fetchDiscoveredChats = async () => {
+    setLoadingChats(true);
+    try {
+      const r = await fetch("/api/automation/telegram/discover-chats", { headers });
+      if (r.ok) {
+        const data = await r.json();
+        setDiscoveredChats(Array.isArray(data) ? data : []);
+      }
+    } catch {
+      // silently handle
+    } finally {
+      setLoadingChats(false);
+    }
+  };
+
+  const handleSendTest = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!testChatId.trim()) return;
+    setSendingTest(true);
+    setTestResult(null);
+    try {
+      const r = await fetch("/api/automation/telegram/test", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ chatId: testChatId.trim(), message: testMessage }),
+      });
+      const data = await r.json();
+      if (r.ok && data.success) {
+        setTestResult({ ok: true, msg: "Test message delivered successfully to Telegram!" });
+      } else {
+        setTestResult({ ok: false, msg: data.message || "Failed to send test message" });
+      }
+    } catch (err: any) {
+      setTestResult({ ok: false, msg: err.message || "Network error" });
+    } finally {
+      setSendingTest(false);
+    }
+  };
+
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard?.writeText(text);
+    setCopiedId(text);
+    setTimeout(() => setCopiedId(null), 2000);
+  };
+
   const save = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (isBoltMode) { setMsg({ text: "Not available in Bolt preview mode.", ok: false }); return; }
     setSaving(true);
     setMsg(null);
     try {
@@ -66,12 +158,33 @@ const TelegramSettings: React.FC = () => {
         webhookUrl: config.webhookUrl || "",
       };
       if (tokenInput.trim()) payload.botToken = tokenInput.trim();
+
+      if (isBoltMode) {
+        const updateData: any = {
+          platform: "telegram",
+          enabled: config.enabled,
+          bot_username: config.botUsername,
+          webhook_url: config.webhookUrl,
+          updated_at: new Date().toISOString(),
+        };
+        if (tokenInput.trim()) updateData.bot_token = tokenInput.trim();
+        const { error } = await supabase.from("bot_settings").upsert(updateData, { onConflict: "platform" });
+        if (!error) {
+          setTokenInput("");
+          setMsg({ text: "Settings saved to Supabase successfully.", ok: true });
+          fetchConfig();
+        } else {
+          setMsg({ text: error.message || "Save failed", ok: false });
+        }
+        return;
+      }
+
       const r = await fetch("/api/automation/telegram", { method: "PUT", headers, body: JSON.stringify(payload) });
       if (r.ok) {
         const updated = await r.json();
         setConfig(updated);
         setTokenInput("");
-        setMsg({ text: "Settings saved.", ok: true });
+        setMsg({ text: "Settings saved successfully.", ok: true });
       } else {
         const err = await r.json();
         setMsg({ text: err.message || "Save failed", ok: false });
@@ -81,18 +194,10 @@ const TelegramSettings: React.FC = () => {
 
   const webhookBase = typeof window !== "undefined" ? `${window.location.protocol}//${window.location.host}` : "";
 
-  if (isBoltMode) return (
-    <div className="flex flex-col items-center justify-center h-[50vh] gap-4 text-center px-4">
-      <AlertCircle className="w-10 h-10 text-amber-500" />
-      <h2 className="text-lg font-bold text-slate-800">Telegram Settings require the Express backend</h2>
-      <p className="text-sm text-slate-500 max-w-sm">Telegram bot integration is not available in Bolt preview mode.</p>
-    </div>
-  );
-
-  if (loading) return <div className="p-8 text-slate-400 text-sm">Loading...</div>;
+  if (loading) return <div className="p-8 text-slate-400 text-sm">Loading Telegram configuration...</div>;
 
   return (
-    <div className="space-y-6 max-w-3xl">
+    <div className="space-y-6 max-w-4xl mx-auto pb-12">
       <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
         <h2 className="font-bold text-slate-800 text-lg flex items-center gap-2 mb-1">
           <Send className="w-5 h-5 text-blue-500" />

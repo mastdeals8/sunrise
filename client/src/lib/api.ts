@@ -678,30 +678,41 @@ export async function fetchLedgerSummary(token: string | null) {
 // ─── Staff / HR ───────────────────────────────────────────────────────────────
 
 export async function fetchUsers(token: string | null, companyId?: number | "all") {
+  const normalize = (u: any) => ({
+    ...u,
+    employeeId: u.employee_id || u.employeeId || (u.id ? `SUN-${String(u.id).padStart(3, '0')}` : "SUN-000"),
+    employee_id: u.employee_id || u.employeeId || (u.id ? `SUN-${String(u.id).padStart(3, '0')}` : "SUN-000"),
+    advanceBalance: u.advance_balance ?? u.advanceBalance ?? 0,
+    basicSalary: u.basic_salary ?? u.basicSalary ?? 0,
+    dailyWage: u.daily_wage ?? u.dailyWage ?? 0,
+  });
+
   if (!isBoltMode) {
     const url = companyId && companyId !== "all" ? `/api/users?companyId=${companyId}` : "/api/users";
     const res = await apiFetch(url, token);
-    return res.ok ? res.json() : [];
+    const data = res.ok ? await res.json() : [];
+    return Array.isArray(data) ? data.map(normalize) : [];
   }
   // When explicitly requesting all users (e.g. member assignment dropdowns), query public.users directly.
   // PostgreSQL RLS automatically scopes rows to those permitted to the caller.
   if (companyId === "all") {
-    return sbSelect("users", (q) =>
-      q.select("id, username, name, email, role, department, designation, phone, telegram_chat_id, joining_date, basic_salary, daily_wage, is_active, created_at")
+    const list = await sbSelect("users", (q) =>
+      q.select("id, username, name, email, role, department, designation, phone, telegram_chat_id, employee_id, advance_balance, joining_date, basic_salary, daily_wage, is_active, created_at")
         .eq("is_active", true)
         .order("name")
     );
+    return (list || []).map(normalize);
   }
 
   const targetCompanyId = companyId || getActiveCompanyId();
   try {
     const rows = await sbSelect<any>("company_users", (q) =>
-      q.select("role, is_default, users!inner(id, username, name, email, role, department, designation, phone, telegram_chat_id, joining_date, basic_salary, daily_wage, is_active, created_at)")
+      q.select("role, is_default, users!inner(id, username, name, email, role, department, designation, phone, telegram_chat_id, employee_id, advance_balance, joining_date, basic_salary, daily_wage, is_active, created_at)")
         .eq("company_id", targetCompanyId)
         .eq("users.is_active", true)
     );
     if (rows && rows.length > 0) {
-      return rows.map((r: any) => ({
+      return rows.map((r: any) => normalize({
         ...r.users,
         companyRole: r.role,
       }));
@@ -709,11 +720,12 @@ export async function fetchUsers(token: string | null, companyId?: number | "all
   } catch (err) {
     console.warn("[api] company_users join error in fetchUsers:", err);
   }
-  return sbSelect("users", (q) =>
-    q.select("id, username, name, email, role, department, designation, phone, telegram_chat_id, joining_date, basic_salary, daily_wage, is_active, created_at")
+  const fallbackList = await sbSelect("users", (q) =>
+    q.select("id, username, name, email, role, department, designation, phone, telegram_chat_id, employee_id, advance_balance, joining_date, basic_salary, daily_wage, is_active, created_at")
       .eq("is_active", true)
       .order("name")
   );
+  return (fallbackList || []).map(normalize);
 }
 
 export async function fetchAllUsers(token: string | null) {

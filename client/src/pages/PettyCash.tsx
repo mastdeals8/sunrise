@@ -3,7 +3,7 @@ import { formatCurrency } from "@/utils/format";
 import { useAuth } from "../contexts/AuthContext";
 import { useGlobalDate } from "../contexts/GlobalDateContext";
 import { supabase, isBoltMode } from "../lib/supabase";
-import { fetchUsers, getActiveCompanyId } from "../lib/api";
+import { fetchUsers, fetchEstimates, fetchDeliveryChallans, getActiveCompanyId } from "../lib/api";
 import { 
   Coins, 
   Plus, 
@@ -12,19 +12,32 @@ import {
   X, 
   Trash, 
   Sparkles, 
-  AlertCircle 
+  AlertCircle,
+  Briefcase,
+  Truck,
+  Filter
 } from "lucide-react";
 
 interface PettyCashExpense {
   id: number;
+  companyId?: number;
   category: string;
   amount: number;
   vendor: string | null;
   description: string | null;
   paidBy: number | null;
   receiptImageUrl: string | null;
+  extractedData?: {
+    estimateId?: number;
+    estimateNumber?: string;
+    projectName?: string;
+    dcId?: number;
+    dcNumber?: string;
+    [key: string]: any;
+  } | null;
   expenseDate: string;
   status: string;
+  createdAt?: string;
 }
 
 interface Staff {
@@ -37,6 +50,9 @@ const PettyCashPage: React.FC = () => {
   const globalDate = useGlobalDate();
   const [expenses, setExpenses] = useState<PettyCashExpense[]>([]);
   const [staffList, setStaffList] = useState<Staff[]>([]);
+  const [estimatesList, setEstimatesList] = useState<any[]>([]);
+  const [dcList, setDcList] = useState<any[]>([]);
+  const [selectedProjectFilter, setSelectedProjectFilter] = useState<string>("all");
   const [loading, setLoading] = useState(true);
 
   // Form states
@@ -47,6 +63,8 @@ const PettyCashPage: React.FC = () => {
   const [description, setDescription] = useState("");
   const [expenseDate, setExpenseDate] = useState("");
   const [paidBy, setPaidBy] = useState<number | undefined>(undefined);
+  const [selectedEstimateId, setSelectedEstimateId] = useState<number | undefined>(undefined);
+  const [selectedDcId, setSelectedDcId] = useState<number | undefined>(undefined);
   
   // OCR states
   const [scanning, setScanning] = useState(false);
@@ -56,16 +74,28 @@ const PettyCashPage: React.FC = () => {
   const fetchData = async () => {
     try {
       setLoading(true);
+      const activeCompanyId = getActiveCompanyId();
+
+      // Load estimates and DCs for job-cost linking
+      const [allEsts, allDCs] = await Promise.all([
+        fetchEstimates(token).catch(() => []),
+        fetchDeliveryChallans(token).catch(() => []),
+      ]);
+      setEstimatesList(allEsts || []);
+      setDcList(allDCs || []);
+
       if (isBoltMode) {
         const { data: rows, error: errRows } = await supabase
           .from("petty_cash_expenses")
           .select("*")
+          .eq("company_id", activeCompanyId)
           .order("expense_date", { ascending: false });
         if (errRows) {
           console.warn("Error loading petty cash from supabase:", errRows.message);
         }
         const dataE = (rows || []).map((r: any) => ({
           id: r.id,
+          companyId: r.company_id,
           category: r.category,
           amount: Number(r.amount),
           vendor: r.vendor,
@@ -74,6 +104,7 @@ const PettyCashPage: React.FC = () => {
           expenseDate: r.expense_date,
           status: r.status,
           receiptImageUrl: r.receipt_image_url,
+          extractedData: r.extracted_data || null,
           createdAt: r.created_at,
         }));
         setExpenses(dataE.filter((row: PettyCashExpense) => globalDate.isInRange(row.expenseDate)));
@@ -82,12 +113,16 @@ const PettyCashPage: React.FC = () => {
         return;
       }
 
-      const resE = await fetch("/api/petty-cash", {
+      const resE = await fetch(`/api/petty-cash?companyId=${activeCompanyId}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       if (resE.ok) {
         const dataE = await resE.json();
-        setExpenses(dataE.filter((row: PettyCashExpense) => globalDate.isInRange(row.expenseDate)));
+        const mapped = (dataE || []).map((r: any) => ({
+          ...r,
+          extractedData: r.extractedData || r.extracted_data || null,
+        }));
+        setExpenses(mapped.filter((row: PettyCashExpense) => globalDate.isInRange(row.expenseDate)));
       }
 
       const resS = await fetch("/api/users", {
@@ -113,6 +148,17 @@ const PettyCashPage: React.FC = () => {
     if (!amount || !category) return;
 
     const activeCompanyId = getActiveCompanyId();
+    const est = estimatesList.find(item => item.id === selectedEstimateId);
+    const dc = dcList.find(item => item.id === selectedDcId);
+
+    const jobData = (selectedEstimateId || selectedDcId) ? {
+      estimateId: est?.id,
+      estimateNumber: est?.estimateNumber || est?.estimate_number,
+      projectName: est?.projectName || est?.project_name,
+      dcId: dc?.id,
+      dcNumber: dc?.dcNumber || dc?.dc_number,
+    } : null;
+
     if (isBoltMode) {
       const { error: insErr } = await supabase.from("petty_cash_expenses").insert({
         category,
@@ -123,6 +169,7 @@ const PettyCashPage: React.FC = () => {
         expense_date: expenseDate || new Date().toISOString(),
         status: "pending",
         receipt_image_url: receiptName ? `/uploads/receipts/${receiptName}` : null,
+        extracted_data: jobData,
         company_id: activeCompanyId,
       });
       if (!insErr) {
@@ -133,6 +180,8 @@ const PettyCashPage: React.FC = () => {
         setDescription("");
         setExpenseDate("");
         setPaidBy(undefined);
+        setSelectedEstimateId(undefined);
+        setSelectedDcId(undefined);
         setOcrSuccess(false);
         setReceiptName("");
         fetchData();
@@ -157,6 +206,7 @@ const PettyCashPage: React.FC = () => {
           expenseDate: expenseDate || new Date().toISOString(),
           status: "pending",
           receiptImageUrl: receiptName ? `/uploads/receipts/${receiptName}` : null,
+          extractedData: jobData,
           companyId: activeCompanyId,
         })
       });
@@ -169,6 +219,8 @@ const PettyCashPage: React.FC = () => {
         setDescription("");
         setExpenseDate("");
         setPaidBy(undefined);
+        setSelectedEstimateId(undefined);
+        setSelectedDcId(undefined);
         setOcrSuccess(false);
         setReceiptName("");
         fetchData();
@@ -249,17 +301,6 @@ const PettyCashPage: React.FC = () => {
     }, 2000);
   };
 
-  if (isBoltMode) {
-    return (
-      <div className="flex flex-col items-center justify-center h-[50vh] gap-4 text-center px-4">
-        <AlertCircle className="w-10 h-10 text-amber-500" />
-        <h2 className="text-lg font-bold text-slate-800">Petty Cash requires the Express backend</h2>
-        <p className="text-sm text-slate-500 max-w-sm">
-          This module is not yet available in Bolt preview mode. Run the full stack (<code>npm run dev:full</code>) to access Petty Cash.
-        </p>
-      </div>
-    );
-  }
 
   if (loading) {
     return (
@@ -392,6 +433,42 @@ const PettyCashPage: React.FC = () => {
                 ))}
               </select>
             </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                Link to Project / Estimate (Job Costing)
+              </label>
+              <select
+                value={selectedEstimateId || ""}
+                onChange={(e) => setSelectedEstimateId(e.target.value ? Number(e.target.value) : undefined)}
+                className="w-full px-4 py-2 bg-white border border-slate-200 rounded-lg text-slate-800 text-sm focus:outline-none focus:border-orange-500"
+              >
+                <option value="">General Overhead (Not project specific)</option>
+                {estimatesList.map((est) => (
+                  <option key={est.id} value={est.id}>
+                    {est.estimateNumber || est.estimate_number || `Est #${est.id}`} - {est.projectName || est.project_name || "Project"} ({est.clientName || est.client_name || ""})
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                Link to Delivery Challan (DC)
+              </label>
+              <select
+                value={selectedDcId || ""}
+                onChange={(e) => setSelectedDcId(e.target.value ? Number(e.target.value) : undefined)}
+                className="w-full px-4 py-2 bg-white border border-slate-200 rounded-lg text-slate-800 text-sm focus:outline-none focus:border-orange-500"
+              >
+                <option value="">No DC Attached</option>
+                {dcList
+                  .filter((dc) => !selectedEstimateId || (dc.estimateId || dc.estimate_id) === selectedEstimateId)
+                  .map((dc) => (
+                    <option key={dc.id} value={dc.id}>
+                      {dc.dcNumber || dc.dc_number || `DC #${dc.id}`} {dc.storeName || dc.store_name ? `(${dc.storeName || dc.store_name})` : ""}
+                    </option>
+                  ))}
+              </select>
+            </div>
             <div className="md:col-span-2">
               <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Expense Description</label>
               <textarea
@@ -422,6 +499,41 @@ const PettyCashPage: React.FC = () => {
         </form>
       )}
 
+      {/* Project Job Filter Bar */}
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 bg-white p-3 rounded-xl border border-slate-200">
+        <div className="flex items-center gap-2 text-xs font-bold text-slate-700">
+          <Filter className="w-4 h-4 text-orange-600" />
+          <span>Job Cost Filter:</span>
+          <select
+            value={selectedProjectFilter}
+            onChange={(e) => setSelectedProjectFilter(e.target.value)}
+            className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 focus:outline-none focus:border-orange-500"
+          >
+            <option value="all">All Expenses (General + All Projects)</option>
+            <option value="general">General Overhead Only</option>
+            <option value="project_linked">Project Linked Only</option>
+            {estimatesList.map((est) => (
+              <option key={est.id} value={`est_${est.id}`}>
+                {est.estimateNumber || est.estimate_number || `Est #${est.id}`} - {est.projectName || est.project_name || "Project"}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="text-xs text-slate-500">
+          Showing <span className="font-bold text-slate-800">{
+            expenses.filter((e) => {
+              if (selectedProjectFilter === "general") return !e.extractedData?.estimateId && !e.extractedData?.estimateNumber;
+              if (selectedProjectFilter === "project_linked") return !!(e.extractedData?.estimateId || e.extractedData?.estimateNumber);
+              if (selectedProjectFilter.startsWith("est_")) {
+                const eid = Number(selectedProjectFilter.replace("est_", ""));
+                return e.extractedData?.estimateId === eid;
+              }
+              return true;
+            }).length
+          }</span> of <span className="font-bold text-slate-800">{expenses.length}</span> expenses
+        </div>
+      </div>
+
       {/* Expenses Table */}
       <div className="glass-panel overflow-hidden border border-slate-200 shadow-sm">
         <div className="overflow-x-auto">
@@ -430,6 +542,7 @@ const PettyCashPage: React.FC = () => {
               <tr>
                 <th className="px-6 py-4">Expense Date</th>
                 <th className="px-6 py-4">Category</th>
+                <th className="px-6 py-4">Job / Project</th>
                 <th className="px-6 py-4">Vendor</th>
                 <th className="px-6 py-4">Paid By</th>
                 <th className="px-6 py-4">Description</th>
@@ -439,7 +552,17 @@ const PettyCashPage: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200 bg-white">
-              {expenses.map((expense) => {
+              {expenses
+                .filter((expense) => {
+                  if (selectedProjectFilter === "general") return !expense.extractedData?.estimateId && !expense.extractedData?.estimateNumber;
+                  if (selectedProjectFilter === "project_linked") return !!(expense.extractedData?.estimateId || expense.extractedData?.estimateNumber);
+                  if (selectedProjectFilter.startsWith("est_")) {
+                    const eid = Number(selectedProjectFilter.replace("est_", ""));
+                    return expense.extractedData?.estimateId === eid;
+                  }
+                  return true;
+                })
+                .map((expense) => {
                 const payer = staffList.find(s => s.id === expense.paidBy);
                 return (
                   <tr key={expense.id} className="hover:bg-slate-50/50 transition">
@@ -447,6 +570,24 @@ const PettyCashPage: React.FC = () => {
                       {new Date(expense.expenseDate).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
                     </td>
                     <td className="px-6 py-4 font-semibold text-slate-900 capitalize whitespace-nowrap">{expense.category.replace("_", " ")}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-xs">
+                      {expense.extractedData?.estimateNumber || expense.extractedData?.projectName ? (
+                        <div className="flex flex-col gap-0.5">
+                          <span className="font-semibold text-amber-800 flex items-center gap-1">
+                            <Briefcase className="w-3 h-3 text-amber-600 inline shrink-0" />
+                            <span className="truncate max-w-[150px]">{expense.extractedData.estimateNumber || "Est"} · {expense.extractedData.projectName || "Job"}</span>
+                          </span>
+                          {expense.extractedData.dcNumber && (
+                            <span className="text-[10px] text-slate-500 flex items-center gap-1">
+                              <Truck className="w-2.5 h-2.5 text-slate-400 inline shrink-0" />
+                              <span className="truncate max-w-[120px]">{expense.extractedData.dcNumber}</span>
+                            </span>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-slate-400 text-xs italic">General</span>
+                      )}
+                    </td>
                     <td className="px-6 py-4 text-slate-700 font-medium whitespace-nowrap">{expense.vendor || "-"}</td>
                     <td className="px-6 py-4 text-slate-600 whitespace-nowrap">{payer ? payer.name : "System"}</td>
                     <td className="px-6 py-4 text-slate-500 text-xs max-w-xs truncate">{expense.description || "-"}</td>
@@ -491,7 +632,7 @@ const PettyCashPage: React.FC = () => {
 
               {expenses.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="text-center py-12 text-slate-400 text-xs">
+                  <td colSpan={9} className="text-center py-12 text-slate-400 text-xs">
                     No petty cash transactions found
                   </td>
                 </tr>

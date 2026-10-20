@@ -2425,7 +2425,7 @@ Sunrise Media`;
           recipientName={clients.find((c: any) => c.id === selectedEstimate.clientId)?.name || "Client"}
           documentType="estimate"
           documentNumber={selectedEstimate.estimateNumber}
-          documentUrl={`/api/operations/estimates/${selectedEstimate.id}/export-pdf`}
+          documentUrl={isBoltMode ? undefined : `/api/operations/estimates/${selectedEstimate.id}/export-pdf`}
           totalAmount={selectedEstimate.totalAmount || undefined}
         />
       )}

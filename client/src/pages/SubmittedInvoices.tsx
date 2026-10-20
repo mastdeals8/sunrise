@@ -3,7 +3,7 @@ import { Pager, usePagedList } from "@/components/Pager";
 import { useAuth } from "../contexts/AuthContext";
 import { useGlobalDate } from "../contexts/GlobalDateContext";
 import { Link } from "wouter";
-import { Receipt, Search, ExternalLink, FileText, FileCode2, Settings as SettingsIcon } from "lucide-react";
+import { Receipt, Search, ExternalLink, FileText, FileCode2, Settings as SettingsIcon, Send, Loader2 } from "lucide-react";
 import { isBoltMode } from "../lib/supabase";
 import { fetchInvoices } from "../lib/api";
 
@@ -51,6 +51,34 @@ const SubmittedInvoicesPage: React.FC = () => {
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState<string>("all");
   const [filterType, setFilterType] = useState<string>("sales");
+  const [pushingId, setPushingId] = useState<number | null>(null);
+
+  const handlePushToTally = async (id: number) => {
+    setPushingId(id);
+    try {
+      const res = await fetch(`/api/tally/push/${id}`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        alert(data.message || "Successfully pushed to Tally!");
+        setInvoices((prev) =>
+          prev.map((inv) =>
+            inv.id === id ? { ...inv, tallyExportStatus: "pushed_to_tally", tallyExportedAt: new Date().toISOString() } : inv
+          )
+        );
+      } else {
+        alert(data.message || "Failed to push to Tally.");
+      }
+    } catch (err: any) {
+      alert("Error pushing to Tally: " + err.message);
+    } finally {
+      setPushingId(null);
+    }
+  };
 
   useEffect(() => {
     const load = async () => {
@@ -235,12 +263,25 @@ const SubmittedInvoicesPage: React.FC = () => {
                       </td>
                       <td className="px-4 py-3 text-right">
                         <div className="flex justify-end items-center gap-2">
+                          <button
+                            onClick={() => handlePushToTally(inv.id)}
+                            disabled={pushingId === inv.id}
+                            className="inline-flex items-center gap-1 text-xs text-amber-700 hover:text-amber-800 disabled:opacity-50"
+                            title="Direct Push to Tally ERP"
+                          >
+                            {pushingId === inv.id ? (
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                            ) : (
+                              <Send className="w-3 h-3" />
+                            )}
+                            Push
+                          </button>
                           <a
                             href={`/api/tally/export-xml/${inv.id}`}
                             className="inline-flex items-center gap-1 text-xs text-emerald-700 hover:underline"
                             title="Download Tally XML"
                           >
-                            <FileCode2 className="w-3 h-3" /> Tally XML
+                            <FileCode2 className="w-3 h-3" /> XML
                           </a>
                           <Link
                             href={`/invoice-packet?id=${inv.id}`}

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { isBoltMode } from "../lib/supabase";
+import { supabase, isBoltMode } from "../lib/supabase";
 import { fetchUsers, fetchAttendance, fetchAdvances, fetchPayroll, createUser, updateUser } from "../lib/api";
 import { useAuth } from "../contexts/AuthContext";
 import { useGlobalDate } from "../contexts/GlobalDateContext";
@@ -392,6 +392,40 @@ const StaffPage: React.FC = () => {
     }
   };
 
+  const handleDeleteAdvance = async (id: number) => {
+    if (!window.confirm("Are you sure you want to delete this salary advance? The staff member's advance balance will be restored.")) return;
+    try {
+      if (isBoltMode) {
+        const adv = advancesList.find(a => a.id === id);
+        if (adv) {
+          const { error: delErr } = await supabase.from("staff_advances").delete().eq("id", id);
+          if (!delErr) {
+            const staff = usersList.find(u => u.id === adv.userId);
+            if (staff) {
+              const newBal = Math.max(0, (staff.advanceBalance || 0) - adv.amount);
+              await supabase.from("users").update({ advance_balance: newBal }).eq("id", adv.userId);
+            }
+            showSuccess("Advance deleted and balance restored successfully.");
+            fetchData();
+          }
+        }
+        return;
+      }
+      const res = await fetch(`/api/advances/${id}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        showSuccess("Advance deleted and employee balance adjusted successfully.");
+        fetchData();
+      } else {
+        showError("Failed to delete advance.");
+      }
+    } catch (err: any) {
+      showError("Error deleting advance: " + err.message);
+    }
+  };
+
   // Auto-Calculate Payroll from Attendance and Seed values
   const handleCalculatePayroll = (staff: User) => {
     // Filter attendance records of the staff for selected Month & Year
@@ -637,7 +671,7 @@ const StaffPage: React.FC = () => {
                     onClick={() => { setClockStaffId(staff.id); setMessage(""); }}
                     className={`p-4 rounded-xl border text-left flex flex-col justify-between transition-all ${selected ? "bg-orange-600 border-orange-600 text-white shadow-md" : "bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100/60"}`}
                   >
-                    <span className={`text-[10px] font-bold uppercase tracking-wider block mb-2 ${selected ? "text-orange-100" : "text-slate-400"}`}>{staff.employeeId || "SUN-000"}</span>
+                    <span className={`text-[10px] font-bold uppercase tracking-wider block mb-2 ${selected ? "text-orange-100" : "text-slate-400"}`}>{staff.employeeId || (staff.id ? `SUN-${String(staff.id).padStart(3, '0')}` : "SUN-001")}</span>
                     <span className="text-sm font-black truncate block w-full">{staff.name}</span>
                     <span className={`text-[10px] font-semibold mt-1 block truncate ${selected ? "text-orange-200" : "text-orange-600"}`}>{staff.designation || "Creative Editor"}</span>
                   </button>
@@ -1270,6 +1304,7 @@ const StaffPage: React.FC = () => {
                     <th className="px-4 py-3">Reason</th>
                     <th className="px-4 py-3">Salary Deduct Status</th>
                     <th className="px-4 py-3 text-right">Amount</th>
+                    <th className="px-4 py-3 text-center">Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200">
@@ -1292,12 +1327,21 @@ const StaffPage: React.FC = () => {
                           </span>
                         </td>
                         <td className="px-4 py-3 text-right font-black text-slate-950">{formatCurrency(adv.amount)}</td>
+                        <td className="px-4 py-3 text-center">
+                          <button
+                            onClick={() => handleDeleteAdvance(adv.id)}
+                            className="p-1 rounded text-slate-400 hover:text-red-600 hover:bg-red-50 transition"
+                            title="Delete advance and restore staff balance"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </td>
                       </tr>
                     );
                   })}
                   {advancesList.length === 0 && (
                     <tr>
-                      <td colSpan={6} className="text-center py-12 text-slate-400 text-xs">
+                      <td colSpan={7} className="text-center py-12 text-slate-400 text-xs">
                         No outstanding salary advances issued.
                       </td>
                     </tr>

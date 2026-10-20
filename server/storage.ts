@@ -93,7 +93,7 @@ export interface IStorage {
 
   // Petty Cash
   getPettyCashExpense(id: number): Promise<PettyCashExpense | undefined>;
-  getAllPettyCashExpenses(filters?: { category?: string; status?: string }): Promise<PettyCashExpense[]>;
+  getAllPettyCashExpenses(filters?: { category?: string; status?: string; companyId?: number }): Promise<PettyCashExpense[]>;
   createPettyCashExpense(expense: InsertPettyCashExpense): Promise<PettyCashExpense>;
   updatePettyCashExpense(id: number, updates: Partial<InsertPettyCashExpense>): Promise<PettyCashExpense | undefined>;
   deletePettyCashExpense(id: number): Promise<boolean>;
@@ -176,6 +176,7 @@ export interface IStorage {
   getAllAdvances(): Promise<StaffAdvance[]>;
   getAdvancesByUser(userId: number): Promise<StaffAdvance[]>;
   createAdvance(advance: InsertStaffAdvance): Promise<StaffAdvance>;
+  deleteAdvance(id: number): Promise<boolean>;
 
   // Payroll
   getPayrollByMonthYear(month: number, year: number): Promise<Payroll[]>;
@@ -460,15 +461,21 @@ export class DatabaseStorage implements IStorage {
     return result[0];
   }
 
-  async getAllPettyCashExpenses(filters?: { category?: string; status?: string }): Promise<PettyCashExpense[]> {
+  async getAllPettyCashExpenses(filters?: { category?: string; status?: string; companyId?: number }): Promise<PettyCashExpense[]> {
+    const conditions = [];
+    if (filters?.companyId) {
+      conditions.push(eq(pettyCashExpenses.companyId, filters.companyId));
+    }
+    if (filters?.category) {
+      conditions.push(eq(pettyCashExpenses.category, filters.category));
+    }
+    if (filters?.status) {
+      conditions.push(eq(pettyCashExpenses.status, filters.status));
+    }
+
     let query = db.select().from(pettyCashExpenses);
-    
-    if (filters?.category && filters?.status) {
-      return query.where(and(eq(pettyCashExpenses.category, filters.category), eq(pettyCashExpenses.status, filters.status))).orderBy(desc(pettyCashExpenses.expenseDate));
-    } else if (filters?.category) {
-      return query.where(eq(pettyCashExpenses.category, filters.category)).orderBy(desc(pettyCashExpenses.expenseDate));
-    } else if (filters?.status) {
-      return query.where(eq(pettyCashExpenses.status, filters.status)).orderBy(desc(pettyCashExpenses.expenseDate));
+    if (conditions.length > 0) {
+      return query.where(and(...conditions)).orderBy(desc(pettyCashExpenses.expenseDate));
     }
     return query.orderBy(desc(pettyCashExpenses.expenseDate));
   }
@@ -1115,6 +1122,23 @@ export class DatabaseStorage implements IStorage {
     }
 
     return created;
+  }
+
+  async deleteAdvance(id: number): Promise<boolean> {
+    const advance = await db.select().from(staffAdvances).where(eq(staffAdvances.id, id)).limit(1);
+    if (!advance[0]) return false;
+
+    const { userId, amount } = advance[0];
+    await db.delete(staffAdvances).where(eq(staffAdvances.id, id));
+
+    const staffMember = await this.getUser(userId);
+    if (staffMember) {
+      const currentBalance = staffMember.advanceBalance || 0;
+      await this.updateUser(userId, {
+        advanceBalance: Math.max(0, currentBalance - (amount || 0)),
+      });
+    }
+    return true;
   }
 
   // ==========================================
