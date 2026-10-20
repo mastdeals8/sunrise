@@ -1,0 +1,63 @@
+version: "3.8"
+
+# ==============================================================================
+# Sunrise Media ERP — WhatsApp Evolution API v2.2.2
+# Ubuntu ARM64 (aarch64) Cloud VM Docker Compose Deployment
+# ==============================================================================
+
+services:
+  evolution-api:
+    image: atendai/evolution-api:v2.2.2
+    container_name: sunrise_evolution_api
+    restart: unless-stopped
+    ports:
+      - "${HOST_PORT:-8080}:8080"
+    env_file:
+      - .env
+    environment:
+      - SERVER_TYPE=http
+      - SERVER_PORT=8080
+      - SERVER_URL=${SERVER_URL:?SERVER_URL must be configured in .env (e.g. https://whatsapp.yourdomain.com)}
+      - AUTHENTICATION_TYPE=apikey
+      - AUTHENTICATION_API_KEY=${AUTHENTICATION_API_KEY:?AUTHENTICATION_API_KEY must be set in .env}
+      - AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES=true
+      - DATABASE_ENABLED=true
+      - DATABASE_PROVIDER=postgresql
+      - DATABASE_CONNECTION_URI=${DATABASE_CONNECTION_URI:?DATABASE_CONNECTION_URI must be configured in .env}
+      - DATABASE_CONNECTION_CLIENT_NAME=evolution_exchange
+      - DATABASE_SAVE_DATA_INSTANCE=true
+      - DATABASE_SAVE_DATA_CHATS=true
+      - DATABASE_SAVE_DATA_MESSAGES=true
+      - DATABASE_SAVE_MESSAGE_UPDATE=true
+      - DATABASE_SAVE_DATA_CONTACTS=true
+      - DATABASE_SAVE_DATA_HISTORIC=true
+      - WEBHOOK_GLOBAL_ENABLED=true
+      - WEBHOOK_GLOBAL_URL=${WEBHOOK_GLOBAL_URL:?WEBHOOK_GLOBAL_URL must be configured in .env (e.g. https://<erp-domain>/api/webhook/whatsapp)}
+      - WEBHOOK_GLOBAL_WEBHOOK_BY_EVENTS=false
+      - WEBHOOK_EVENTS_MESSAGES_UPSERT=true
+      - WEBHOOK_EVENTS_CONNECTION_UPDATE=true
+      - WEBHOOK_EVENTS_QRCODE_UPDATED=true
+      - CONFIG_SESSION_PHONE_CLIENT=Sunrise Media ERP
+      - CONFIG_SESSION_PHONE_NAME=Chrome
+      - QRCODE_LIMIT=30
+    volumes:
+      - evolution_instances:/evolution/instances
+      - evolution_store:/evolution/store
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8080/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
+    networks:
+      - sunrise_net
+
+volumes:
+  evolution_instances:
+    name: sunrise_evolution_instances
+  evolution_store:
+    name: sunrise_evolution_store
+
+networks:
+  sunrise_net:
+    name: sunrise_network

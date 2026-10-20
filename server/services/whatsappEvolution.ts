@@ -88,6 +88,9 @@ export class WhatsAppEvolutionService {
     if (!config.serverUrl) {
       return { online: false, latencyMs: 0, error: "Evolution API Server URL is not configured." };
     }
+    if (!config.apiKey) {
+      return { online: false, latencyMs: 0, error: "Evolution API Key is not configured." };
+    }
 
     const start = Date.now();
     try {
@@ -332,6 +335,9 @@ export class WhatsAppEvolutionService {
   ): Promise<{ success: boolean; messageId?: string; error?: string }> {
     const companyId = options?.companyId || 1;
     const config = await this.getConfig(companyId);
+    if (!config.serverUrl || !config.apiKey) {
+      return { success: false, error: "WhatsApp Evolution API server URL or API key is not configured." };
+    }
 
     const normalizedNumber = normalizeWhatsAppNumber(to);
     if (!normalizedNumber || normalizedNumber.length < 10) {
@@ -399,6 +405,9 @@ export class WhatsAppEvolutionService {
   ): Promise<{ success: boolean; messageId?: string; error?: string }> {
     const companyId = options?.companyId || 1;
     const config = await this.getConfig(companyId);
+    if (!config.serverUrl || !config.apiKey) {
+      return { success: false, error: "WhatsApp Evolution API server URL or API key is not configured." };
+    }
 
     const normalizedNumber = normalizeWhatsAppNumber(to);
     if (!normalizedNumber || normalizedNumber.length < 10) {
