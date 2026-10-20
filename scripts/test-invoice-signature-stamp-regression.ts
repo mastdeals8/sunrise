@@ -2,10 +2,11 @@ import "dotenv/config";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import InvoiceDocument from "../client/src/components/InvoiceDocument";
+import EstimateDocument from "../client/src/components/EstimateDocument";
 import { registerRoutes } from "../server/routes";
 import { generateToken } from "../server/auth";
 import { db } from "../server/db";
-import { companies } from "../shared/schema";
+import { companies, invoices, estimates, estimateItems } from "../shared/schema";
 import { eq } from "drizzle-orm";
 import express from "express";
 import assert from "assert";
@@ -76,23 +77,52 @@ async function runInvoiceSignatureStampSuite() {
       sellerProfile: dataC1
     }));
 
-    // Must NOT contain old stale signature
     assert(!htmlC1.includes("file-1780897714393-225895475.png"), "Old stale signature must NOT appear on invoice");
-    console.log("  ✓ PASS: Stale signature image file-1780897714393-225895475.png does not appear on invoice.");
-
-    // Must contain combined stamp and signature image
     assert(htmlC1.includes("stamp_and_sign"), "Combined stamp and signature image must appear on invoice");
-    console.log("  ✓ PASS: Combined stamp and signature image appears on invoice.");
-
-    // Must have exactly ONE image in signature block (no duplicate separate signature image)
     const sigImgMatches = htmlC1.match(/<img[^>]*alt="Signature and stamp"[^>]*>/g) || [];
     assert.strictEqual(sigImgMatches.length, 1, `Expected exactly 1 signature/stamp image, found ${sigImgMatches.length}`);
     const sealImgMatches = htmlC1.match(/<img[^>]*alt="Company seal"[^>]*>/g) || [];
     assert.strictEqual(sealImgMatches.length, 0, "No duplicate separate company seal image should be rendered");
-    console.log("  ✓ PASS: Exactly ONE combined signature-and-stamp image rendered. Duplicate separate signature eliminated.");
+    console.log("  ✓ PASS: Stale signature eliminated. Exactly ONE combined signature-and-stamp image rendered.");
 
-    // 4. Render InvoiceDocument for Company 2
-    console.log("\n[Test 4] Testing InvoiceDocument rendering for Company 2...");
+    // 4. Test Historical Invoice from DB (e.g. invoice 52)
+    console.log("\n[Test 4] Testing historical invoice rendering from real database records...");
+    const [histInv] = await db.select().from(invoices).where(eq(invoices.id, 52)).limit(1);
+    assert(histInv, "Historical invoice 52 must exist");
+    const [histEst] = await db.select().from(estimates).where(eq(estimates.id, histInv.estimateId!)).limit(1);
+
+    const histHtml = renderToStaticMarkup(React.createElement(InvoiceDocument, {
+      invoice: histInv,
+      estimate: histEst,
+      sellerProfile: dataC1
+    }));
+
+    assert(!histHtml.includes("file-1780897714393-225895475.png"), "Historical invoice must NOT show old signature");
+    assert(histHtml.includes("stamp_and_sign"), "Historical invoice must show combined stamp and sign image");
+    const histSigMatches = histHtml.match(/<img[^>]*alt="Signature and stamp"[^>]*>/g) || [];
+    assert.strictEqual(histSigMatches.length, 1, `Historical invoice must have exactly 1 stamp/sign image, found ${histSigMatches.length}`);
+    console.log("  ✓ PASS: Historical invoice 52 renders single combined image with zero obsolete references.");
+
+    // 5. Test EstimateDocument rendering (Invoice Packet Page 2)
+    console.log("\n[Test 5] Testing EstimateDocument rendering (Packet Page 2 / Estimate view)...");
+    const histEstItems = await db.select().from(estimateItems).where(eq(estimateItems.estimateId, histEst.id));
+    const estHtml = renderToStaticMarkup(React.createElement(EstimateDocument, {
+      estimate: histEst,
+      items: histEstItems,
+      sellerProfile: dataC1
+    }));
+
+    assert(!estHtml.includes("file-1780897714393-225895475.png"), "Estimate page must NOT show old stale signature");
+    assert(estHtml.includes("stamp_and_sign"), "Estimate page must show combined stamp and sign image");
+    // Verify only 1 image in the signature space
+    const estSigSpaceMatch = estHtml.match(/class="estimate-signature-space"[^>]*>([\s\S]*?)<\/div>/);
+    assert(estSigSpaceMatch, "Estimate signature space must exist");
+    const estImgCount = (estSigSpaceMatch[1].match(/<img/g) || []).length;
+    assert.strictEqual(estImgCount, 1, `Estimate must have exactly 1 signature/stamp image, found ${estImgCount}`);
+    console.log("  ✓ PASS: EstimateDocument renders single combined image with zero obsolete references.");
+
+    // 6. Test Company 2 isolation
+    console.log("\n[Test 6] Testing InvoiceDocument rendering for Company 2...");
     const htmlC2 = renderToStaticMarkup(React.createElement(InvoiceDocument, {
       invoice: mockInvoice,
       sellerProfile: dataC2

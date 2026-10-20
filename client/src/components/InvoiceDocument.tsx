@@ -141,7 +141,7 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({
   // Invoices use a single combined stamp-and-signature image (from sealPath or signatureStampPath/signaturePath).
   // The separate signature is intentionally blank and duplicate signature rendering is removed.
   // Stale fallback to old /brand/file-1780897714393-225895475.png is eliminated.
-  const stampSignAssetPath = sellerProfile?.sealPath || sellerProfile?.signatureStampPath || sellerProfile?.signaturePath || "";
+  const stampSignAssetPath = sellerProfile?.sealPath || sellerProfile?.signatureStampPath || sellerProfile?.signaturePath || (isCompany1 ? "https://kbnjiidfpqnklaljtuoj.supabase.co/storage/v1/object/public/company-assets/company-1/seal/1792429019490-stamp_and_sign.png" : "");
   const stampSignUrl = companyAssetUrl(stampSignAssetPath, token);
   const { dataUrl: stampSignDataUrl, ready: stampSignReady } = useDataUrl(stampSignUrl);
 

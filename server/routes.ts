@@ -1254,7 +1254,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     logoPath: "/brand/file-1780929283382-585314307.png",
     signatureStampPath: "",
     signaturePath: "",
-    sealPath: "",
+    sealPath: "https://kbnjiidfpqnklaljtuoj.supabase.co/storage/v1/object/public/company-assets/company-1/seal/1792429019490-stamp_and_sign.png",
     footerBgColor: "#f59e0b",
     footerTextColor: "#ffffff",
     headerBgColor: "#ffffff",

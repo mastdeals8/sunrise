@@ -31,6 +31,7 @@ interface Invoice {
   storeId?: number | null;
   storeCode?: string | null;
   storeName?: string | null;
+  companyId?: number | null;
 }
 
 interface PacketData {
@@ -308,6 +309,11 @@ const InvoicePacketPage: React.FC = () => {
           if (res.ok) data = await res.json();
         }
         if (data) {
+          const invCompanyId = data.invoice?.companyId || (data.estimate?.companyId ?? 1);
+          if (invCompanyId && (!sellerProfile?.companyId || sellerProfile.companyId !== invCompanyId)) {
+            const compSettings = await fetchCompanySettings(token, invCompanyId).catch(() => null);
+            if (compSettings) setSellerProfile(compSettings);
+          }
           // A generated PDF is the immutable source used by both Download and
           // Print. Invalidate it whenever a different packet is assembled.
           setGeneratedPacketPdf(null);

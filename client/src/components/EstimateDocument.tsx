@@ -64,9 +64,9 @@ const documentLogo = (src: string, companyName: string, isCompany1?: boolean) =>
 
 const EstimateDocument: React.FC<EstimateDocumentProps> = ({
   estimate: est,
-  items,
-  stores,
-  clients,
+  items = [],
+  stores = [],
+  clients = [],
   products = [],
   sellerProfile = {},
   assetToken: token,
@@ -342,8 +342,10 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
   const companyEmail = sellerProfile.email || "";
   const companyMobile = sellerProfile.mobile || "";
   const logoSrc = companyAssetUrl(sellerProfile.logoPath || (isCompany1 ? "/brand/file-1780929283382-585314307.png" : ""), token);
-  const signatureSrc = companyAssetUrl(sellerProfile.signaturePath || sellerProfile.signatureStampPath || (isCompany1 ? "/brand/file-1780897714393-225895475.png" : ""), token);
-  const sealSrc = companyAssetUrl(sellerProfile.sealPath, token);
+  // Separate signature is intentionally blank. Use combined stamp and signature asset.
+  // The obsolete fallback to /brand/file-1780897714393-225895475.png is removed.
+  const signatureSrc = companyAssetUrl(sellerProfile.signaturePath || "", token);
+  const sealSrc = companyAssetUrl(sellerProfile.sealPath || sellerProfile.signatureStampPath || (isCompany1 ? "https://kbnjiidfpqnklaljtuoj.supabase.co/storage/v1/object/public/company-assets/company-1/seal/1792429019490-stamp_and_sign.png" : ""), token);
   const footerBgColor = sellerProfile.footerBgColor || "#f59e0b";
   const footerTextColor = sellerProfile.footerTextColor || "#ffffff";
   const headerBgColor = sellerProfile.headerBgColor || "#ffffff";
@@ -829,9 +831,9 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
                 {sealSrc && sealSrc !== signatureSrc && (
                   <img
                     src={sealSrc}
-                    alt="Company Seal"
+                    alt={signatureSrc ? "Company Seal" : "Signature and stamp"}
                     className="estimate-seal"
-                    style={{ maxHeight: "42px", maxWidth: "80px", objectFit: "contain" }}
+                    style={{ maxHeight: "42px", maxWidth: signatureSrc ? "80px" : "140px", objectFit: "contain" }}
                   />
                 )}
               </div>

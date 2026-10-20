@@ -602,8 +602,10 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
           const companyGstin = sellerProfile.gstin || "";
           const companyPan = sellerProfile.pan || "";
           const logoSrc = companyAssetUrl(sellerProfile.logoPath || (isCompany1 ? "/brand/file-1780929283382-585314307.png" : ""), token);
-          const signatureStampSrc = companyAssetUrl(sellerProfile.signaturePath || sellerProfile.signatureStampPath || (isCompany1 ? "/brand/file-1780897714393-225895475.png" : ""), token);
-          const sealSrc = companyAssetUrl(sellerProfile.sealPath, token);
+          // Separate signature is intentionally blank. Use combined stamp and signature asset.
+          // The obsolete fallback to /brand/file-1780897714393-225895475.png is removed.
+          const signatureStampSrc = companyAssetUrl(sellerProfile.signaturePath || "", token);
+          const sealSrc = companyAssetUrl(sellerProfile.sealPath || sellerProfile.signatureStampPath || (isCompany1 ? "https://kbnjiidfpqnklaljtuoj.supabase.co/storage/v1/object/public/company-assets/company-1/seal/1792429019490-stamp_and_sign.png" : ""), token);
           // Bottom checklist persisted on dc.metadata.checklist. Falls back to
           // the live editor state when previewing an unsaved DC.
           const checklist = (metadata?.checklist as { window?: boolean; inStore?: boolean; nso?: boolean; repairing?: boolean; materialTransfer?: boolean } | undefined) || wccChecklist;
@@ -1055,11 +1057,11 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
                       {sealSrc && (
                         <img
                           src={sealSrc}
-                          alt="Seal"
-                          className="max-h-[20mm] max-w-[28mm] object-contain"
+                          alt={signatureStampSrc && signatureStampSrc !== sealSrc ? "Seal" : "Signature and stamp"}
+                          className="max-h-[20mm] max-w-[48mm] object-contain"
                         />
                       )}
-                      {signatureStampSrc && (
+                      {signatureStampSrc && signatureStampSrc !== sealSrc && (
                         <img
                           src={signatureStampSrc}
                           alt="Signature and stamp"
