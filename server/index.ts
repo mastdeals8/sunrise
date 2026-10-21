@@ -1,4 +1,10 @@
 import "dotenv/config";
+import ws from "ws";
+
+if (typeof (globalThis as any).WebSocket === "undefined") {
+  (globalThis as any).WebSocket = ws;
+}
+
 import { createServer } from "http";
 import express, { type Request, Response, NextFunction } from "express";
 
