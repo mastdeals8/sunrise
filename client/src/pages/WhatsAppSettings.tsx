@@ -84,7 +84,7 @@ const WhatsAppSettings: React.FC = () => {
   const [logsLoading, setLogsLoading] = useState(false);
   const [copiedWebhook, setCopiedWebhook] = useState(false);
 
-  const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+  const headers = { Authorization: token ? `Bearer ${token}` : "", "Content-Type": "application/json" };
   const webhookBase = typeof window !== "undefined" ? `${window.location.protocol}//${window.location.host}` : "";
   const fullWebhookUrl = `${webhookBase}/api/webhook/whatsapp`;
 
@@ -95,7 +95,7 @@ const WhatsAppSettings: React.FC = () => {
     return () => {
       if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
     };
-  }, [companyId]);
+  }, [companyId, token]);
 
   // Polling when QR code is active to detect successful scan
   useEffect(() => {

@@ -123,7 +123,7 @@ const TelegramSettings: React.FC = () => {
   const [assigning, setAssigning] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
-  const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+  const headers = { Authorization: token ? `Bearer ${token}` : "", "Content-Type": "application/json" };
 
   useEffect(() => {
     fetchConfig();
@@ -132,7 +132,7 @@ const TelegramSettings: React.FC = () => {
     fetchRequests();
     fetchAssignments();
     fetchEstimates();
-  }, []);
+  }, [token]);
 
   const fetchConfig = async () => {
     setLoading(true);

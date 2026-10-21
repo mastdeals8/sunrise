@@ -2,7 +2,9 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { Request, Response, NextFunction } from "express";
 import { storage } from "./storage";
+import { pool } from "./db";
 import { JWT_SECRET, NODE_ENV } from "./config";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 export interface AuthRequest extends Request {
   user?: {
@@ -20,21 +22,128 @@ export interface AuthRequest extends Request {
 
 export const SESSION_COOKIE_NAME = "sunrise_session";
 
-export const resolveUserFromToken = async (token: string) => {
-  const decoded = jwt.verify(token, JWT_SECRET) as any;
-  const user = await storage.getUser(decoded.id);
-  if (!user || !user.isActive) return null;
-  const memberships = await storage.getUserCompanies(user.id);
-  const isSuperAdmin = user.role === "admin" || user.id === 1 || memberships.some(m => m.role === "super_admin");
-  return {
-    id: user.id,
-    username: user.username,
-    email: user.email,
-    name: user.name,
-    role: user.role,
-    isSuperAdmin,
-    memberships,
+const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
+const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
+
+let _supabaseAuthServerClient: SupabaseClient | null = null;
+function getSupabaseAuthServerClient(): SupabaseClient | null {
+  if (!_supabaseAuthServerClient && supabaseUrl && supabaseAnonKey) {
+    _supabaseAuthServerClient = createClient(supabaseUrl, supabaseAnonKey, {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+      },
+    });
+  }
+  return _supabaseAuthServerClient;
+}
+
+interface CachedUserEntry {
+  user: {
+    id: number;
+    username: string;
+    email: string;
+    name: string;
+    role: string;
+    isSuperAdmin: boolean;
+    memberships: any[];
   };
+  expiresAt: number;
+}
+
+const tokenCache = new Map<string, CachedUserEntry>();
+
+// Purge expired tokens periodically
+setInterval(() => {
+  const now = Date.now();
+  tokenCache.forEach((val, key) => {
+    if (val.expiresAt < now) {
+      tokenCache.delete(key);
+    }
+  });
+}, 60000).unref();
+
+export const resolveUserFromToken = async (token: string) => {
+  if (!token || typeof token !== "string" || token === "null" || token === "undefined") {
+    return null;
+  }
+
+  // 1. Check in-memory verification cache
+  const cached = tokenCache.get(token);
+  if (cached && Date.now() < cached.expiresAt) {
+    return cached.user;
+  }
+
+  // 2. Fast path: try local Express JWT signed with JWT_SECRET
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET) as any;
+    if (decoded && decoded.id) {
+      const user = await storage.getUser(decoded.id);
+      if (user && user.isActive) {
+        const memberships = await storage.getUserCompanies(user.id);
+        const isSuperAdmin = user.role === "admin" || user.id === 1 || memberships.some(m => m.role === "super_admin");
+        const resolved = {
+          id: user.id,
+          username: user.username,
+          email: user.email,
+          name: user.name,
+          role: user.role,
+          isSuperAdmin,
+          memberships,
+        };
+        tokenCache.set(token, { user: resolved, expiresAt: Date.now() + 30000 });
+        return resolved;
+      }
+      return null;
+    }
+  } catch {
+    // Not signed with local JWT_SECRET; proceed to Supabase Auth token verification
+  }
+
+  // 3. Supabase Auth token verification via official Supabase client
+  const sbClient = getSupabaseAuthServerClient();
+  if (sbClient) {
+    try {
+      const { data, error } = await sbClient.auth.getUser(token);
+      if (!error && data?.user) {
+        const sbUser = data.user;
+        const userRes = await pool.query(
+          `SELECT id, username, email, name, role, is_active, auth_user_id
+           FROM public.users
+           WHERE (auth_user_id = $1 OR LOWER(email) = LOWER($2))
+             AND is_active = true
+           ORDER BY CASE WHEN auth_user_id = $1 THEN 0 ELSE 1 END, id ASC
+           LIMIT 1`,
+          [sbUser.id, sbUser.email]
+        );
+
+        if (userRes.rows.length > 0) {
+          const u = userRes.rows[0];
+          // Backfill auth_user_id if not present
+          if (!u.auth_user_id) {
+            pool.query(`UPDATE public.users SET auth_user_id = $1 WHERE id = $2`, [sbUser.id, u.id]).catch(() => {});
+          }
+          const memberships = await storage.getUserCompanies(u.id);
+          const isSuperAdmin = u.role === "admin" || u.id === 1 || memberships.some(m => m.role === "super_admin");
+          const resolved = {
+            id: u.id,
+            username: u.username,
+            email: u.email,
+            name: u.name,
+            role: u.role,
+            isSuperAdmin,
+            memberships,
+          };
+          tokenCache.set(token, { user: resolved, expiresAt: Date.now() + 30000 });
+          return resolved;
+        }
+      }
+    } catch (sbErr: any) {
+      console.warn("[auth] Supabase token resolution warning:", sbErr?.message || sbErr);
+    }
+  }
+
+  return null;
 };
 
 /**
@@ -95,7 +204,7 @@ export const authenticateToken = async (req: AuthRequest, res: Response, next: N
   try {
     const user = await resolveUserFromToken(token);
     if (!user) {
-      return res.status(401).json({ message: "Invalid or inactive user" });
+      return res.status(401).json({ message: "Invalid token" });
     }
     req.user = user;
     if (!resolveCompanyForRequest(req, res)) return;
@@ -127,7 +236,7 @@ export const authenticateBrowserRequest = async (req: AuthRequest, res: Response
   try {
     const user = await resolveUserFromToken(token);
     if (!user) {
-      return res.status(401).json({ message: "Invalid or inactive user" });
+      return res.status(401).json({ message: "Invalid token" });
     }
     req.user = user;
     if (!resolveCompanyForRequest(req, res)) return;

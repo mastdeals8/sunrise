@@ -17,6 +17,7 @@
     "test:tally": "tsx scripts/test-tally-export.ts",
     "test:telegram": "tsx scripts/test-telegram-workflow.ts",
     "test:installer": "tsx scripts/test-installer-workflow.ts",
+    "test:auth": "tsx scripts/test-supabase-and-express-auth-dual-tokens.ts",
     "db:push": "drizzle-kit push",
     "postinstall": "node scripts/generate-templates.mjs"
   },

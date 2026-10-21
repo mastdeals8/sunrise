@@ -41,7 +41,7 @@ const DEFAULT_EXPRESS_BACKEND_URL = "https://erp-backend-production-6e20.up.rail
 
 if (typeof window !== "undefined") {
   const _origFetch = window.fetch;
-  window.fetch = function (input: RequestInfo | URL, init?: RequestInit) {
+  window.fetch = async function (input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
     const rawUrl =
       typeof input === "string"
         ? input
@@ -77,10 +77,42 @@ if (typeof window !== "undefined") {
         headers.set("X-Company-Id", String(activeId));
       }
 
-      return _origFetch.call(window, targetUrl, {
+      // If Authorization is missing, empty, or placeholder ("Bearer null"/"Bearer undefined"),
+      // attach the active Supabase Auth user access token
+      const existingAuth = headers.get("Authorization");
+      if (!existingAuth || existingAuth === "Bearer null" || existingAuth === "Bearer undefined" || existingAuth === "Bearer ") {
+        try {
+          const { data: sessionData } = await supabase.auth.getSession();
+          if (sessionData?.session?.access_token) {
+            headers.set("Authorization", `Bearer ${sessionData.session.access_token}`);
+          }
+        } catch (e) {
+          console.warn("[Bolt] Failed to get active Supabase session token:", e);
+        }
+      }
+
+      let res = await _origFetch.call(window, targetUrl, {
         ...init,
         headers,
       });
+
+      // If token expired (401), attempt to refresh the Supabase session and retry once
+      if (res.status === 401) {
+        try {
+          const { data: refreshData, error: refreshErr } = await supabase.auth.refreshSession();
+          if (!refreshErr && refreshData?.session?.access_token) {
+            headers.set("Authorization", `Bearer ${refreshData.session.access_token}`);
+            res = await _origFetch.call(window, targetUrl, {
+              ...init,
+              headers,
+            });
+          }
+        } catch {
+          // If refresh fails, return original 401 response
+        }
+      }
+
+      return res;
     }
 
     if (!isBoltMode && (rawUrl.startsWith("/api/") || rawUrl.includes("/api/"))) {

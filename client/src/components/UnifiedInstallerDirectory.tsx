@@ -77,7 +77,7 @@ export function normalizePhoneDisplay(phone?: string | null): string {
 
 export const UnifiedInstallerDirectory: React.FC<{ companyId?: number }> = ({ companyId = 1 }) => {
   const { token, user } = useAuth();
-  const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+  const headers = { Authorization: token ? `Bearer ${token}` : "", "Content-Type": "application/json" };
 
   const [installers, setInstallers] = useState<InstallerContact[]>([]);
   const [loading, setLoading] = useState(true);
@@ -119,7 +119,7 @@ export const UnifiedInstallerDirectory: React.FC<{ companyId?: number }> = ({ co
     fetchInstallers();
     fetchEstimates();
     fetchAccessRequests();
-  }, [companyId]);
+  }, [companyId, token]);
 
   const showToast = (text: string, ok: boolean = true) => {
     setActionFeedback({ text, ok });
