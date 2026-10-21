@@ -1942,6 +1942,7 @@ async function edgeFetch(
   options: RequestInit & { pathSuffix?: string } = {}
 ): Promise<Response> {
   const supabaseUrl = (import.meta.env.VITE_SUPABASE_URL as string | undefined) ?? "";
+  const supabaseAnonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined) ?? "";
   const { pathSuffix = "", ...fetchOptions } = options;
   const url = `${supabaseUrl}/functions/v1/${functionName}${pathSuffix}`;
   const companyId = getActiveCompanyId();
@@ -1949,6 +1950,7 @@ async function edgeFetch(
     ...fetchOptions,
     headers: {
       "Content-Type": "application/json",
+      ...(supabaseAnonKey ? { apikey: supabaseAnonKey } : {}),
       "X-Company-Id": String(companyId),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...fetchOptions.headers,
@@ -2284,8 +2286,38 @@ export async function updateEstimate(
     }
     return res.json();
   }
-  // Keep update validation and normalization on the same Edge Function path
-  // as estimate creation (including existing CAPEX checks and snapshots).
+
+  // Bolt mode:
+  // 1. Try atomic RPC save directly in PostgreSQL (single transaction, guaranteed rollback)
+  try {
+    const { items: rawItems, expectedRevisionNumber, revisionNote, ...estimateFields } = payload;
+    if (Array.isArray(rawItems)) {
+      const { data: atomicUpdated, error: rpcErr } = await supabase.rpc("save_estimate_revision_atomic", {
+        p_estimate_id: id,
+        p_estimate: estimateFields,
+        p_items: rawItems,
+        p_revision_note: (revisionNote as string) || null,
+        p_expected_revision_number: expectedRevisionNumber !== undefined && expectedRevisionNumber !== null ? Number(expectedRevisionNumber) : null,
+        p_user_id: null,
+      });
+      if (!rpcErr && atomicUpdated) {
+        return toCamel(atomicUpdated);
+      }
+      if (rpcErr) {
+        console.warn("[api] save_estimate_revision_atomic RPC returned error:", rpcErr.message);
+        if (rpcErr.code === "40001" || rpcErr.message?.includes("Concurrency conflict")) {
+          const errObj: any = new Error(rpcErr.message);
+          errObj.status = 409;
+          throw errObj;
+        }
+      }
+    }
+  } catch (err: any) {
+    if (err.status === 409) throw err;
+    console.warn("[api] save_estimate_revision_atomic error, falling back to edgeFetch:", err);
+  }
+
+  // 2. Fallback to Edge Function
   const res = await edgeFetch("estimate-save", token, {
     method: "PATCH",
     pathSuffix: `?id=${encodeURIComponent(String(id))}`,

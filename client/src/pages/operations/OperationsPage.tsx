@@ -414,6 +414,8 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
   const isSavingEstimateRef = useRef(false);
   const [isDirty, setIsDirty] = useState(false);
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
+  const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "failed">("idle");
+  const [saveErrorMessage, setSaveErrorMessage] = useState("");
   const dirtyEnabledRef = useRef(false);
   const [estSubject, setEstSubject] = useState("");
   const [estBillingTo, setEstBillingTo] = useState("");
@@ -1775,75 +1777,76 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     }
   };
 
-  const handleCreateEstimate = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleCreateEstimate = async (
+    e?: React.FormEvent,
+    options?: { stayInEditor?: boolean; isAutoSave?: boolean }
+  ): Promise<boolean> => {
+    if (e && typeof e.preventDefault === "function") {
+      e.preventDefault();
+    }
     if (isSavingEstimateRef.current || isSaving) {
       console.warn("[save] Save ignored — save already in progress");
-      return;
+      return false;
     }
     isSavingEstimateRef.current = true;
     setIsSaving(true);
+    setSaveStatus("saving");
+    setSaveErrorMessage("");
+
+    const failValidation = (msg: string) => {
+      isSavingEstimateRef.current = false;
+      setIsSaving(false);
+      setSaveStatus("failed");
+      setSaveErrorMessage(msg);
+      setMessage(msg);
+      setTimeout(() => setMessage(""), 8000);
+      return false;
+    };
 
     const isAbfrl = isAblblFormat(estFormat);
 
     if (!estClientId) {
-      isSavingEstimateRef.current = false;
-      setIsSaving(false);
-      setMessage("Please select a client before saving.");
-      setTimeout(() => setMessage(""), 5000);
-      return;
+      return failValidation("Please select a client before saving.");
     }
     if (isAbfrl && !estBrandId) {
-      isSavingEstimateRef.current = false;
-      setIsSaving(false);
-      setMessage("Brand is required for ABFRL estimates.");
-      setTimeout(() => setMessage(""), 5000);
-      return;
+      return failValidation("Brand is required for ABFRL estimates.");
     }
     if (!isBoltMode && !estNumber) {
-      isSavingEstimateRef.current = false;
-      setIsSaving(false);
-      setMessage("Estimate Number is required.");
-      setTimeout(() => setMessage(""), 5000);
-      return;
+      return failValidation("Estimate Number is required.");
     }
     if (!estTitle && !estSubject) {
-      isSavingEstimateRef.current = false;
-      setIsSaving(false);
-      setMessage("Please provide an Estimate Title or Subject.");
-      setTimeout(() => setMessage(""), 5000);
-      return;
+      return failValidation("Please provide an Estimate Title or Subject.");
     }
 
     // Phase 7: Validate estimate items
     const itemsValidation = validateEstimateItems(estItems);
     if (!itemsValidation.valid) {
-      isSavingEstimateRef.current = false;
-      setIsSaving(false);
-      setMessage(itemsValidation.error || "Estimate must have at least one item");
-      setTimeout(() => setMessage(""), 6000);
-      return;
+      return failValidation(itemsValidation.error || "Estimate must have at least one item");
     }
 
     // Phase 7: Validate all items (quantity, rate, HSN)
     const batchValidation = validateEstimateItemsBatch(estItems);
     if (!batchValidation.valid) {
-      isSavingEstimateRef.current = false;
-      setIsSaving(false);
-      setMessage(batchValidation.errors.join("; "));
-      setTimeout(() => setMessage(""), 8000);
-      return;
+      const enrichedErrors = batchValidation.errors.map(errStr => {
+        const rowMatch = errStr.match(/Row (\d+)/);
+        if (rowMatch) {
+          const rowNum = Number(rowMatch[1]);
+          const item = estItems.find(it => it.sl === rowNum);
+          if (item?.storeId) {
+            const st = stores.find(s => String(s.id) === String(item.storeId));
+            if (st) return `[${st.name || st.city || `Store #${st.id}`}] ${errStr}`;
+          }
+        }
+        return errStr;
+      });
+      return failValidation(enrichedErrors.join("; "));
     }
 
     // Phase 7: Validate GSTIN format
     if (estGstin) {
       const gstinValidation = validateGstin(estGstin);
       if (!gstinValidation.valid) {
-        isSavingEstimateRef.current = false;
-        setIsSaving(false);
-        setMessage(gstinValidation.error || "Invalid GSTIN");
-        setTimeout(() => setMessage(""), 6000);
-        return;
+        return failValidation(gstinValidation.error || "Invalid GSTIN");
       }
     }
 
@@ -1851,11 +1854,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     if (estPan) {
       const panValidation = validatePan(estPan);
       if (!panValidation.valid) {
-        isSavingEstimateRef.current = false;
-        setIsSaving(false);
-        setMessage(panValidation.error || "Invalid PAN");
-        setTimeout(() => setMessage(""), 6000);
-        return;
+        return failValidation(panValidation.error || "Invalid PAN");
       }
     }
 
@@ -1867,30 +1866,25 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     const profile = getEstimateFormatProfile(effectiveProfileCode);
 
     if (profile.storeRequired && !isAbfrl && (!estStoreId || Number(estStoreId) <= 0)) {
-      isSavingEstimateRef.current = false;
-      setIsSaving(false);
-      setMessage(`Store selection is required for ${profile.name} estimates.`);
-      setTimeout(() => setMessage(""), 6000);
-      return;
+      return failValidation(`Store selection is required for ${profile.name} estimates.`);
     }
 
     if (isAbfrl && estAbfrlProjectType === "CAPEX") {
       const missing = estItems
-        .map((it, i) => ({ sl: it.sl ?? i + 1, mc: it.materialCode, id: it.materialCodeId }))
+        .map((it, i) => ({ sl: it.sl ?? i + 1, mc: it.materialCode, id: it.materialCodeId, storeId: it.storeId }))
         .filter(r => !r.mc && !r.id);
       if (missing.length > 0) {
-        isSavingEstimateRef.current = false;
-        setIsSaving(false);
-        const msg = `ABLBL CAPEX requires a Material Code on every row. Missing on row(s): ${missing.map(m => m.sl).join(", ")}.`;
-        setMessage(msg);
-        setTimeout(() => setMessage(""), 6000);
-        return;
+        const rowsDesc = missing.map(m => {
+          const st = m.storeId ? stores.find(s => String(s.id) === String(m.storeId)) : null;
+          return st ? `Row ${m.sl} (${st.name || st.city})` : `Row ${m.sl}`;
+        }).join(", ");
+        return failValidation(`ABLBL CAPEX requires a Material Code on every row. Missing on: ${rowsDesc}.`);
       }
     }
 
     const _t0 = performance.now();
     const _ms = () => Math.round(performance.now() - _t0);
-    console.log(`[save] handler entered`, { editingEstimateId, estNumber, items: estItems.length });
+    console.log(`[save] handler entered`, { editingEstimateId, estNumber, items: estItems.length, stayInEditor: options?.stayInEditor });
     try {
       const dedupedItems = deduplicateSpecialCharges(estItems);
       if (dedupedItems.length !== estItems.length) {
@@ -1902,10 +1896,9 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
       );
       if (invalidRunningInch) {
         const missing = Number(invalidRunningInch.height || 0) <= 0 ? "H (Letter Height)" : "Qty";
-        alert(`Row ${invalidRunningInch.sl} (${invalidRunningInch.itemName || "Item"}): Running inch formula (Height × Qty × Rate) requires ${missing} to be greater than 0.`);
-        isSavingEstimateRef.current = false;
-        setIsSaving(false);
-        return;
+        const msg = `Row ${invalidRunningInch.sl} (${invalidRunningInch.itemName || "Item"}): Running inch formula (Height × Qty × Rate) requires ${missing} to be greater than 0.`;
+        alert(msg);
+        return failValidation(msg);
       }
 
       const normalizedItems = recalculateEstimateRows(dedupedItems);
@@ -2071,16 +2064,25 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
         const savedEstimate = await res.json().catch(() => null);
         console.log(`[save] Estimate update API completed in ${_ms()}ms (body parse: ${Math.round(performance.now() - _bodyStart)}ms)`);
         const savedEstimateNumber = savedEstimate?.estimateNumber || estNumber;
-        showSuccess(`Estimate "${savedEstimateNumber}" ${editingEstimateId ? "updated" : "saved"} successfully!`);
-        setLastSavedAt(new Date());
+        const now = new Date();
+        setLastSavedAt(now);
         setIsDirty(false);
-
-        // ── IMPORTANT: reset isSaving immediately so the button is no longer
-        // stuck on "Saving…". Do NOT move any awaits between here and this call.
+        setSaveStatus("saved");
+        setSaveErrorMessage("");
         setIsSaving(false);
+        isSavingEstimateRef.current = false;
 
-        // Optimistically patch the local estimates array so the register
-        // shows the updated amount the instant the form closes.
+        // Clear local recovery draft on successful persist
+        if (typeof window !== "undefined") {
+          try {
+            const activeCoId = activeCompanyId || 1;
+            const uid = user?.id || "anon";
+            const draftKey = `sunrise_draft_${activeCoId}_${uid}_${editingEstimateId || "new"}`;
+            window.localStorage.removeItem(draftKey);
+          } catch {}
+        }
+
+        // Optimistically patch the local estimates array
         if (editingEstimateId && savedEstimate) {
           const patched = {
             ...savedEstimate,
@@ -2091,6 +2093,14 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
           );
         }
 
+        // When "Save" (or Ctrl+S / autosave) is used: stay in editor!
+        if (options?.stayInEditor) {
+          showSuccess(`Estimate "${savedEstimateNumber}" saved at ${now.toLocaleTimeString()}`);
+          return true;
+        }
+
+        // "Update Estimate" / "Save Draft Estimate": close editor and navigate to register
+        showSuccess(`Estimate "${savedEstimateNumber}" ${editingEstimateId ? "updated" : "saved"} successfully!`);
         setShowEstimateForm(false);
         setEstBillingProfileId("");
         setEditingEstimateId(null);
@@ -2130,7 +2140,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
           () => console.log(`[save] full refresh complete (${_ms()}ms)`),
           (err) => console.warn(`[save] full refresh failed`, err),
         );
-        return; // prevent finally from calling setIsSaving(false) again (harmless but clean)
+        return true;
       } else {
         const body = await res.text().catch(() => "");
         console.warn(`[save] non-OK response`, res.status, body.slice(0, 200));
@@ -2142,19 +2152,22 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
         if (res.status === 409) {
           alert(`⚠️ CONCURRENCY WARNING:\n\n${errMsg}\n\nPlease reload the estimate before making changes.`);
         }
+        setSaveStatus("failed");
+        setSaveErrorMessage(errMsg);
         setMessage(errMsg);
         setTimeout(() => setMessage(""), 8000);
+        return false;
       }
     } catch (err: any) {
-      if (err?.name === "AbortError") {
-        console.error(`[save] request aborted after 25s timeout — server did not respond. DB may still have committed; reload to confirm.`);
-        setMessage("Save timed out after 25 seconds. The estimate may have saved — please refresh to verify.");
-        setTimeout(() => setMessage(""), 8000);
-      } else {
-        console.error(`[save] error after ${_ms()}ms`, err);
-        setMessage(err?.message || "Failed to save estimate");
-        setTimeout(() => setMessage(""), 8000);
-      }
+      const errMsg = err?.name === "AbortError"
+        ? "Save timed out after 25 seconds. The estimate may have saved — please refresh to verify."
+        : (err?.message || "Failed to save estimate");
+      console.error(`[save] error after ${_ms()}ms`, err);
+      setSaveStatus("failed");
+      setSaveErrorMessage(errMsg);
+      setMessage(errMsg);
+      setTimeout(() => setMessage(""), 8000);
+      return false;
     } finally {
       console.log(`[save] setIsSaving(false) — total ${_ms()}ms`);
       isSavingEstimateRef.current = false;
@@ -4154,7 +4167,13 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
             isSaving,
             isDirty,
             lastSavedAt,
-            setMessage
+            saveStatus,
+            setSaveStatus,
+            saveErrorMessage,
+            setSaveErrorMessage,
+            setMessage,
+            user,
+            activeCompanyId,
           }}
         />
       )}

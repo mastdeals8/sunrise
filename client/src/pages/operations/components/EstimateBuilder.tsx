@@ -2,7 +2,7 @@ import React from "react";
 import { Pager, usePagedList } from "@/components/Pager";
 import { createPortal } from "react-dom";
 import { Link } from "wouter";
-import { Archive, Building2, Check, CheckCircle2, CheckSquare, ChevronDown, ChevronRight, ClipboardPaste, Copy, CreditCard as Edit3, Download, Eye, FilePlus2, FileSpreadsheet, FileText, FileUp, Filter, FolderOpen, History, MoreHorizontal, MoveDown, MoveUp, Pencil, Plus, Printer, Receipt, Redo2, Search, Square, Trash, Undo2, X } from "lucide-react";
+import { AlertTriangle, Archive, Building2, Check, CheckCircle2, CheckSquare, ChevronDown, ChevronRight, ClipboardPaste, Copy, CreditCard as Edit3, Download, Eye, FilePlus2, FileSpreadsheet, FileText, FileUp, Filter, FolderOpen, History, Loader2, MoreHorizontal, MoveDown, MoveUp, Pencil, Plus, Printer, Receipt, Redo2, Search, Square, Trash, Undo2, X } from "lucide-react";
 import { displayFormatLabel, isAblblFormat, normalizeDisplayName, normalizeFormatMode, normalizeGstinPan } from "../../../../../shared/textFormat";
 import { getEstimateFormatProfile, isRetailSingleStoreFormat, isMultiStoreFormat, resolveCustomerFormatProfile } from "../../../../../shared/estimateProfiles";
 import { formatProductDetails, sameDisplayText } from "../../../../../shared/productDetails";
@@ -1041,6 +1041,14 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
     rowClipboard,
     isSaving,
     sellerProfile,
+    isDirty,
+    lastSavedAt,
+    saveStatus = "idle",
+    setSaveStatus,
+    saveErrorMessage = "",
+    setSaveErrorMessage,
+    user,
+    activeCompanyId,
   } = props;
 
   // Phase 2: register pagination at the render layer. Full lists are still
@@ -1167,6 +1175,123 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
       ? recalculateEstimateRows(rows, estGstType)
       : rows;
   }, [recalculateEstimateRows, estGstType]);
+
+  // ─── Local Storage Draft & Recovery ──────────────────────────────────────────
+  const [recoverableDraft, setRecoverableDraft] = React.useState<any | null>(null);
+
+  const getDraftStorageKey = React.useCallback(() => {
+    const coId = activeCompanyId || 1;
+    const uid = user?.id || "anon";
+    const estKey = editingEstimateId ? String(editingEstimateId) : "new";
+    return `sunrise_draft_${coId}_${uid}_${estKey}`;
+  }, [activeCompanyId, user?.id, editingEstimateId]);
+
+  // Check for unsaved draft when form opens
+  React.useEffect(() => {
+    if (!showEstimateForm) {
+      setRecoverableDraft(null);
+      return;
+    }
+    try {
+      const raw = localStorage.getItem(getDraftStorageKey());
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && Array.isArray(parsed.estItems) && parsed.estItems.length > 0) {
+          const currentEst = editingEstimateId ? estimates.find((x: any) => x.id === editingEstimateId) : null;
+          const estUpdatedTime = currentEst?.updatedAt ? new Date(currentEst.updatedAt).getTime() : 0;
+          if (!currentEst || (parsed.timestamp && parsed.timestamp > estUpdatedTime)) {
+            if (parsed.estItems.length !== estItems.length || parsed.estSubject !== estSubject) {
+              setRecoverableDraft(parsed);
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("[draft] Failed to check local draft:", e);
+    }
+  }, [showEstimateForm, editingEstimateId]);
+
+  const handleRestoreDraft = () => {
+    if (!recoverableDraft) return;
+    try {
+      if (recoverableDraft.estSubject) setEstSubject?.(recoverableDraft.estSubject);
+      if (recoverableDraft.estTitle) setEstTitle?.(recoverableDraft.estTitle);
+      if (recoverableDraft.estClientId) handleClientSelectChange?.(String(recoverableDraft.estClientId));
+      if (recoverableDraft.estBrandId) setEstBrandId?.(String(recoverableDraft.estBrandId));
+      if (recoverableDraft.estStoreOverrides) setEstStoreOverrides?.(recoverableDraft.estStoreOverrides);
+      if (Array.isArray(recoverableDraft.estItems) && recoverableDraft.estItems.length > 0) {
+        setEstItems?.(recalcRows(recoverableDraft.estItems));
+      }
+      showSuccess?.("Unsaved draft restored successfully!");
+    } catch (e) {
+      console.error("[draft] Failed to restore draft:", e);
+    } finally {
+      setRecoverableDraft(null);
+    }
+  };
+
+  const handleDiscardDraft = () => {
+    try {
+      localStorage.removeItem(getDraftStorageKey());
+    } catch {}
+    setRecoverableDraft(null);
+  };
+
+  // Debounced autosave to localStorage draft
+  React.useEffect(() => {
+    if (!showEstimateForm || !isDirty || !estItems || estItems.length === 0) return;
+    const timer = setTimeout(() => {
+      try {
+        const draft = {
+          timestamp: Date.now(),
+          estimateId: editingEstimateId || null,
+          companyId: activeCompanyId || 1,
+          userId: user?.id || "anon",
+          estNumber,
+          estSubject,
+          estTitle,
+          estClientId,
+          estBrandId,
+          estStoreId,
+          estDate,
+          estFormat,
+          estFormatProfileCode,
+          estItems,
+          estStoreOverrides,
+          estBillingProfileId,
+          estGstin,
+          estPan,
+          estStateCode,
+          estVendorCode,
+          estPacking,
+          estImplementation,
+          estGstType,
+          estAbfrlProjectType,
+        };
+        localStorage.setItem(getDraftStorageKey(), JSON.stringify(draft));
+      } catch (e) {
+        console.warn("[draft] Local storage autosave failed:", e);
+      }
+    }, 2000);
+    return () => clearTimeout(timer);
+  }, [showEstimateForm, isDirty, estItems, estStoreOverrides, estSubject, estTitle, estClientId, estBrandId, estStoreId, estDate, estFormat, estFormatProfileCode, estBillingProfileId, estGstin, estPan, estStateCode, estVendorCode, estPacking, estImplementation, estGstType, estAbfrlProjectType]);
+
+  // Window-level Ctrl+S / Cmd+S shortcut to save and stay in editor
+  React.useEffect(() => {
+    if (!showEstimateForm) return;
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s" && !e.shiftKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!isSaving) {
+          console.log("[save] Cmd+S / Ctrl+S captured — saving estimate in editor");
+          handleCreateEstimate(undefined, { stayInEditor: true });
+        }
+      }
+    };
+    window.addEventListener("keydown", handleGlobalKeyDown, { capture: true });
+    return () => window.removeEventListener("keydown", handleGlobalKeyDown, { capture: true });
+  }, [showEstimateForm, isSaving, handleCreateEstimate]);
 
   const applyGridMutation = React.useCallback((mutator: (rows: any[]) => any[], trackHistory = true) => {
     setEstItems((prev: any[]) => {
@@ -2033,6 +2158,41 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                   Register
                 </button>
               </div>
+
+              {/* Draft Recovery Banner */}
+              {recoverableDraft && (
+                <div className="eb-draft-recovery-banner">
+                  <div>
+                    <strong>Unsaved draft found</strong> ({recoverableDraft.estItems?.length || 0} items
+                    {recoverableDraft.timestamp ? ` from ${new Date(recoverableDraft.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}).
+                    Would you like to restore your unsaved edits?
+                  </div>
+                  <div className="flex gap-2">
+                    <button type="button" className="btn-restore" onClick={handleRestoreDraft}>Restore Draft</button>
+                    <button type="button" className="btn-dismiss" onClick={handleDiscardDraft}>Dismiss</button>
+                  </div>
+                </div>
+              )}
+
+              {/* Save / Validation Error Banner */}
+              {saveErrorMessage && (
+                <div style={{ background: "#fee2e2", borderBottom: "1px solid #f87171", color: "#991b1b", padding: "8px 16px", fontSize: "12px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px" }}>
+                  <div className="flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4 text-red-600 flex-shrink-0" />
+                    <div>
+                      <strong className="font-semibold">Unable to save estimate: </strong>
+                      <span>{saveErrorMessage}</span>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSaveErrorMessage?.("")}
+                    className="text-red-700 hover:text-red-900 font-bold px-2 py-0.5 rounded text-xs hover:bg-red-200 transition"
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
 
               {/* ============================================================
                   EXCEL-STYLE ESTIMATE BUILDER — dense, square borders, no
@@ -4164,17 +4324,29 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                 );
               })()}
               <div className="eb-sheet-savebar">
-                <span className="eb-sheet-savebar-hint">Ctrl+S save · Ctrl+Shift+S add store · F2/Enter edit · Tab/Enter=next · Shift+Tab/Enter=prev · Alt+Enter=insert row · Ctrl+A=select all</span>
-                {props.isDirty && (
-                  <span style={{ display: "inline-flex", alignItems: "center", gap: 3, color: "#92400e", background: "#fef3c7", border: "1px solid #f59e0b", borderRadius: 4, padding: "1px 8px", fontSize: 10, fontWeight: 700, flexShrink: 0 }}>
+                <span className="eb-sheet-savebar-hint">Ctrl+S / Cmd+S save · Ctrl+Shift+S add store · F2/Enter edit · Tab/Enter=next · Shift+Tab/Enter=prev · Alt+Enter=insert row · Ctrl+A=select all</span>
+                
+                {/* Save status badge */}
+                {isSaving || saveStatus === "saving" ? (
+                  <span className="eb-save-status eb-status-saving">
+                    <Loader2 className="w-3 h-3 animate-spin inline mr-1" />
+                    Saving…
+                  </span>
+                ) : saveErrorMessage || saveStatus === "failed" ? (
+                  <span className="eb-save-status eb-status-failed" title={saveErrorMessage || "Save failed"}>
+                    <AlertTriangle className="w-3 h-3 inline mr-1" />
+                    Save failed {saveErrorMessage ? `— ${saveErrorMessage.slice(0, 40)}${saveErrorMessage.length > 40 ? "…" : ""}` : ""}
+                  </span>
+                ) : isDirty ? (
+                  <span className="eb-save-status eb-status-dirty">
                     ● Unsaved changes
                   </span>
-                )}
-                {props.lastSavedAt && !props.isDirty && (
-                  <span style={{ color: "#065f46", fontSize: 10, fontWeight: 600, flexShrink: 0 }}>
-                    Saved {(props.lastSavedAt as Date).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                ) : lastSavedAt ? (
+                  <span className="eb-save-status eb-status-saved">
+                    ✓ Saved at {(lastSavedAt as Date).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
                   </span>
-                )}
+                ) : null}
+
                 <button
                   type="button"
                   onClick={() => {
@@ -4186,17 +4358,33 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                   Cancel
                 </button>
                 <button
+                  type="button"
+                  className="eb-save-secondary"
+                  disabled={Boolean(isSaving)}
+                  style={{ pointerEvents: isSaving ? "none" : undefined }}
+                  title="Save changes and stay in editor (Cmd+S / Ctrl+S)"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    if (isSaving) return;
+                    console.log(`[save] secondary button click (stay in editor)`, { editingEstimateId, isSaving });
+                    handleCreateEstimate(undefined, { stayInEditor: true });
+                  }}
+                >
+                  {isSaving ? "Saving..." : "Save"}
+                </button>
+                <button
                   type="submit"
                   className="eb-save-primary"
                   disabled={Boolean(isSaving)}
                   style={{ pointerEvents: isSaving ? "none" : undefined }}
+                  title="Save changes and return to register"
                   onClick={(e) => {
                     if (isSaving) {
                       e.preventDefault();
                       e.stopPropagation();
                       return;
                     }
-                    console.log(`[save] button click`, { editingEstimateId, isSaving });
+                    console.log(`[save] primary button click (save & close)`, { editingEstimateId, isSaving });
                   }}
                 >
                   {isSaving ? "Saving..." : (editingEstimateId ? "Update Estimate" : "Save Draft Estimate")}
