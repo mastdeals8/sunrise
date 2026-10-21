@@ -21,9 +21,14 @@ import {
   ChevronDown,
   ChevronRight,
   RefreshCw,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
+  Ban,
 } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
 import { supabase, isBoltMode } from "../lib/supabase";
+import { Pager, usePagedList } from "./Pager";
 
 export interface AssignedProjectSummary {
   linkId: number;
@@ -83,6 +88,10 @@ export const UnifiedInstallerDirectory: React.FC<{ companyId?: number }> = ({ co
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [roleFilter, setRoleFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState<"all" | "active" | "inactive">("all");
+  const [sortField, setSortField] = useState<"name" | "role" | "projects" | "status">("name");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
+  const [selectedContactIds, setSelectedContactIds] = useState<number[]>([]);
 
   // Estimates list for assignment dropdown
   const [estimates, setEstimates] = useState<any[]>([]);
@@ -589,9 +598,18 @@ export const UnifiedInstallerDirectory: React.FC<{ companyId?: number }> = ({ co
     }
   };
 
-  // Filtered contacts list
-  const filteredInstallers = useMemo(() => {
-    return installers.filter((inst) => {
+  // Sorting & Filtering logic
+  const handleSort = (field: "name" | "role" | "projects" | "status") => {
+    if (sortField === field) {
+      setSortDirection((prev) => (prev === "asc" ? "desc" : "asc"));
+    } else {
+      setSortField(field);
+      setSortDirection("asc");
+    }
+  };
+
+  const filteredAndSortedInstallers = useMemo(() => {
+    const list = installers.filter((inst) => {
       const matchSearch =
         !searchQuery.trim() ||
         inst.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -599,16 +617,71 @@ export const UnifiedInstallerDirectory: React.FC<{ companyId?: number }> = ({ co
         (inst.whatsappPhone && inst.whatsappPhone.includes(searchQuery));
 
       const matchRole = roleFilter === "all" || inst.role === roleFilter;
-      return matchSearch && matchRole;
+      const matchStatus =
+        statusFilter === "all" ||
+        (statusFilter === "active" ? inst.isActive : !inst.isActive);
+
+      return matchSearch && matchRole && matchStatus;
     });
-  }, [installers, searchQuery, roleFilter]);
+
+    return [...list].sort((a, b) => {
+      let comparison = 0;
+      if (sortField === "name") {
+        comparison = a.name.localeCompare(b.name);
+      } else if (sortField === "role") {
+        comparison = a.role.localeCompare(b.role);
+      } else if (sortField === "projects") {
+        comparison = a.assignedProjects.length - b.assignedProjects.length;
+      } else if (sortField === "status") {
+        comparison = (a.isActive ? 1 : 0) - (b.isActive ? 1 : 0);
+      }
+      return sortDirection === "asc" ? comparison : -comparison;
+    });
+  }, [installers, searchQuery, roleFilter, statusFilter, sortField, sortDirection]);
+
+  const { page, setPage, slice: pagedInstallers, total, pageSize } = usePagedList(
+    filteredAndSortedInstallers,
+    25
+  );
 
   const pendingRequests = useMemo(() => {
     return accessRequests.filter((r) => r.status === "pending");
   }, [accessRequests]);
 
+  const allPageSelected =
+    pagedInstallers.length > 0 &&
+    pagedInstallers.every((inst) => selectedContactIds.includes(inst.id));
+
+  const toggleSelectAllPage = () => {
+    if (allPageSelected) {
+      setSelectedContactIds((prev) =>
+        prev.filter((id) => !pagedInstallers.some((inst) => inst.id === id))
+      );
+    } else {
+      const pageIds = pagedInstallers.map((inst) => inst.id);
+      setSelectedContactIds((prev) => Array.from(new Set([...prev, ...pageIds])));
+    }
+  };
+
+  const toggleSelectContact = (id: number) => {
+    setSelectedContactIds((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+    );
+  };
+
+  const renderSortIndicator = (field: "name" | "role" | "projects" | "status") => {
+    if (sortField !== field) {
+      return <ArrowUpDown className="w-3 h-3 text-slate-300 ml-1 inline opacity-60 group-hover:opacity-100" />;
+    }
+    return sortDirection === "asc" ? (
+      <ArrowUp className="w-3 h-3 text-indigo-600 ml-1 inline" />
+    ) : (
+      <ArrowDown className="w-3 h-3 text-indigo-600 ml-1 inline" />
+    );
+  };
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       {/* Toast message */}
       {actionFeedback && (
         <div
@@ -625,113 +698,129 @@ export const UnifiedInstallerDirectory: React.FC<{ companyId?: number }> = ({ co
         </div>
       )}
 
-      {/* Pending Access Requests Box (if any) */}
+      {/* Pending Access Requests Table (if any) */}
       {pendingRequests.length > 0 && (
-        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 shadow-sm">
-          <div className="flex items-center justify-between mb-3">
+        <div className="bg-white border border-amber-300 rounded-xl overflow-hidden shadow-sm">
+          <div className="px-4 py-2.5 bg-amber-50 border-b border-amber-200 flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <Clock className="w-5 h-5 text-amber-600 animate-pulse" />
-              <h3 className="text-sm font-bold text-amber-900">
+              <Clock className="w-4 h-4 text-amber-600 animate-pulse" />
+              <h3 className="text-xs font-bold text-amber-900 uppercase tracking-wider">
                 Pending Field Access Requests ({pendingRequests.length})
               </h3>
             </div>
-            <span className="text-xs text-amber-700 bg-amber-100 px-2.5 py-0.5 rounded-full font-medium">
+            <span className="text-[11px] text-amber-800 bg-amber-100/90 px-2 py-0.5 rounded font-medium">
               Awaiting Administrator Approval
             </span>
           </div>
-          <div className="space-y-2">
-            {pendingRequests.map((req) => (
-              <div
-                key={`${req.platform}-${req.id}`}
-                className="bg-white border border-amber-200 rounded-lg p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
-              >
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="font-semibold text-slate-900 text-sm">{req.name || "Unknown Worker"}</span>
-                    <span
-                      className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${
-                        req.platform === "whatsapp"
-                          ? "bg-emerald-100 text-emerald-700"
-                          : "bg-sky-100 text-sky-700"
-                      }`}
-                    >
-                      {req.platform}
-                    </span>
-                  </div>
-                  <div className="text-xs text-slate-500 mt-0.5 flex items-center gap-2">
-                    <Phone className="w-3 h-3 text-slate-400" />
-                    <span>{normalizePhoneDisplay(req.phone)}</span>
-                    <span>•</span>
-                    <span>Requested: {new Date(req.requestedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => handleApproveRequest(req)}
-                    className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold shadow-sm transition"
-                  >
-                    Approve & Link
-                  </button>
-                  <button
-                    onClick={() => handleRejectRequest(req)}
-                    className="px-3 py-1.5 bg-slate-100 hover:bg-rose-50 hover:text-rose-600 text-slate-600 rounded-lg text-xs font-semibold transition"
-                  >
-                    Reject
-                  </button>
-                </div>
-              </div>
-            ))}
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse text-xs">
+              <thead>
+                <tr className="bg-amber-50/40 text-amber-900 border-b border-amber-200/70 text-[11px] font-semibold">
+                  <th className="py-2 px-3">Platform</th>
+                  <th className="py-2 px-3">Worker Name</th>
+                  <th className="py-2 px-3">Phone</th>
+                  <th className="py-2 px-3">Requested At</th>
+                  <th className="py-2 px-3 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-amber-100">
+                {pendingRequests.map((req) => (
+                  <tr key={`${req.platform}-${req.id}`} className="hover:bg-amber-50/30 transition-colors">
+                    <td className="py-2 px-3">
+                      <span
+                        className={`inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded uppercase ${
+                          req.platform === "whatsapp"
+                            ? "bg-emerald-100 text-emerald-800"
+                            : "bg-sky-100 text-sky-800"
+                        }`}
+                      >
+                        {req.platform === "whatsapp" ? (
+                          <MessageSquare className="w-3 h-3" />
+                        ) : (
+                          <Bot className="w-3 h-3" />
+                        )}
+                        {req.platform}
+                      </span>
+                    </td>
+                    <td className="py-2 px-3 font-semibold text-slate-800">
+                      {req.name || "Unknown Worker"}
+                    </td>
+                    <td className="py-2 px-3 text-slate-600">
+                      {normalizePhoneDisplay(req.phone)}
+                    </td>
+                    <td className="py-2 px-3 text-slate-500 whitespace-nowrap">
+                      {new Date(req.requestedAt).toLocaleDateString([], { month: "short", day: "numeric" })}{" "}
+                      {new Date(req.requestedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                    </td>
+                    <td className="py-2 px-3 text-right whitespace-nowrap space-x-1.5">
+                      <button
+                        onClick={() => handleApproveRequest(req)}
+                        className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-[11px] font-semibold transition shadow-sm"
+                      >
+                        Approve & Link
+                      </button>
+                      <button
+                        onClick={() => handleRejectRequest(req)}
+                        className="px-2.5 py-1 bg-slate-100 hover:bg-rose-50 hover:text-rose-600 text-slate-600 rounded text-[11px] font-semibold transition"
+                      >
+                        Reject
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       )}
 
       {/* Directory Top Controls */}
-      <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm space-y-4">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm space-y-3">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
           <div>
-            <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
-              <Users className="w-5 h-5 text-indigo-600" />
+            <h2 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+              <Users className="w-4 h-4 text-indigo-600" />
               Shared Installer & Contractor Directory
             </h2>
-            <p className="text-xs text-slate-500 mt-1">
+            <p className="text-[11px] text-slate-500 mt-0.5">
               Register contractors once. Assignments automatically grant access to both Telegram and WhatsApp bots.
             </p>
           </div>
-          <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-2">
             <button
               onClick={() => openAssignModal()}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200 rounded-lg text-xs font-semibold transition shadow-sm"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200 rounded-lg text-xs font-semibold transition shadow-sm"
             >
-              <FolderKanban className="w-4 h-4 text-indigo-600" />
+              <FolderKanban className="w-3.5 h-3.5 text-indigo-600" />
               Assign Project
             </button>
             <button
               onClick={openAddModal}
-              className="inline-flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold transition shadow-sm"
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold transition shadow-sm"
             >
-              <UserPlus className="w-4 h-4" />
+              <UserPlus className="w-3.5 h-3.5" />
               Add Contact
             </button>
           </div>
         </div>
 
-        {/* Search & Filters */}
-        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 pt-2">
+        {/* Search & Filters Bar */}
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 pt-1">
           <div className="relative flex-1">
-            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
             <input
               type="text"
               placeholder="Search by name (e.g. Rajesh) or mobile number..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white"
+              className="w-full pl-8 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white"
             />
             {searchQuery && (
               <button
                 onClick={() => setSearchQuery("")}
                 className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-xs"
               >
-                Clear
+                ✕
               </button>
             )}
           </div>
@@ -739,7 +828,7 @@ export const UnifiedInstallerDirectory: React.FC<{ companyId?: number }> = ({ co
             <select
               value={roleFilter}
               onChange={(e) => setRoleFilter(e.target.value)}
-              className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-700 font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-700 font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500"
             >
               <option value="all">All Roles</option>
               <option value="installer">Installers</option>
@@ -747,186 +836,336 @@ export const UnifiedInstallerDirectory: React.FC<{ companyId?: number }> = ({ co
               <option value="staff">Staff</option>
               <option value="field">Field Ops</option>
             </select>
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value as any)}
+              className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-700 font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            >
+              <option value="all">All Status</option>
+              <option value="active">Active Only</option>
+              <option value="inactive">Inactive Only</option>
+            </select>
             <button
               onClick={() => {
                 fetchInstallers();
                 fetchAccessRequests();
               }}
               title="Refresh Directory"
-              className="p-2 text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition"
+              className="p-1.5 text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition"
             >
-              <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
+              <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
             </button>
           </div>
         </div>
+
+        {/* Selected contacts action bar */}
+        {selectedContactIds.length > 0 && (
+          <div className="flex items-center justify-between px-3 py-1.5 bg-indigo-50 border border-indigo-200 rounded-lg text-xs text-indigo-900">
+            <span className="font-semibold">
+              {selectedContactIds.length} contact{selectedContactIds.length > 1 ? "s" : ""} selected
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => {
+                  const firstSelected = installers.find((i) => selectedContactIds.includes(i.id));
+                  if (firstSelected) openAssignModal(firstSelected);
+                }}
+                className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded font-medium text-xs shadow-sm transition"
+              >
+                Assign Project
+              </button>
+              <button
+                onClick={() => setSelectedContactIds([])}
+                className="text-slate-500 hover:text-slate-700 text-xs"
+              >
+                Clear
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* Contact Cards Grid */}
-      {loading ? (
-        <div className="text-center py-12 text-slate-400 text-xs flex items-center justify-center gap-2">
-          <RefreshCw className="w-4 h-4 animate-spin text-indigo-500" />
-          Loading installer directory...
-        </div>
-      ) : filteredInstallers.length === 0 ? (
-        <div className="bg-white border border-slate-200 rounded-xl p-10 text-center text-slate-500 space-y-2">
-          <Users className="w-8 h-8 text-slate-300 mx-auto" />
-          <p className="text-sm font-semibold text-slate-700">No contacts found</p>
-          <p className="text-xs text-slate-400 max-w-sm mx-auto">
-            {searchQuery
-              ? `No installer matching "${searchQuery}". Click 'Add Contact' to register them.`
-              : "No installers or contractors registered in this company workspace yet."}
-          </p>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {filteredInstallers.map((inst) => {
-            const isExpanded = expandedId === inst.id;
-            const projectCount = inst.assignedProjects.length;
-
-            return (
-              <div
-                key={inst.id}
-                className={`bg-white border rounded-xl p-4 transition shadow-sm space-y-3 ${
-                  inst.isActive ? "border-slate-200" : "border-slate-200 opacity-60 bg-slate-50"
-                }`}
-              >
-                {/* Header: Name & Actions */}
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="font-bold text-slate-900 text-sm truncate">{inst.name}</span>
-                      <span className="text-[10px] uppercase font-semibold px-2 py-0.5 rounded bg-slate-100 text-slate-600">
-                        {inst.role}
-                      </span>
-                      {!inst.isActive && (
-                        <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-rose-100 text-rose-700">
-                          Inactive
-                        </span>
-                      )}
-                    </div>
-                    <div className="text-xs text-slate-500 mt-1 flex items-center gap-1.5">
-                      <Phone className="w-3.5 h-3.5 text-slate-400" />
-                      <span>{normalizePhoneDisplay(inst.phone)}</span>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-1">
-                    <button
-                      onClick={() => openAssignModal(inst)}
-                      title="Assign project to this contact"
-                      className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded-lg transition"
+      {/* Directory Table (Excel-style compact table) */}
+      <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+        {loading ? (
+          <div className="text-center py-12 text-slate-400 text-xs flex items-center justify-center gap-2">
+            <RefreshCw className="w-4 h-4 animate-spin text-indigo-500" />
+            Loading installer directory...
+          </div>
+        ) : filteredAndSortedInstallers.length === 0 ? (
+          <div className="p-8 text-center text-slate-500 space-y-2">
+            <Users className="w-8 h-8 text-slate-300 mx-auto" />
+            <p className="text-sm font-semibold text-slate-700">No contacts found</p>
+            <p className="text-xs text-slate-400 max-w-sm mx-auto">
+              {searchQuery
+                ? `No installer matching "${searchQuery}". Click 'Add Contact' to register them.`
+                : "No installers or contractors registered in this company workspace yet."}
+            </p>
+          </div>
+        ) : (
+          <>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr className="bg-slate-50/90 border-b border-slate-200 text-slate-700 font-semibold text-[11px] select-none">
+                    <th className="py-2 px-3 w-8 text-center">
+                      <input
+                        type="checkbox"
+                        checked={allPageSelected}
+                        onChange={toggleSelectAllPage}
+                        title="Select / deselect all on this page"
+                        className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                      />
+                    </th>
+                    <th
+                      onClick={() => handleSort("name")}
+                      className="py-2 px-3 cursor-pointer hover:bg-slate-100 transition group"
                     >
-                      <FolderKanban className="w-4 h-4" />
-                    </button>
-                    <button
-                      onClick={() => openEditModal(inst)}
-                      title="Edit contact details"
-                      className="p-1.5 text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition"
+                      <span>Contact Name</span>
+                      {renderSortIndicator("name")}
+                    </th>
+                    <th className="py-2 px-3">Mobile Number</th>
+                    <th
+                      onClick={() => handleSort("role")}
+                      className="py-2 px-3 cursor-pointer hover:bg-slate-100 transition group"
                     >
-                      <Edit2 className="w-4 h-4" />
-                    </button>
-                    {inst.isActive && (
-                      <button
-                        onClick={() => handleDeactivate(inst)}
-                        title="Deactivate contact and revoke bot links"
-                        className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    )}
-                  </div>
-                </div>
+                      <span>Role</span>
+                      {renderSortIndicator("role")}
+                    </th>
+                    <th className="py-2 px-3">WhatsApp Status</th>
+                    <th className="py-2 px-3">Telegram Status</th>
+                    <th
+                      onClick={() => handleSort("projects")}
+                      className="py-2 px-3 cursor-pointer hover:bg-slate-100 transition group"
+                    >
+                      <span>Active Projects</span>
+                      {renderSortIndicator("projects")}
+                    </th>
+                    <th
+                      onClick={() => handleSort("status")}
+                      className="py-2 px-3 cursor-pointer hover:bg-slate-100 transition group"
+                    >
+                      <span>Status</span>
+                      {renderSortIndicator("status")}
+                    </th>
+                    <th className="py-2 px-3 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {pagedInstallers.map((inst) => {
+                    const isExpanded = expandedId === inst.id;
+                    const projectCount = inst.assignedProjects.length;
+                    const isSelected = selectedContactIds.includes(inst.id);
 
-                {/* Channel Verification Badges */}
-                <div className="grid grid-cols-2 gap-2 text-xs pt-1">
-                  {/* Telegram Status */}
-                  <div
-                    className={`p-2 rounded-lg border flex items-center gap-2 ${
-                      inst.telegramVerified
-                        ? "bg-sky-50 border-sky-200 text-sky-800"
-                        : "bg-slate-50 border-slate-200 text-slate-500"
-                    }`}
-                  >
-                    <Bot className={`w-4 h-4 ${inst.telegramVerified ? "text-sky-600" : "text-slate-400"}`} />
-                    <div className="min-w-0">
-                      <div className="text-[10px] font-bold uppercase leading-tight">Telegram</div>
-                      <div className="text-[11px] truncate">
-                        {inst.telegramVerified ? "Linked & Verified" : "Not Linked"}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* WhatsApp Status */}
-                  <div
-                    className={`p-2 rounded-lg border flex items-center gap-2 ${
-                      inst.whatsappVerified
-                        ? "bg-emerald-50 border-emerald-200 text-emerald-800"
-                        : "bg-slate-50 border-slate-200 text-slate-500"
-                    }`}
-                  >
-                    <MessageSquare className={`w-4 h-4 ${inst.whatsappVerified ? "text-emerald-600" : "text-slate-400"}`} />
-                    <div className="min-w-0">
-                      <div className="text-[10px] font-bold uppercase leading-tight">WhatsApp</div>
-                      <div className="text-[11px] truncate">
-                        {inst.whatsappVerified ? "Linked & Verified" : "Not Linked"}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Assigned Projects Accordion Toggle */}
-                <div className="border-t border-slate-100 pt-2 flex items-center justify-between text-xs">
-                  <button
-                    onClick={() => setExpandedId(isExpanded ? null : inst.id)}
-                    className="flex items-center gap-1.5 text-slate-600 hover:text-indigo-600 font-medium transition"
-                  >
-                    {isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
-                    <span>
-                      {projectCount} Active Project {projectCount === 1 ? "Assignment" : "Assignments"}
-                    </span>
-                  </button>
-
-                  <span className="text-[11px] text-slate-400">
-                    Dual-channel authorized
-                  </span>
-                </div>
-
-                {/* Expanded Project Assignments List */}
-                {isExpanded && (
-                  <div className="mt-2 space-y-2 border-t border-slate-100 pt-3">
-                    {projectCount === 0 ? (
-                      <div className="p-3 bg-slate-50 rounded-lg text-center text-xs text-slate-400">
-                        No projects currently assigned to {inst.name}.
-                      </div>
-                    ) : (
-                      inst.assignedProjects.map((p) => (
-                        <div
-                          key={p.linkId}
-                          className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 flex items-center justify-between gap-2 text-xs"
+                    return (
+                      <React.Fragment key={inst.id}>
+                        <tr
+                          className={`hover:bg-slate-50/70 transition-colors ${
+                            !inst.isActive ? "bg-slate-50/40 text-slate-400" : ""
+                          } ${isSelected ? "bg-indigo-50/30" : ""}`}
                         >
-                          <div className="min-w-0">
-                            <div className="font-bold text-slate-800 truncate">{p.estimateNumber} — {p.title}</div>
-                            <div className="text-[11px] text-slate-500 mt-0.5">
-                              {p.storeName ? `Store: ${p.storeName}` : "All permitted stores"} • Expires:{" "}
-                              {new Date(p.expiresAt).toLocaleDateString()}
+                          <td className="py-2 px-3 text-center">
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => toggleSelectContact(inst.id)}
+                              className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                            />
+                          </td>
+                          <td className="py-2 px-3">
+                            <div className="font-semibold text-slate-900 leading-tight">
+                              {inst.name}
                             </div>
-                          </div>
-                          <button
-                            onClick={() => handleRevokeAssignment(p.linkId, inst.name)}
-                            className="px-2 py-1 text-[11px] font-semibold text-rose-600 hover:bg-rose-50 rounded border border-rose-200 transition"
-                          >
-                            Revoke
-                          </button>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
+                            {inst.notes && (
+                              <div className="text-[10px] text-slate-400 truncate max-w-xs mt-0.5" title={inst.notes}>
+                                {inst.notes}
+                              </div>
+                            )}
+                          </td>
+                          <td className="py-2 px-3 text-slate-600 whitespace-nowrap">
+                            <div className="flex items-center gap-1.5">
+                              <Phone className="w-3 h-3 text-slate-400" />
+                              <span>{normalizePhoneDisplay(inst.phone || inst.whatsappPhone)}</span>
+                            </div>
+                          </td>
+                          <td className="py-2 px-3 whitespace-nowrap">
+                            <span className="text-[10px] uppercase font-semibold px-2 py-0.5 rounded bg-slate-100 text-slate-700">
+                              {inst.role}
+                            </span>
+                          </td>
+                          <td className="py-2 px-3 whitespace-nowrap">
+                            {inst.whatsappVerified ? (
+                              <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                                <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                Linked
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 text-[11px] text-slate-400">
+                                <XCircle className="w-3 h-3 text-slate-300" />
+                                Not Linked
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-2 px-3 whitespace-nowrap">
+                            {inst.telegramVerified ? (
+                              <span className="inline-flex items-center gap-1 text-[11px] font-medium text-sky-700 bg-sky-50 px-2 py-0.5 rounded border border-sky-200">
+                                <CheckCircle2 className="w-3 h-3 text-sky-600" />
+                                Linked
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 text-[11px] text-slate-400">
+                                <XCircle className="w-3 h-3 text-slate-300" />
+                                Not Linked
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-2 px-3 whitespace-nowrap">
+                            <button
+                              type="button"
+                              onClick={() => setExpandedId(isExpanded ? null : inst.id)}
+                              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium transition ${
+                                projectCount > 0
+                                  ? "bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200"
+                                  : "bg-slate-100 text-slate-500 hover:bg-slate-200"
+                              }`}
+                              title={isExpanded ? "Collapse projects" : "Expand project details"}
+                            >
+                              <span>{projectCount} {projectCount === 1 ? "project" : "projects"}</span>
+                              {isExpanded ? (
+                                <ChevronDown className="w-3 h-3 text-indigo-600" />
+                              ) : (
+                                <ChevronRight className="w-3 h-3 text-slate-400" />
+                              )}
+                            </button>
+                          </td>
+                          <td className="py-2 px-3 whitespace-nowrap">
+                            {inst.isActive ? (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                Active
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-500 border border-slate-200">
+                                Inactive
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-2 px-3 text-right whitespace-nowrap">
+                            <div className="flex items-center justify-end gap-1">
+                              <button
+                                onClick={() => openAssignModal(inst)}
+                                title="Assign project to this contact"
+                                className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded transition"
+                              >
+                                <FolderKanban className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                onClick={() => openEditModal(inst)}
+                                title="Edit contact details"
+                                className="p-1.5 text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded transition"
+                              >
+                                <Edit2 className="w-3.5 h-3.5" />
+                              </button>
+                              {inst.isActive && (
+                                <button
+                                  onClick={() => handleDeactivate(inst)}
+                                  title="Deactivate contact and revoke bot links"
+                                  className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+
+                        {/* Inline Expandable Project Assignments Sub-Table */}
+                        {isExpanded && (
+                          <tr className="bg-slate-50/70 border-b border-slate-200">
+                            <td colSpan={9} className="p-3 pl-8">
+                              <div className="bg-white border border-slate-200 rounded-lg p-3 space-y-2">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                                    <FolderKanban className="w-3.5 h-3.5 text-indigo-600" />
+                                    Active Project Assignments for {inst.name} ({projectCount})
+                                  </span>
+                                  <button
+                                    onClick={() => openAssignModal(inst)}
+                                    className="text-[11px] text-indigo-600 hover:text-indigo-800 font-semibold"
+                                  >
+                                    + Assign Another Project
+                                  </button>
+                                </div>
+                                {projectCount === 0 ? (
+                                  <p className="text-xs text-slate-400 py-1">
+                                    No projects currently assigned to {inst.name}.
+                                  </p>
+                                ) : (
+                                  <div className="overflow-x-auto">
+                                    <table className="w-full text-xs text-left border-collapse">
+                                      <thead>
+                                        <tr className="text-[10px] uppercase font-bold text-slate-400 border-b border-slate-100 pb-1">
+                                          <th className="py-1 px-2">Estimate #</th>
+                                          <th className="py-1 px-2">Project Title</th>
+                                          <th className="py-1 px-2">Store Scope</th>
+                                          <th className="py-1 px-2">Expires At</th>
+                                          <th className="py-1 px-2 text-right">Action</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody className="divide-y divide-slate-100">
+                                        {inst.assignedProjects.map((p) => (
+                                          <tr key={p.linkId} className="hover:bg-slate-50/50">
+                                            <td className="py-1.5 px-2 font-mono font-semibold text-slate-700">
+                                              {p.estimateNumber}
+                                            </td>
+                                            <td className="py-1.5 px-2 text-slate-900 font-medium">
+                                              {p.title}
+                                            </td>
+                                            <td className="py-1.5 px-2 text-slate-500">
+                                              {p.storeName ||
+                                                (p.allowedStoreCodes?.length
+                                                  ? p.allowedStoreCodes.join(", ")
+                                                  : "All permitted stores")}
+                                            </td>
+                                            <td className="py-1.5 px-2 text-slate-500 whitespace-nowrap">
+                                              {new Date(p.expiresAt).toLocaleDateString()}
+                                            </td>
+                                            <td className="py-1.5 px-2 text-right">
+                                              <button
+                                                onClick={() => handleRevokeAssignment(p.linkId, inst.name)}
+                                                className="px-2 py-0.5 text-[11px] font-semibold text-rose-600 hover:bg-rose-50 rounded border border-rose-200 transition"
+                                              >
+                                                Revoke
+                                              </button>
+                                            </td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Pagination footer */}
+            <div className="px-3 py-2 border-t border-slate-200 bg-slate-50/60">
+              <Pager
+                page={page}
+                pageSize={pageSize}
+                total={total}
+                onPageChange={setPage}
+              />
+            </div>
+          </>
+        )}
+      </div>
 
       {/* MODAL: Add / Edit Installer Contact */}
       {showAddModal && (

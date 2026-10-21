@@ -16,6 +16,8 @@ import { eq, desc, and, or, sql, isNull, gt } from "drizzle-orm";
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
+// @ts-ignore
+import QRCode from "qrcode";
 
 export interface EvolutionConfig {
   serverUrl: string;
@@ -307,10 +309,39 @@ export class WhatsAppEvolutionService {
       }
 
       const data = await connectResp.json();
-      const qrCode = data.base64 || data.qrcode?.base64 || null;
-      const pairingCode = data.pairingCode || null;
 
-      return { success: true, qrCode, pairingCode };
+      // Check if instance is already open/connected
+      const rawState = data.instance?.state || data.state;
+      if (rawState === "open") {
+        return { success: true, state: "open" } as any;
+      }
+
+      let qrCode: string | null = data.base64 || data.qrcode?.base64 || null;
+      const pairingCode: string | null = data.pairingCode || data.qrcode?.pairingCode || null;
+
+      // If Evolution API returned a raw QR pairing string instead of base64
+      if (!qrCode && (data.code || data.qrcode?.code)) {
+        const rawCode = data.code || data.qrcode?.code;
+        try {
+          qrCode = await QRCode.toDataURL(rawCode, { margin: 2, width: 280 });
+        } catch (qrErr: any) {
+          console.warn("[whatsapp] Error generating QR data URL from raw code:", qrErr.message);
+        }
+      }
+
+      // Ensure proper data URL prefix for img src rendering
+      if (qrCode && typeof qrCode === "string") {
+        const trimmed = qrCode.trim();
+        if (!trimmed.startsWith("data:") && !trimmed.startsWith("http")) {
+          qrCode = `data:image/png;base64,${trimmed}`;
+        }
+      }
+
+      return {
+        success: true,
+        qrCode: qrCode || undefined,
+        pairingCode: pairingCode || undefined,
+      };
     } catch (err: any) {
       return { success: false, error: err.message || "Network error while connecting WhatsApp instance." };
     }

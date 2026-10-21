@@ -22,6 +22,7 @@ import {
   Users,
   Settings,
   Activity,
+  Loader2,
 } from "lucide-react";
 import { supabase, isBoltMode } from "../lib/supabase";
 import { UnifiedInstallerDirectory } from "../components/UnifiedInstallerDirectory";
@@ -51,6 +52,15 @@ interface WebhookLog {
   createdAt: string;
 }
 
+function formatQrDataUrl(qr: string | null | undefined): string | null {
+  if (!qr) return null;
+  const trimmed = qr.trim();
+  if (trimmed.startsWith("data:image/") || trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+    return trimmed;
+  }
+  return `data:image/png;base64,${trimmed}`;
+}
+
 const WhatsAppSettings: React.FC = () => {
   const { token, user } = useAuth();
   const [status, setStatus] = useState<WhatsAppStatus | null>(null);
@@ -78,6 +88,7 @@ const WhatsAppSettings: React.FC = () => {
   const [qrBase64, setQrBase64] = useState<string | null>(null);
   const [pairingCode, setPairingCode] = useState<string | null>(null);
   const [qrCountdown, setQrCountdown] = useState<number>(45);
+  const [qrError, setQrError] = useState<string | null>(null);
 
   // Webhook Logs
   const [logs, setLogs] = useState<WebhookLog[]>([]);
@@ -181,11 +192,12 @@ const WhatsAppSettings: React.FC = () => {
         if (data.sessionState === "open") {
           setQrBase64(null);
           setPairingCode(null);
+          setQrError(null);
           if (showToast) {
             setMsg({ text: "WhatsApp session is active and verified.", ok: true });
           }
-        } else if (data.qrCode && !qrBase64) {
-          setQrBase64(data.qrCode);
+        } else if (data.qrCode) {
+          setQrBase64(formatQrDataUrl(data.qrCode));
           setPairingCode(data.pairingCode || null);
         }
       } else {
@@ -325,8 +337,11 @@ const WhatsAppSettings: React.FC = () => {
     }
   };
 
-  const handleConnect = async () => {
+  const handleConnect = async (isRefresh: boolean = false) => {
+    setActiveTab("connection"); // Ensure QR Pairing tab is active and visible
     setConnecting(true);
+    setQrError(null);
+    setQrBase64(null); // Prevent stale QR from showing as current
     setMsg(null);
     try {
       const res = await fetch("/api/whatsapp/connect", {
@@ -338,7 +353,8 @@ const WhatsAppSettings: React.FC = () => {
       const data = await res.json();
       if (res.ok && data.success) {
         if (data.qrCode) {
-          setQrBase64(data.qrCode);
+          const formatted = formatQrDataUrl(data.qrCode);
+          setQrBase64(formatted);
           setPairingCode(data.pairingCode || null);
           setQrCountdown(45);
           setMsg({ text: "QR code generated. Scan with WhatsApp on your phone.", ok: true });
@@ -346,12 +362,18 @@ const WhatsAppSettings: React.FC = () => {
           setMsg({ text: "WhatsApp is already connected!", ok: true });
           setQrBase64(null);
           await fetchStatus(true);
+        } else {
+          setQrError(data.error || "Evolution API did not return a QR code. Click Refresh QR to retry.");
         }
       } else {
-        setMsg({ text: data.message || "Failed to initiate WhatsApp connection.", ok: false });
+        const errorText = data.error || data.message || "Failed to initiate WhatsApp connection.";
+        setQrError(errorText);
+        setMsg({ text: errorText, ok: false });
       }
     } catch (e: any) {
-      setMsg({ text: e.message || "Connection error", ok: false });
+      const errorText = e.message || "Connection network error";
+      setQrError(errorText);
+      setMsg({ text: errorText, ok: false });
     } finally {
       setConnecting(false);
     }
@@ -570,7 +592,7 @@ const WhatsAppSettings: React.FC = () => {
               </button>
             ) : (
               <button
-                onClick={handleConnect}
+                onClick={() => handleConnect(false)}
                 disabled={connecting}
                 className="inline-flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl transition shadow-sm disabled:opacity-50"
               >
@@ -648,69 +670,129 @@ const WhatsAppSettings: React.FC = () => {
       {/* TAB 2: Connection & Evolution API Configuration */}
       {activeTab === "connection" && (
         <>
-      {/* QR Code Scan Section (Shown when QR is available and not connected) */}
-      {!isConnected && qrBase64 && (
+      {/* QR Code Scan Section (Shown whenever not connected) */}
+      {!isConnected && (
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
-          <div className="flex flex-col md:flex-row gap-8 items-center">
-            {/* QR Card */}
-            <div className="flex flex-col items-center bg-slate-50 p-6 rounded-2xl border border-slate-200 shadow-inner">
-              <div className="bg-white p-3 rounded-xl shadow-md border border-slate-100 relative">
-                <img src={qrBase64} alt="WhatsApp QR Code" className="w-64 h-64 object-contain rounded-lg" />
-              </div>
-              <div className="flex items-center gap-2 text-xs text-slate-500 mt-3 font-mono">
-                <Clock className="w-3.5 h-3.5 text-amber-500" />
-                <span>Refreshes in {qrCountdown}s</span>
-                <button onClick={handleConnect} className="text-emerald-600 font-bold hover:underline ml-2">
-                  Regenerate Now
-                </button>
-              </div>
+          <div className="flex items-center justify-between mb-4 border-b border-slate-100 pb-3">
+            <div className="flex items-center gap-2">
+              <QrCode className="w-5 h-5 text-emerald-600" />
+              <h3 className="font-bold text-slate-900 text-base">WhatsApp QR Code Pairing</h3>
             </div>
-
-            {/* Step by step guide */}
-            <div className="space-y-4 max-w-lg">
-              <div className="flex items-center gap-2">
-                <Smartphone className="w-5 h-5 text-emerald-600" />
-                <h3 className="font-bold text-slate-900 text-base">How to link your WhatsApp Account</h3>
-              </div>
-
-              <ol className="space-y-3 text-xs text-slate-600 list-decimal pl-4">
-                <li>
-                  Open <strong>WhatsApp</strong> on your mobile phone.
-                </li>
-                <li>
-                  Tap <strong>Settings</strong> (iOS) or <strong>⋮ Menu</strong> (Android) &gt;{" "}
-                  <strong>Linked Devices</strong>.
-                </li>
-                <li>
-                  Tap <strong>Link a Device</strong>.
-                </li>
-                <li>Point your phone camera at the QR code on the left to scan.</li>
-                <li>
-                  Once paired, this screen will instantly confirm connection. You can now send and receive messages
-                  directly from Sunrise Media ERP!
-                </li>
-              </ol>
-
-              {pairingCode && (
-                <div className="mt-4 p-3 bg-emerald-50 rounded-xl border border-emerald-200">
-                  <p className="text-[11px] font-bold text-emerald-900 uppercase tracking-wide">
-                    Or Pair using Phone Code:
-                  </p>
-                  <p className="font-mono text-base font-black text-emerald-700 tracking-widest mt-1">
-                    {pairingCode}
-                  </p>
-                </div>
-              )}
-
-              <div className="bg-slate-50 border border-slate-200 p-3 rounded-xl text-[11px] text-slate-500 flex items-start gap-2">
-                <Info className="w-4 h-4 text-slate-400 shrink-0 mt-0.5" />
-                <span>
-                  The session runs continuously on the hosted Railway server. Once paired, your phone does not need to stay
-                  awake and your Mac can be switched off without disconnecting.
-                </span>
-              </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => handleConnect(true)}
+                disabled={connecting}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 text-xs font-bold rounded-lg transition disabled:opacity-50 cursor-pointer"
+                title="Refresh QR code"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${connecting ? "animate-spin" : ""}`} />
+                {connecting ? "Refreshing..." : "Refresh QR"}
+              </button>
             </div>
           </div>
+
+          {connecting ? (
+            <div className="py-12 flex flex-col items-center justify-center gap-3 bg-slate-50/70 rounded-2xl border border-slate-200">
+              <Loader2 className="w-8 h-8 text-emerald-600 animate-spin" />
+              <div className="text-center">
+                <p className="font-bold text-slate-800 text-sm">Generating fresh QR code from Evolution API...</p>
+                <p className="text-xs text-slate-400 mt-1">Connecting to instance {instanceName} on Railway.</p>
+              </div>
+            </div>
+          ) : qrError ? (
+            <div className="p-6 bg-red-50/80 border border-red-200 rounded-2xl flex flex-col items-center justify-center text-center space-y-3">
+              <AlertTriangle className="w-8 h-8 text-red-500" />
+              <div>
+                <p className="font-bold text-red-900 text-sm">QR Code Generation Error</p>
+                <p className="text-xs text-red-700 mt-1 max-w-md">{qrError}</p>
+              </div>
+              <button
+                onClick={() => handleConnect(true)}
+                className="inline-flex items-center gap-1.5 px-4 py-2 bg-red-600 hover:bg-red-500 text-white text-xs font-bold rounded-xl transition shadow-sm cursor-pointer"
+              >
+                <RefreshCw className="w-3.5 h-3.5" /> Retry QR Generation
+              </button>
+            </div>
+          ) : qrBase64 ? (
+            <div className="flex flex-col md:flex-row gap-8 items-center">
+              {/* QR Card */}
+              <div className="flex flex-col items-center bg-slate-50 p-6 rounded-2xl border border-slate-200 shadow-inner">
+                <div className="bg-white p-3 rounded-xl shadow-md border border-slate-100 relative">
+                  <img src={qrBase64} alt="WhatsApp QR Code" className="w-64 h-64 object-contain rounded-lg" />
+                </div>
+                <div className="flex items-center gap-2 text-xs text-slate-500 mt-3 font-mono">
+                  <Clock className="w-3.5 h-3.5 text-amber-500" />
+                  <span>Refreshes in {qrCountdown}s</span>
+                  <button onClick={() => handleConnect(true)} className="text-emerald-600 font-bold hover:underline ml-2 cursor-pointer">
+                    Regenerate Now
+                  </button>
+                </div>
+              </div>
+
+              {/* Step by step guide */}
+              <div className="space-y-4 max-w-lg">
+                <div className="flex items-center gap-2">
+                  <Smartphone className="w-5 h-5 text-emerald-600" />
+                  <h3 className="font-bold text-slate-900 text-base">How to link your WhatsApp Account</h3>
+                </div>
+
+                <ol className="space-y-3 text-xs text-slate-600 list-decimal pl-4">
+                  <li>
+                    Open <strong>WhatsApp</strong> on your mobile phone.
+                  </li>
+                  <li>
+                    Tap <strong>Settings</strong> (iOS) or <strong>⋮ Menu</strong> (Android) &gt;{" "}
+                    <strong>Linked Devices</strong>.
+                  </li>
+                  <li>
+                    Tap <strong>Link a Device</strong>.
+                  </li>
+                  <li>Point your phone camera at the QR code on the left to scan.</li>
+                  <li>
+                    Once paired, this screen will instantly confirm connection. You can now send and receive messages
+                    directly from Sunrise Media ERP!
+                  </li>
+                </ol>
+
+                {pairingCode && (
+                  <div className="mt-4 p-3 bg-emerald-50 rounded-xl border border-emerald-200">
+                    <p className="text-[11px] font-bold text-emerald-900 uppercase tracking-wide">
+                      Or Pair using Phone Code:
+                    </p>
+                    <p className="font-mono text-base font-black text-emerald-700 tracking-widest mt-1">
+                      {pairingCode}
+                    </p>
+                  </div>
+                )}
+
+                <div className="bg-slate-50 border border-slate-200 p-3 rounded-xl text-[11px] text-slate-500 flex items-start gap-2">
+                  <Info className="w-4 h-4 text-slate-400 shrink-0 mt-0.5" />
+                  <span>
+                    The session runs continuously on the hosted Railway server. Once paired, your phone does not need to stay
+                    awake and your Mac can be switched off without disconnecting.
+                  </span>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="py-8 flex flex-col items-center justify-center text-center space-y-3 bg-slate-50/50 rounded-2xl border border-dashed border-slate-300">
+              <div className="w-12 h-12 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-600">
+                <QrCode className="w-6 h-6" />
+              </div>
+              <div>
+                <h4 className="font-bold text-slate-800 text-sm">Pair WhatsApp via QR Code</h4>
+                <p className="text-xs text-slate-500 max-w-sm mt-1">
+                  Evolution API instance <code className="font-mono text-emerald-700 font-bold">{instanceName}</code> is ready. Click below to generate a live QR pairing code.
+                </p>
+              </div>
+              <button
+                onClick={() => handleConnect(false)}
+                className="inline-flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl transition shadow-sm cursor-pointer"
+              >
+                <QrCode className="w-3.5 h-3.5" /> Generate QR Code / Connect
+              </button>
+            </div>
+          )}
         </div>
       )}
 
