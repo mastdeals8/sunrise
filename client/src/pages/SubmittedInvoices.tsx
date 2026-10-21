@@ -6,7 +6,7 @@ import { Link } from "wouter";
 import { Receipt, Search, ExternalLink, FileText, FileCode2, Settings as SettingsIcon, Send, Loader2 } from "lucide-react";
 import { supabase, isBoltMode } from "../lib/supabase";
 import { fetchInvoices, fetchCompany, fetchClients } from "../lib/api";
-import { fetchTallySettings, buildTallyInvoiceXml, downloadTallyXml } from "../lib/tally";
+import { fetchTallySettings, buildTallyInvoiceXml, downloadTallyXml, checkInvoiceTallyEligibility } from "../lib/tally";
 
 interface Invoice {
   id: number;
@@ -57,10 +57,9 @@ const SubmittedInvoicesPage: React.FC = () => {
   const [exportingId, setExportingId] = useState<number | null>(null);
 
   const handleExportXml = async (inv: Invoice) => {
-    const eligibleStatuses = ["submitted", "approved", "paid", "partially_paid"];
-    const currentStatus = (inv.status || "").toLowerCase();
-    if (currentStatus && !eligibleStatuses.includes(currentStatus)) {
-      alert(`Only submitted or approved invoices can be exported to Tally. Current status: ${inv.status}`);
+    const eligibility = checkInvoiceTallyEligibility(inv);
+    if (!eligibility.eligible) {
+      alert(eligibility.reason || `Only submitted or approved invoices can be exported to Tally. Current status: ${inv.status}`);
       return;
     }
 
@@ -376,15 +375,15 @@ const SubmittedInvoicesPage: React.FC = () => {
                           <button
                             onClick={() => handleExportXml(inv)}
                             disabled={exportingId === inv.id}
-                            className="inline-flex items-center gap-1 text-xs text-emerald-700 hover:text-emerald-800 disabled:opacity-50"
-                            title="Download Tally XML"
+                            className="inline-flex items-center gap-1 text-xs text-emerald-700 hover:text-emerald-800 disabled:opacity-50 font-medium"
+                            title="Export to Tally XML"
                           >
                             {exportingId === inv.id ? (
                               <Loader2 className="w-3 h-3 animate-spin" />
                             ) : (
                               <FileCode2 className="w-3 h-3" />
                             )}
-                            XML
+                            Export to Tally XML
                           </button>
                           <Link
                             href={`/invoice-packet?id=${inv.id}`}

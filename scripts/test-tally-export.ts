@@ -241,6 +241,93 @@ console.log("=================================================");
   console.log("✅ Test 8 Passed: Default Tally settings integrity");
 }
 
+// Test 9: checkInvoiceTallyEligibility checks
+{
+  const { checkInvoiceTallyEligibility } = await import("../client/src/lib/tally");
+  assert.strictEqual(checkInvoiceTallyEligibility({ status: "draft", invoiceNumber: "INV-1" }).eligible, false);
+  assert.strictEqual(checkInvoiceTallyEligibility({ status: "cancelled", invoiceNumber: "INV-2" }).eligible, false);
+  assert.strictEqual(checkInvoiceTallyEligibility({ status: "hold", invoiceNumber: "INV-3" }).eligible, false);
+  assert.strictEqual(checkInvoiceTallyEligibility({ status: "approved", invoiceNumber: "INV-4", totalAmount: 0 }).eligible, false);
+  assert.strictEqual(checkInvoiceTallyEligibility({ status: "approved", invoiceNumber: "INV-5", totalAmount: 1500 }).eligible, true);
+  assert.strictEqual(checkInvoiceTallyEligibility({ status: "paid", invoiceNumber: "INV-6", totalAmount: 2000 }).eligible, true);
+  assert.strictEqual(checkInvoiceTallyEligibility({ status: "unpaid", invoiceNumber: "INV-7", totalAmount: 2000 }).eligible, true);
+  console.log("✅ Test 9 Passed: Invoice eligibility checks (draft, cancelled, hold, valid)");
+}
+
+// Test 10: Multi-invoice Batch XML Generation
+{
+  const { buildTallyBatchXml } = await import("../client/src/lib/tally");
+  const inv1 = {
+    id: 201,
+    invoiceNumber: "INV-2026-B1",
+    partyName: "Party 1",
+    status: "approved",
+    amount: 10000,
+    taxAmount: 1800,
+    totalAmount: 11800,
+    date: "2026-10-21T00:00:00.000Z",
+  };
+  const inv2 = {
+    id: 202,
+    invoiceNumber: "INV-2026-B2",
+    partyName: "Party 2",
+    status: "paid",
+    amount: 20000,
+    taxAmount: 3600,
+    totalAmount: 23600,
+    date: "2026-10-21T00:00:00.000Z",
+  };
+
+  const res = buildTallyBatchXml([inv1, inv2], {
+    settings: { companyName: "Sunrise Media" },
+    company: { stateCode: "27" },
+  });
+
+  assert.strictEqual(res.exportedInvoices.length, 2, "Both invoices should be exported");
+  assert.strictEqual(res.ineligibleInvoices.length, 0, "No ineligible invoices");
+  assert.ok(res.xml.includes("<VOUCHERNUMBER>INV-2026-B1</VOUCHERNUMBER>"));
+  assert.ok(res.xml.includes("<VOUCHERNUMBER>INV-2026-B2</VOUCHERNUMBER>"));
+  assert.ok(res.filename.startsWith("Tally_SalesVouchers_Batch_2_"));
+  console.log("✅ Test 10 Passed: Multi-invoice batch XML generation");
+}
+
+// Test 11: Batch XML with mixed eligible and ineligible invoices
+{
+  const { buildTallyBatchXml } = await import("../client/src/lib/tally");
+  const invEligible = {
+    id: 301,
+    invoiceNumber: "INV-2026-E1",
+    partyName: "Eligible Client",
+    status: "approved",
+    amount: 5000,
+    taxAmount: 900,
+    totalAmount: 5900,
+  };
+  const invDraft = {
+    id: 302,
+    invoiceNumber: "INV-2026-D1",
+    partyName: "Draft Client",
+    status: "draft",
+    amount: 5000,
+    taxAmount: 900,
+    totalAmount: 5900,
+  };
+
+  const res = buildTallyBatchXml([invEligible, invDraft], {
+    settings: { companyName: "Sunrise Media" },
+    company: { stateCode: "27" },
+  });
+
+  assert.strictEqual(res.exportedInvoices.length, 1, "Only eligible invoice should be exported");
+  assert.strictEqual(res.ineligibleInvoices.length, 1, "Draft invoice must be in ineligible list");
+  assert.strictEqual(res.ineligibleInvoices[0].invoice.invoiceNumber, "INV-2026-D1");
+  assert.ok(res.ineligibleInvoices[0].reason.includes("draft"));
+  assert.ok(res.xml.includes("<VOUCHERNUMBER>INV-2026-E1</VOUCHERNUMBER>"));
+  assert.ok(!res.xml.includes("<VOUCHERNUMBER>INV-2026-D1</VOUCHERNUMBER>"));
+  console.log("✅ Test 11 Passed: Batch export separates eligible and reports ineligible with reason");
+}
+
 console.log("=================================================");
-console.log("ALL 8 TALLY REGRESSION TESTS PASSED!");
+console.log("ALL 11 TALLY REGRESSION TESTS PASSED!");
 console.log("=================================================");
+

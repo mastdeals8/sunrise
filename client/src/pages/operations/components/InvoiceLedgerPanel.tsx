@@ -1,9 +1,12 @@
 import React, { useMemo, useState } from "react";
 import { Pager, usePagedList } from "@/components/Pager";
 import { Link } from "wouter";
-import { FileText, Plus, Eye, X, Search, Pencil, Trash2, Ban, Printer, Receipt, Download, CheckSquare } from "lucide-react";
+import { FileText, Plus, Eye, X, Search, Pencil, Trash2, Ban, Printer, Receipt, Download, CheckSquare, FileCode2, Loader2, AlertCircle, CheckCircle2 } from "lucide-react";
 import type { Client, DeliveryChallan, Estimate } from "../types";
 import BulkInvoicePdfRunner from "./BulkInvoicePdfRunner";
+import { fetchTallySettings, buildTallyBatchXml, downloadTallyXml, checkInvoiceTallyEligibility } from "@/lib/tally";
+import { fetchCompany } from "@/lib/api";
+import { supabase, isBoltMode } from "@/lib/supabase";
 
 interface Invoice {
   id: number;
@@ -110,6 +113,103 @@ const InvoiceLedgerPanel: React.FC<InvoiceLedgerPanelProps> = ({
   const [selectedInvoiceIds, setSelectedInvoiceIds] = useState<Set<number>>(new Set());
   const [bulkInvoicePdfMode, setBulkInvoicePdfMode] = useState<"preview" | "zip" | "combined" | null>(null);
   const headerCheckboxRef = React.useRef<HTMLInputElement>(null);
+
+  // Tally XML export state
+  const [tallyExporting, setTallyExporting] = useState(false);
+  const [tallyExportingRowId, setTallyExportingRowId] = useState<number | null>(null);
+  const [tallyFeedback, setTallyFeedback] = useState<{
+    isOpen: boolean;
+    title: string;
+    successCount: number;
+    filename?: string;
+    exportedInvoices: string[];
+    skippedInvoices: { invoiceNumber: string; reason: string }[];
+  } | null>(null);
+
+  const handleExportToTally = async (invoicesToExport: Invoice[]) => {
+    if (!invoicesToExport || invoicesToExport.length === 0) {
+      alert("Please select at least one invoice to export to Tally.");
+      return;
+    }
+
+    setTallyExporting(true);
+    try {
+      const [settings, company] = await Promise.all([
+        fetchTallySettings(token || null),
+        (sellerProfile && (sellerProfile.name || sellerProfile.legalName))
+          ? Promise.resolve(sellerProfile)
+          : fetchCompany(token || null, 1).catch(() => sellerProfile || {}),
+      ]);
+
+      const result = buildTallyBatchXml(invoicesToExport, {
+        settings,
+        company: company || sellerProfile || {},
+        clients,
+      });
+
+      downloadTallyXml(result.xml, result.filename);
+
+      if (isBoltMode && result.exportedInvoices.length > 0) {
+        try {
+          const ids = result.exportedInvoices.map(i => i.id);
+          await supabase
+            .from("invoices")
+            .update({
+              tally_export_status: "exported_xml",
+              tally_exported_at: new Date().toISOString(),
+            })
+            .in("id", ids);
+        } catch (err) {
+          console.warn("[tally] Error updating tally_export_status:", err);
+        }
+      }
+
+      if (showSuccess) {
+        showSuccess(
+          `Downloaded ${result.filename} (${result.exportedInvoices.length} invoice${result.exportedInvoices.length > 1 ? "s" : ""})`
+        );
+      }
+
+      setTallyFeedback({
+        isOpen: true,
+        title: "Tally XML Export Complete",
+        successCount: result.exportedInvoices.length,
+        filename: result.filename,
+        exportedInvoices: result.exportedInvoices.map(i => i.invoiceNumber),
+        skippedInvoices: result.ineligibleInvoices.map(i => ({
+          invoiceNumber: i.invoice?.invoiceNumber || "Unknown",
+          reason: i.reason,
+        })),
+      });
+    } catch (err: any) {
+      const ineligible = invoicesToExport.map(inv => {
+        const chk = checkInvoiceTallyEligibility(inv);
+        return {
+          invoiceNumber: inv.invoiceNumber || "Draft Invoice",
+          reason: chk.reason || err.message,
+        };
+      });
+
+      setTallyFeedback({
+        isOpen: true,
+        title: "Cannot Export to Tally XML",
+        successCount: 0,
+        exportedInvoices: [],
+        skippedInvoices: ineligible.length > 0 ? ineligible : [{ invoiceNumber: "Selected Invoices", reason: err.message }],
+      });
+    } finally {
+      setTallyExporting(false);
+    }
+  };
+
+  const handleSingleExportTally = async (inv: Invoice) => {
+    setTallyExportingRowId(inv.id);
+    try {
+      await handleExportToTally([inv]);
+    } finally {
+      setTallyExportingRowId(null);
+    }
+  };
 
   // ----- BUILDER TAB: one row per estimate/PO, containing all its DC/WCCs -----
   const dcRows = useMemo(() => {
@@ -331,7 +431,26 @@ const InvoiceLedgerPanel: React.FC<InvoiceLedgerPanelProps> = ({
               <option value="overdue">Overdue</option>
               <option value="cancelled">Cancelled</option>
             </select>
-            <button onClick={exportCsv} className="ml-auto flex items-center gap-1 px-3 py-1.5 text-xs font-bold rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700">
+            <button
+              type="button"
+              onClick={() => handleExportToTally(selectedInvoiceIds.size > 0 ? selectedInvoicesInOrder : filteredInvoices)}
+              disabled={tallyExporting}
+              className="ml-auto flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 transition shadow-xs cursor-pointer disabled:opacity-50"
+              title={selectedInvoiceIds.size > 0 ? `Export ${selectedInvoiceIds.size} selected invoice(s) to Tally XML` : "Export eligible invoices in current list to Tally XML"}
+            >
+              {tallyExporting ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-600" />
+              ) : (
+                <FileCode2 className="w-3.5 h-3.5 text-emerald-600" />
+              )}
+              Export to Tally XML
+              {selectedInvoiceIds.size > 0 && (
+                <span className="ml-1 px-1.5 py-0.2 bg-emerald-200 text-emerald-800 rounded-full text-[10px]">
+                  {selectedInvoiceIds.size}
+                </span>
+              )}
+            </button>
+            <button onClick={exportCsv} className="flex items-center gap-1 px-3 py-1.5 text-xs font-bold rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700">
               <Download className="w-3.5 h-3.5" /> CSV
             </button>
             <span className="text-xs text-slate-500">{filteredInvoices.length} invoices</span>
@@ -376,6 +495,20 @@ const InvoiceLedgerPanel: React.FC<InvoiceLedgerPanelProps> = ({
                 >
                   <FileText className="w-3.5 h-3.5 text-slate-600" />
                   Print Combined PDF
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleExportToTally(selectedInvoicesInOrder)}
+                  disabled={tallyExporting}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-lg shadow-xs transition cursor-pointer disabled:opacity-50"
+                  title="Export selected eligible invoices as a Tally XML voucher file for import into TallyPrime"
+                >
+                  {tallyExporting ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <FileCode2 className="w-3.5 h-3.5" />
+                  )}
+                  Export to Tally XML
                 </button>
                 <button
                   type="button"
@@ -480,6 +613,18 @@ const InvoiceLedgerPanel: React.FC<InvoiceLedgerPanelProps> = ({
                         <td className="px-3 py-2 text-right font-mono font-bold text-orange-700">{formatCurrency(balance)}</td>
                         <td className="px-3 py-2 text-center" onClick={(e) => e.stopPropagation()}>
                           <div className="flex justify-center gap-1">
+                            <button
+                              title="Export to Tally XML"
+                              onClick={() => handleSingleExportTally(inv)}
+                              disabled={tallyExportingRowId === inv.id}
+                              className="btn-action hover:bg-emerald-50 text-emerald-700"
+                            >
+                              {tallyExportingRowId === inv.id ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-600" />
+                              ) : (
+                                <FileCode2 className="w-3.5 h-3.5 text-emerald-600" />
+                              )}
+                            </button>
                             <button title="Edit" onClick={() => openInvoiceEditor({ invoiceId: inv.id })} className="btn-action"><Pencil className="w-3.5 h-3.5 text-blue-600" /></button>
                             <a title="Print / Packet" href={`/invoice-packet?id=${inv.id}`} target="_blank" rel="noreferrer" className="btn-action"><Printer className="w-3.5 h-3.5 text-slate-600" /></a>
                             {inv.status !== "cancelled" && (
@@ -509,6 +654,88 @@ const InvoiceLedgerPanel: React.FC<InvoiceLedgerPanelProps> = ({
             token={token}
             showSuccess={showSuccess}
           />
+
+          {/* Tally XML Feedback & Guidance Modal */}
+          {tallyFeedback?.isOpen && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 animate-in fade-in">
+              <div className="bg-white rounded-xl max-w-lg w-full p-6 shadow-xl border border-slate-200 space-y-4">
+                <div className="flex items-start justify-between">
+                  <div className="flex items-center gap-2">
+                    {tallyFeedback.successCount > 0 ? (
+                      <CheckCircle2 className="w-6 h-6 text-emerald-600 shrink-0" />
+                    ) : (
+                      <AlertCircle className="w-6 h-6 text-amber-600 shrink-0" />
+                    )}
+                    <div>
+                      <h3 className="text-base font-bold text-slate-900">{tallyFeedback.title}</h3>
+                      <p className="text-xs text-slate-500">
+                        {tallyFeedback.successCount > 0
+                          ? `${tallyFeedback.successCount} invoice voucher${tallyFeedback.successCount > 1 ? "s" : ""} generated successfully.`
+                          : "No eligible invoices could be exported."}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setTallyFeedback(null)}
+                    className="text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                {tallyFeedback.successCount > 0 && tallyFeedback.filename && (
+                  <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-xs text-emerald-900 space-y-2">
+                    <div className="font-semibold flex items-center gap-1.5">
+                      <FileCode2 className="w-4 h-4 text-emerald-600" />
+                      Downloaded: <span className="font-mono">{tallyFeedback.filename}</span>
+                    </div>
+                    <div className="text-[11px] text-emerald-700">
+                      Exported vouchers: {tallyFeedback.exportedInvoices.join(", ")}
+                    </div>
+                    <div className="pt-2 border-t border-emerald-200/60 text-[11px] space-y-1 text-slate-700">
+                      <p className="font-bold text-emerald-900">How to import into TallyPrime (Separate Tally PC):</p>
+                      <ol className="list-decimal pl-4 space-y-0.5">
+                        <li>Transfer or copy the downloaded XML file to your separate Tally computer.</li>
+                        <li>Open your company in TallyPrime.</li>
+                        <li>Press <strong className="text-slate-900">Alt + O (Import)</strong> → <strong className="text-slate-900">Vouchers</strong> (or Gateway of Tally → Import Data → Vouchers).</li>
+                        <li>Select File format: <strong className="text-slate-900">XML</strong> and select the downloaded file.</li>
+                      </ol>
+                    </div>
+                  </div>
+                )}
+
+                {tallyFeedback.skippedInvoices.length > 0 && (
+                  <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-900 space-y-1.5">
+                    <div className="font-bold flex items-center gap-1.5 text-amber-800">
+                      <AlertCircle className="w-4 h-4 text-amber-600" />
+                      Ineligible Invoice{tallyFeedback.skippedInvoices.length > 1 ? "s" : ""} Skipped ({tallyFeedback.skippedInvoices.length}):
+                    </div>
+                    <ul className="list-disc pl-4 space-y-1 text-[11px] text-amber-800 max-h-36 overflow-y-auto">
+                      {tallyFeedback.skippedInvoices.map((item, idx) => (
+                        <li key={idx}>
+                          <span className="font-bold">{item.invoiceNumber}:</span> {item.reason}
+                        </li>
+                      ))}
+                    </ul>
+                    <p className="text-[10px] text-amber-700 italic pt-1">
+                      Draft invoices must be opened and approved before they can be exported to Tally accounting.
+                    </p>
+                  </div>
+                )}
+
+                <div className="flex justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setTallyFeedback(null)}
+                    className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold rounded-lg transition cursor-pointer"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

@@ -118,9 +118,68 @@ export async function saveTallySettings(token: string | null, settings: TallySet
 }
 
 /**
- * Generates official Tally XML envelope for an invoice matching standard Tally ERP 9 / Prime XML import structure.
+ * Checks whether an invoice can be exported to Tally according to accounting rules.
+ * Drafts and cancelled invoices are strictly rejected with an explicit explanation.
  */
-export function buildTallyInvoiceXml(
+export interface InvoiceEligibility {
+  eligible: boolean;
+  reason?: string;
+}
+
+export function checkInvoiceTallyEligibility(invoice: any): InvoiceEligibility {
+  if (!invoice) {
+    return { eligible: false, reason: "Invoice data is missing" };
+  }
+  const status = (invoice.status || "").toLowerCase().trim();
+  if (status === "draft") {
+    return {
+      eligible: false,
+      reason: `Only submitted or approved invoices can be exported to Tally. Current status: draft`,
+    };
+  }
+  if (status === "cancelled") {
+    return {
+      eligible: false,
+      reason: `Invoice ${invoice.invoiceNumber || ""} is cancelled and cannot be exported.`,
+    };
+  }
+  if (status === "hold") {
+    return {
+      eligible: false,
+      reason: `Invoice ${invoice.invoiceNumber || ""} is on hold. Only finalized invoices can be exported.`,
+    };
+  }
+
+  const eligibleStatuses = ["submitted", "approved", "paid", "partially_paid", "unpaid", "partial", "overdue"];
+  if (status && !eligibleStatuses.includes(status)) {
+    return {
+      eligible: false,
+      reason: `Only submitted or approved invoices can be exported to Tally. Current status: ${invoice.status}`,
+    };
+  }
+
+  if (!invoice.invoiceNumber || !String(invoice.invoiceNumber).trim()) {
+    return {
+      eligible: false,
+      reason: "Invoice number is missing.",
+    };
+  }
+
+  const amount = Number(invoice.totalAmount || 0);
+  if (isNaN(amount) || amount <= 0) {
+    return {
+      eligible: false,
+      reason: `Invoice ${invoice.invoiceNumber} has an invalid or zero total amount (₹${invoice.totalAmount || 0}).`,
+    };
+  }
+
+  return { eligible: true };
+}
+
+/**
+ * Builds the <TALLYMESSAGE> voucher XML element for a single sales invoice.
+ */
+export function buildTallyVoucherMessage(
   invoice: any,
   options: {
     settings?: Partial<TallySettings>;
@@ -128,17 +187,15 @@ export function buildTallyInvoiceXml(
     client?: any;
   }
 ): string {
+  const eligibility = checkInvoiceTallyEligibility(invoice);
+  if (!eligibility.eligible) {
+    throw new Error(eligibility.reason || `Invoice ${invoice?.invoiceNumber} is not eligible for Tally export.`);
+  }
+
   const settings = options.settings || {};
   const company = options.company || {};
   const client = options.client || {};
 
-  const eligibleStatuses = ["submitted", "approved", "paid", "partially_paid"];
-  const currentStatus = (invoice.status || "").toLowerCase();
-  if (currentStatus && !eligibleStatuses.includes(currentStatus)) {
-    throw new Error(`Only submitted or approved invoices can be exported to Tally. Current status: ${invoice.status}`);
-  }
-
-  const companyName = settings.companyName || company.name || company.legalName || "Sunrise Media";
   const salesLedger = settings.salesLedger !== undefined ? settings.salesLedger : "Sales";
   const cgstLedger = settings.cgstLedger !== undefined ? settings.cgstLedger : "CGST";
   const sgstLedger = settings.sgstLedger !== undefined ? settings.sgstLedger : "SGST";
@@ -148,26 +205,28 @@ export function buildTallyInvoiceXml(
 
   if (!salesLedger || !salesLedger.trim()) throw new Error("Missing required Tally mapping: Sales Ledger is not configured.");
 
-  const partyName = invoice.partyName || client.name || "Unknown Party";
+  const partyName = (invoice.partyName && invoice.partyName !== "Customer")
+    ? invoice.partyName
+    : client.name || invoice.partyName || "Unknown Party";
 
-  const companyStateCode = company.stateCode
-    ? String(company.stateCode).padStart(2, "0")
+  const companyStateCode = company.stateCode || company.state_code
+    ? String(company.stateCode || company.state_code).padStart(2, "0")
     : company.gstin
-    ? company.gstin.slice(0, 2)
+    ? String(company.gstin).slice(0, 2)
     : "27";
-  const clientStateCode = client.stateCode
-    ? String(client.stateCode).padStart(2, "0")
-    : client.gstNumber
-    ? client.gstNumber.slice(0, 2)
+  const clientStateCode = client.stateCode || client.state_code
+    ? String(client.stateCode || client.state_code).padStart(2, "0")
+    : client.gstNumber || client.gst_number
+    ? String(client.gstNumber || client.gst_number).slice(0, 2)
     : companyStateCode;
 
   const isInterstate = Boolean(clientStateCode && clientStateCode !== companyStateCode);
 
   const invoiceDate = invoice.date
     ? new Date(invoice.date).toISOString().split("T")[0].replace(/-/g, "")
-    : "";
+    : new Date().toISOString().split("T")[0].replace(/-/g, "");
   const amount = Number(invoice.totalAmount || 0);
-  const taxable = Number(invoice.amount || (amount - Number(invoice.taxAmount || 0)));
+  const taxable = Number(invoice.amount !== undefined ? invoice.amount : (amount - Number(invoice.taxAmount || 0)));
   const totalTax = Number(invoice.taxAmount || 0);
 
   let cgst = 0;
@@ -196,21 +255,7 @@ export function buildTallyInvoiceXml(
 
   const narration = `${invoice.invoiceNumber} — ${partyName}`;
 
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<ENVELOPE>
-  <HEADER>
-    <TALLYREQUEST>Import Data</TALLYREQUEST>
-  </HEADER>
-  <BODY>
-    <IMPORTDATA>
-      <REQUESTDESC>
-        <REPORTNAME>Vouchers</REPORTNAME>
-        <STATICVARIABLES>
-          <SVCURRENTCOMPANY>${escapeXml(companyName)}</SVCURRENTCOMPANY>
-        </STATICVARIABLES>
-      </REQUESTDESC>
-      <REQUESTDATA>
-        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+  return `        <TALLYMESSAGE xmlns:UDF="TallyUDF">
           <VOUCHER REMOTEID="${escapeXml(invoice.invoiceNumber)}" VCHTYPE="${escapeXml(voucherType)}" ACTION="Create">
             <DATE>${invoiceDate}</DATE>
             <NARRATION>${escapeXml(narration)}</NARRATION>
@@ -254,22 +299,140 @@ export function buildTallyInvoiceXml(
               <AMOUNT>${roundOff > 0 ? roundOff.toFixed(2) : `-${Math.abs(roundOff).toFixed(2)}`}</AMOUNT>
             </ALLLEDGERENTRIES.LIST>` : ""}
           </VOUCHER>
-        </TALLYMESSAGE>
+        </TALLYMESSAGE>`;
+}
+
+/**
+ * Generates official Tally XML envelope for a single invoice matching standard Tally ERP 9 / Prime XML import structure.
+ */
+export function buildTallyInvoiceXml(
+  invoice: any,
+  options: {
+    settings?: Partial<TallySettings>;
+    company?: any;
+    client?: any;
+  }
+): string {
+  const company = options.company || {};
+  const settings = options.settings || {};
+  const companyName = settings.companyName || company.name || company.legalName || "Sunrise Media";
+
+  const voucherXml = buildTallyVoucherMessage(invoice, options);
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<ENVELOPE>
+  <HEADER>
+    <TALLYREQUEST>Import Data</TALLYREQUEST>
+  </HEADER>
+  <BODY>
+    <IMPORTDATA>
+      <REQUESTDESC>
+        <REPORTNAME>Vouchers</REPORTNAME>
+        <STATICVARIABLES>
+          <SVCURRENTCOMPANY>${escapeXml(companyName)}</SVCURRENTCOMPANY>
+        </STATICVARIABLES>
+      </REQUESTDESC>
+      <REQUESTDATA>
+${voucherXml}
       </REQUESTDATA>
     </IMPORTDATA>
   </BODY>
 </ENVELOPE>`;
 }
 
+export interface TallyBatchExportResult {
+  xml: string;
+  filename: string;
+  exportedInvoices: any[];
+  ineligibleInvoices: { invoice: any; reason: string }[];
+}
+
+/**
+ * Generates official Tally XML envelope containing multiple vouchers in a single import file.
+ * Returns exported invoices and explicit reasons for any ineligible invoices.
+ */
+export function buildTallyBatchXml(
+  invoices: any[],
+  options: {
+    settings?: Partial<TallySettings>;
+    company?: any;
+    clients?: any[];
+  }
+): TallyBatchExportResult {
+  const settings = options.settings || {};
+  const company = options.company || {};
+  const clients = options.clients || [];
+  const companyName = settings.companyName || company.name || company.legalName || "Sunrise Media";
+
+  const exportedInvoices: any[] = [];
+  const ineligibleInvoices: { invoice: any; reason: string }[] = [];
+  const voucherMessages: string[] = [];
+
+  for (const inv of invoices) {
+    const eligibility = checkInvoiceTallyEligibility(inv);
+    if (!eligibility.eligible) {
+      ineligibleInvoices.push({ invoice: inv, reason: eligibility.reason || "Ineligible status" });
+      continue;
+    }
+
+    try {
+      const client = clients.find((c: any) => c.id === (inv.clientId || inv.client_id)) || null;
+      const voucherXml = buildTallyVoucherMessage(inv, { settings, company, client });
+      voucherMessages.push(voucherXml);
+      exportedInvoices.push(inv);
+    } catch (err: any) {
+      ineligibleInvoices.push({ invoice: inv, reason: err.message || "Failed to generate voucher XML" });
+    }
+  }
+
+  if (exportedInvoices.length === 0) {
+    const reasons = ineligibleInvoices.map(i => `• ${i.invoice?.invoiceNumber || "Invoice"}: ${i.reason}`).join("\n");
+    throw new Error(`No eligible invoices to export.\n\n${reasons}`);
+  }
+
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<ENVELOPE>
+  <HEADER>
+    <TALLYREQUEST>Import Data</TALLYREQUEST>
+  </HEADER>
+  <BODY>
+    <IMPORTDATA>
+      <REQUESTDESC>
+        <REPORTNAME>Vouchers</REPORTNAME>
+        <STATICVARIABLES>
+          <SVCURRENTCOMPANY>${escapeXml(companyName)}</SVCURRENTCOMPANY>
+        </STATICVARIABLES>
+      </REQUESTDESC>
+      <REQUESTDATA>
+${voucherMessages.join("\n")}
+      </REQUESTDATA>
+    </IMPORTDATA>
+  </BODY>
+</ENVELOPE>`;
+
+  let filename: string;
+  if (exportedInvoices.length === 1) {
+    filename = `Tally_SalesVoucher_${String(exportedInvoices[0].invoiceNumber).replace(/[^a-zA-Z0-9_-]/g, "_")}.xml`;
+  } else {
+    const dateStr = new Date().toISOString().split("T")[0];
+    filename = `Tally_SalesVouchers_Batch_${exportedInvoices.length}_${dateStr}.xml`;
+  }
+
+  return { xml, filename, exportedInvoices, ineligibleInvoices };
+}
+
 /**
  * Triggers a client-side download of the Tally XML file.
  */
-export function downloadTallyXml(xml: string, invoiceNumber: string): void {
+export function downloadTallyXml(xml: string, filenameOrInvoiceNumber: string): void {
   const blob = new Blob([xml], { type: "application/xml;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `Tally_SalesVoucher_${invoiceNumber.replace(/[^a-zA-Z0-9_-]/g, "_")}.xml`;
+  const safeFilename = filenameOrInvoiceNumber.toLowerCase().endsWith(".xml")
+    ? filenameOrInvoiceNumber
+    : `Tally_SalesVoucher_${filenameOrInvoiceNumber.replace(/[^a-zA-Z0-9_-]/g, "_")}.xml`;
+  a.download = safeFilename;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
