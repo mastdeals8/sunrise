@@ -942,14 +942,29 @@ td.eb-cell, th.eb-cell {
 }
 .eb-grid thead th {
   position: sticky;
-  top: 24px;
+  top: 30px;
   z-index: 16;
-  background: #e5e7eb;
-  color: #334155;
+  background: #f1f5f9;
+  color: #1e293b;
   font-weight: 800;
   text-align: center;
-  height: 23px;
+  height: 25px;
   user-select: none;
+  border-bottom: 2px solid #94a3b8;
+}
+.eb-col-header {
+  border-right: 1px solid #cbd5e1;
+  border-bottom: 2px solid #94a3b8;
+  height: 25px;
+  vertical-align: middle;
+  box-sizing: border-box;
+  font-size: 10px;
+  font-weight: 800;
+  color: #334155;
+}
+.eb-col-header.eb-freeze-head {
+  background: #e2e8f0 !important;
+  z-index: 24;
 }
 .eb-grid .num { text-align: right; font-variant-numeric: tabular-nums; }
 .eb-grid .yellow td { background: #fff7a8 !important; font-weight: 800; }
@@ -987,9 +1002,9 @@ td.eb-cell, th.eb-cell {
   font-weight: 800;
   font-size: 10.5px;
   /* Single-row banner — title section grows, actions section hugs the right. */
-  height: auto !important;
-  min-height: 32px !important;
-  padding: 3px 8px !important;
+  height: 30px !important;
+  min-height: 30px !important;
+  padding: 2px 8px !important;
   overflow: visible !important;
   border-top: 1px solid #94a3b8 !important;
   border-bottom: 1px solid #94a3b8 !important;
@@ -1285,10 +1300,20 @@ td.eb-cell, th.eb-cell {
   cursor: pointer;
   font-size: 10.5px;
 }
-.eb-store-results label.active,
+.eb-store-results label.active {
+  background: #dbeafe !important;
+  color: #1e40af !important;
+  font-weight: 700;
+  outline: 1px solid #3b82f6 !important;
+}
 .eb-store-results label:hover {
   background: #eff6ff;
   color: #1d4ed8;
+}
+.eb-store-picker input:-webkit-autofill,
+.eb-store-search-row input:-webkit-autofill {
+  -webkit-box-shadow: 0 0 0 1000px white inset !important;
+  -webkit-text-fill-color: #0f172a !important;
 }
 .eb-store-results input {
   width: auto;

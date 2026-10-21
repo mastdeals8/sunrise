@@ -860,6 +860,15 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
   const [storePickerOpen, setStorePickerOpen] = React.useState(false);
   const [replacingStoreId, setReplacingStoreId] = React.useState<string | null>(null);
   const [storeHighlightIndex, setStoreHighlightIndex] = React.useState(0);
+
+  React.useEffect(() => {
+    if (storePickerOpen && storeHighlightIndex >= 0) {
+      const el = document.getElementById(`eb-store-opt-${storeHighlightIndex}`);
+      if (el) {
+        el.scrollIntoView({ block: "nearest" });
+      }
+    }
+  }, [storePickerOpen, storeHighlightIndex]);
   const [manualStoreName, setManualStoreName] = React.useState("");
   const [manualStoreLocation, setManualStoreLocation] = React.useState("");
   const [pendingProductFocusIndex, setPendingProductFocusIndex] = React.useState<number | null>(null);
@@ -2248,6 +2257,28 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                   setPendingStoreIds([]);
                 };
 
+                const commitStoreSelection = (store: any) => {
+                  if (!store) return;
+                  const newSid = String(store.id);
+
+                  if (replacingStoreId) {
+                    replaceStore(replacingStoreId, newSid);
+                  } else {
+                    if (activeStoreIds.includes(newSid)) {
+                      setStorePickerOpen(false);
+                      setStoreSearch("");
+                      return;
+                    }
+                    addStoreAndFocusProduct(newSid);
+                  }
+
+                  if (handleStoreSelectChange) {
+                    handleStoreSelectChange(newSid);
+                  } else if (setEstStoreId) {
+                    setEstStoreId(newSid);
+                  }
+                };
+
                 const addStores = (storeIds: string[]) => {
                   const nextIds = Array.from(new Set(storeIds))
                     .filter(sid => sid && !activeStoreIds.includes(sid));
@@ -2256,6 +2287,13 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                     ...prev,
                     ...nextIds.map((sid, i) => blankRowForStore(sid, prev.length + i + 1, estGstType)),
                   ]);
+                  if (nextIds[0]) {
+                    if (handleStoreSelectChange) {
+                      handleStoreSelectChange(nextIds[0]);
+                    } else if (setEstStoreId) {
+                      setEstStoreId(nextIds[0]);
+                    }
+                  }
                   setPendingStoreIds([]);
                   setStorePickerOpen(false);
                   setStoreSearch("");
@@ -2270,6 +2308,11 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                       blankRowForStore(storeIdStr, newIndex + 1, estGstType),
                     ];
                   });
+                  if (handleStoreSelectChange) {
+                    handleStoreSelectChange(storeIdStr);
+                  } else if (setEstStoreId) {
+                    setEstStoreId(storeIdStr);
+                  }
                   setPendingStoreIds([]);
                   setStorePickerOpen(false);
                   setStoreSearch("");
@@ -2278,20 +2321,21 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                 const selectHighlightedStore = () => {
                   const store = visibleStores[storeHighlightIndex] || visibleStores[0];
                   if (!store) return false;
-                  if (replacingStoreId) {
-                    replaceStore(replacingStoreId, String(store.id));
-                    return true;
-                  }
-                  return addStoreAndFocusProduct(String(store.id));
+                  commitStoreSelection(store);
+                  return true;
                 };
                 const handleStoreSearchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
                   if (event.key === "Escape") {
+                    event.preventDefault();
+                    event.stopPropagation();
                     setStorePickerOpen(false);
                     setReplacingStoreId(null);
+                    setStoreSearch("");
                     return;
                   }
                   if (event.key === "ArrowDown" || event.key === "ArrowUp") {
                     event.preventDefault();
+                    event.stopPropagation();
                     if (visibleStores.length === 0) return;
                     setStoreHighlightIndex(prev => {
                       const delta = event.key === "ArrowDown" ? 1 : -1;
@@ -2299,47 +2343,43 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                     });
                     return;
                   }
-                  if (replacingStoreId) {
-                    if (event.key === "Enter" || (event.key === "Tab" && !event.shiftKey)) {
-                      event.preventDefault();
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    if (!replacingStoreId && pendingStoreIds.length > 0) {
+                      addStores(pendingStoreIds);
+                    } else {
                       const store = visibleStores[storeHighlightIndex] || visibleStores[0];
                       if (store) {
-                        replaceStore(replacingStoreId, String(store.id));
+                        commitStoreSelection(store);
                       }
-                      return;
                     }
-                  } else {
-                    // Space = toggle highlighted store without closing picker (for multi-select)
-                    if (event.key === " ") {
-                      event.preventDefault();
+                    return;
+                  }
+                  if (event.key === "Tab" && !event.shiftKey && visibleStores.length > 0) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    if (!replacingStoreId && pendingStoreIds.length > 0) {
+                      addStores(pendingStoreIds);
+                    } else {
                       const store = visibleStores[storeHighlightIndex] || visibleStores[0];
-                      if (!store) return;
-                      const sid = String(store.id);
-                      if (activeStoreIds.includes(sid)) return;
-                      setPendingStoreIds(prev =>
-                        prev.includes(sid) ? prev.filter(id => id !== sid) : [...prev, sid]
-                      );
-                      return;
-                    }
-                    // Enter = add single highlighted store immediately and go to grid
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      if (pendingStoreIds.length > 0) {
-                        addStores(pendingStoreIds);
-                      } else {
-                        selectHighlightedStore();
-                      }
-                      return;
-                    }
-                    // Tab = confirm pending stores (or highlighted single) and close
-                    if (event.key === "Tab" && !event.shiftKey && visibleStores.length > 0) {
-                      event.preventDefault();
-                      if (pendingStoreIds.length > 0) {
-                        addStores(pendingStoreIds);
-                      } else {
-                        selectHighlightedStore();
+                      if (store) {
+                        commitStoreSelection(store);
                       }
                     }
+                    return;
+                  }
+                  if (!replacingStoreId && event.key === " ") {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    const store = visibleStores[storeHighlightIndex] || visibleStores[0];
+                    if (!store) return;
+                    const sid = String(store.id);
+                    if (activeStoreIds.includes(sid)) return;
+                    setPendingStoreIds(prev =>
+                      prev.includes(sid) ? prev.filter(id => id !== sid) : [...prev, sid]
+                    );
+                    return;
                   }
                 };
                 const removeStore = (sid: string) => {
@@ -2402,9 +2442,11 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                       rowSortOrder: undefined,
                     })),
                   ]);
-                  // Open inline rename immediately after duplication
-                  setRenamingStoreId(newSid);
-                  setRenamingStoreName(defaultName);
+                  // Clear inline rename state so clicking store title immediately triggers store selection
+                  setRenamingStoreId(null);
+                  setRenamingStoreName("");
+                  // Open store picker immediately for the duplicated section
+                  openStorePickerToChange(newSid);
                 };
                 const addRowToStoreFromKeyboard = (event: React.KeyboardEvent<HTMLInputElement>, sid: string) => {
                   if (event.key !== "Tab" || event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return;
@@ -3652,13 +3694,12 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                                     return (
                                       <label
                                         key={s.id}
+                                        id={`eb-store-opt-${optionIndex}`}
                                         onMouseEnter={() => setStoreHighlightIndex(optionIndex)}
                                         className={`${optionIndex === storeHighlightIndex ? "active" : ""} ${isCurrent ? "bg-blue-50 font-bold" : ""}`}
                                         onClick={(e) => {
-                                          if (replacingStoreId) {
-                                            e.preventDefault();
-                                            replaceStore(replacingStoreId, sid);
-                                          }
+                                          e.preventDefault();
+                                          commitStoreSelection(s);
                                         }}
                                         style={{ cursor: "pointer" }}
                                       >
@@ -3668,10 +3709,12 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                                             tabIndex={-1}
                                             checked={checked}
                                             onChange={(e) => {
+                                              e.stopPropagation();
                                               setPendingStoreIds((prev) => e.target.checked
                                                 ? Array.from(new Set([...prev, sid]))
                                                 : prev.filter(id => id !== sid));
                                             }}
+                                            onClick={(e) => e.stopPropagation()}
                                           />
                                         ) : (
                                           <span style={{ fontSize: 10, color: isCurrent ? "#2563eb" : "#94a3b8", marginRight: 4, fontFamily: "monospace" }}>
@@ -3887,49 +3930,73 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                                 </th>
                               </tr>
                               {!collapsed && <tr>
-                                {gridColumns.map((column) => (
-                                  <th
-                                    key={column.id}
-                                    draggable={!column.fixed}
-                                    onDragStart={(event) => {
-                                      if (column.fixed) return;
-                                      setDragColumnId(column.id);
-                                      event.dataTransfer.effectAllowed = "move";
-                                    }}
-                                    onDragOver={(event) => {
-                                      if (!column.fixed && dragColumnId) event.preventDefault();
-                                    }}
-                                    onDrop={(event) => {
-                                      event.preventDefault();
-                                      if (dragColumnId) moveColumn(dragColumnId, column.id);
-                                      setDragColumnId(null);
-                                    }}
-                                    onDragEnd={() => setDragColumnId(null)}
-                                    className={`eb-col-header ${column.fixed ? "eb-freeze-head" : ""} ${dragColumnId === column.id ? "eb-col-dragging" : ""}`}
-                                    style={{ ...cellStyle(column), position: "sticky", top: 32, zIndex: column.fixed ? 25 : 20, background: column.fixed ? "#e5e7eb" : "#f1f5f9" }}
-                                  >
-                                    <span>{column.label}</span>
-                                    {!column.fixed && <span className="eb-col-drag-hint">⋮⋮</span>}
-                                    <span
-                                      className="eb-col-resize"
-                                      onMouseDown={(event) => {
-                                        event.preventDefault();
-                                        event.stopPropagation();
-                                        const startX = event.clientX;
-                                        const startWidth = column.width;
-                                        const onMove = (moveEvent: MouseEvent) => {
-                                          resizeColumn(column.id, startWidth + moveEvent.clientX - startX);
-                                        };
-                                        const onUp = () => {
-                                          window.removeEventListener("mousemove", onMove);
-                                          window.removeEventListener("mouseup", onUp);
-                                        };
-                                        window.addEventListener("mousemove", onMove);
-                                        window.addEventListener("mouseup", onUp);
+                                {gridColumns.map((column) => {
+                                  const isNum = ["width", "height", "quantity", "sqft", "rate", "amount", "gstAmount", "cgstAmount", "total"].includes(column.id);
+                                  const isLeft = ["element", "product", "materialCode"].includes(column.id);
+                                  const textAlign: "left" | "right" | "center" = isNum ? "right" : isLeft ? "left" : "center";
+                                  return (
+                                    <th
+                                      key={column.id}
+                                      draggable={!column.fixed}
+                                      onDragStart={(event) => {
+                                        if (column.fixed) return;
+                                        setDragColumnId(column.id);
+                                        event.dataTransfer.effectAllowed = "move";
                                       }}
-                                    />
-                                  </th>
-                                ))}
+                                      onDragOver={(event) => {
+                                        if (!column.fixed && dragColumnId) event.preventDefault();
+                                      }}
+                                      onDrop={(event) => {
+                                        event.preventDefault();
+                                        if (dragColumnId) moveColumn(dragColumnId, column.id);
+                                        setDragColumnId(null);
+                                      }}
+                                      onDragEnd={() => setDragColumnId(null)}
+                                      className={`eb-col-header ${column.fixed ? "eb-freeze-head" : ""} ${dragColumnId === column.id ? "eb-col-dragging" : ""}`}
+                                      style={{
+                                        ...cellStyle(column),
+                                        position: "sticky",
+                                        top: 30,
+                                        zIndex: column.fixed ? 25 : 20,
+                                        background: column.fixed ? "#e2e8f0" : "#f1f5f9",
+                                        textAlign,
+                                        paddingLeft: isLeft ? 6 : 2,
+                                        paddingRight: isNum ? 6 : 2,
+                                        fontSize: "10px",
+                                        fontWeight: 800,
+                                        lineHeight: "14px",
+                                        height: "25px",
+                                        borderRight: "1px solid #cbd5e1",
+                                        borderBottom: "2px solid #94a3b8",
+                                        color: "#334155",
+                                        userSelect: "none",
+                                      }}
+                                    >
+                                      <span style={{ display: "inline-block", maxWidth: "calc(100% - 10px)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                        {column.label}
+                                      </span>
+                                      {!column.fixed && <span className="eb-col-drag-hint" style={{ fontSize: "8px", color: "#94a3b8", marginLeft: 2 }}>⋮⋮</span>}
+                                      <span
+                                        className="eb-col-resize"
+                                        onMouseDown={(event) => {
+                                          event.preventDefault();
+                                          event.stopPropagation();
+                                          const startX = event.clientX;
+                                          const startWidth = column.width;
+                                          const onMove = (moveEvent: MouseEvent) => {
+                                            resizeColumn(column.id, startWidth + moveEvent.clientX - startX);
+                                          };
+                                          const onUp = () => {
+                                            window.removeEventListener("mousemove", onMove);
+                                            window.removeEventListener("mouseup", onUp);
+                                          };
+                                          window.addEventListener("mousemove", onMove);
+                                          window.addEventListener("mouseup", onUp);
+                                        }}
+                                      />
+                                    </th>
+                                  );
+                                })}
                               </tr>}
                             </thead>
                             {!collapsed && <tbody>
