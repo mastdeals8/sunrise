@@ -876,13 +876,20 @@ export class WhatsAppEvolutionService {
       throw new Error("Invalid webhook secret.");
     }
 
+    // Sanitize payload before logging (strip API keys, base64 QR codes, session credentials)
+    const sanitizedPayload = { ...payload };
+    if (sanitizedPayload.apikey) sanitizedPayload.apikey = "[REDACTED]";
+    if (sanitizedPayload.apiKey) sanitizedPayload.apiKey = "[REDACTED]";
+    if (sanitizedPayload.data?.qrcode?.base64) sanitizedPayload.data = { ...sanitizedPayload.data, qrcode: { base64: "[REDACTED_QR]" } };
+    if (sanitizedPayload.data?.base64) sanitizedPayload.data = { ...sanitizedPayload.data, base64: "[REDACTED_BASE64]" };
+
     // Log the inbound event
     await db.insert(webhookLogs).values({
       companyId,
       platform: "whatsapp",
       direction: "inbound",
       event: event || "unknown",
-      payload,
+      payload: sanitizedPayload,
       status: "received",
     });
 
@@ -986,6 +993,26 @@ export class WhatsAppEvolutionService {
         )
         .limit(1);
 
+      // Resolve the actual MSISDN phone number for replies, sessions, and project lookups:
+      // If remoteJid is a WhatsApp LID (@lid) or user has a registered phone,
+      // use user.whatsappPhone || user.phone to ensure valid MSISDN destination.
+      const replyPhone = user?.whatsappPhone || user?.phone || (remoteJid.endsWith("@lid") ? "" : senderPhone);
+
+      // Record incoming message in botUploadInbox for visibility in Bot Inbox
+      if (!messageObj.imageMessage && !messageObj.documentMessage) {
+        await db.insert(botUploadInbox).values({
+          companyId: companyId || 1,
+          source: "whatsapp",
+          senderId: cleanPhone || senderPhone,
+          senderName: user?.name || senderName,
+          messageText: rawText || "Hello",
+          mediaType: "text",
+          uploadType: "extra",
+          status: "unlinked",
+          rawPayload: sanitizedPayload,
+        });
+      }
+
       // A. UNREGISTERED / UNVERIFIED USER FLOW
       if (!user || !user.isActive || !user.whatsappVerified) {
         const [botRow] = await db.select().from(botSettings).where(eq(botSettings.platform, "whatsapp")).limit(1);
@@ -1000,7 +1027,7 @@ export class WhatsAppEvolutionService {
           // Record access request
           const newReq: WhatsAppAccessRequest = {
             id: `req_wa_${Date.now()}_${cleanPhone}`,
-            phone: senderPhone,
+            phone: replyPhone || senderPhone,
             name: senderName,
             remoteJid,
             companyId,
@@ -1017,19 +1044,23 @@ export class WhatsAppEvolutionService {
             .where(eq(botSettings.platform, "whatsapp"));
 
           // Reply with pending notice
-          await this.sendTextMessage(
-            senderPhone,
-            `👋 *Welcome to Sunrise Media ERP*\n\nHello *${senderName}*, your WhatsApp account is not yet verified.\n\nAn access request has been sent to your supervisor. Once approved, you will be able to upload installation photos, delivery challans, and execution documents here.`,
-            { companyId }
-          );
+          if (replyPhone) {
+            await this.sendTextMessage(
+              replyPhone,
+              `👋 *Welcome to Sunrise Media ERP*\n\nHello *${senderName}*, your WhatsApp account is not yet verified.\n\nAn access request has been sent to your supervisor. Once approved, you will be able to upload installation photos, delivery challans, and execution documents here.`,
+              { companyId }
+            );
+          }
           return { status: "processed", action: "access_requested" };
         } else {
           // Already pending
-          await this.sendTextMessage(
-            senderPhone,
-            `⏳ *Access Request Pending*\n\nHello *${senderName}*, your request to access Sunrise Media ERP is awaiting approval from your supervisor. Please wait for confirmation.`,
-            { companyId }
-          );
+          if (replyPhone) {
+            await this.sendTextMessage(
+              replyPhone,
+              `⏳ *Access Request Pending*\n\nHello *${senderName}*, your request to access Sunrise Media ERP is awaiting approval from your supervisor. Please wait for confirmation.`,
+              { companyId }
+            );
+          }
           return { status: "processed", action: "access_pending" };
         }
       }
@@ -1039,8 +1070,9 @@ export class WhatsAppEvolutionService {
         await db.update(users).set({ whatsappChatId: remoteJid, whatsappVerified: true }).where(eq(users.id, user.id));
       }
 
-      const session = getWhatsAppSession(senderPhone);
-      const assigned = await this.getAssignedProjects(senderPhone, companyId);
+      const activePhone = replyPhone || senderPhone;
+      const session = getWhatsAppSession(activePhone);
+      const assigned = await this.getAssignedProjects(activePhone, companyId);
 
       // B. COMMAND: /start, menu, hi, hello, help
       const isGreeting =
@@ -1054,8 +1086,8 @@ export class WhatsAppEvolutionService {
         lowerText === "help";
 
       if (isGreeting) {
-        clearWhatsAppSession(senderPhone);
-        setWhatsAppSession(senderPhone, { state: "MENU" });
+        clearWhatsAppSession(activePhone);
+        setWhatsAppSession(activePhone, { state: "MENU" });
 
         const menuText = [
           `👋 *Welcome to Sunrise Media ERP*`,
@@ -1069,7 +1101,7 @@ export class WhatsAppEvolutionService {
           `👉 *Reply with 1, 2, 3, or 4*.`,
         ].join("\n");
 
-        await this.sendTextMessage(senderPhone, menuText, { companyId, userId: user.id });
+        await this.sendTextMessage(activePhone, menuText, { companyId, userId: user.id });
         return { status: "processed", action: "menu_presented" };
       }
 
@@ -1088,14 +1120,14 @@ export class WhatsAppEvolutionService {
       ) {
         if (!assigned.length) {
           await this.sendTextMessage(
-            senderPhone,
+            activePhone,
             `👋 Welcome, *${user.name}*!\n\n📋 You currently have *no active projects assigned*. Please contact your ERP supervisor to assign projects to you.`,
             { companyId, userId: user.id }
           );
           return { status: "processed", action: "projects_empty" };
         }
 
-        setWhatsAppSession(senderPhone, { state: "AWAITING_PROJECT_SELECTION" });
+        setWhatsAppSession(activePhone, { state: "AWAITING_PROJECT_SELECTION" });
         const listMsg = [
           `📋 *Your Assigned Projects:*`,
           formatProjectList(assigned),
@@ -1103,7 +1135,7 @@ export class WhatsAppEvolutionService {
           `👉 *Reply with the project number* (e.g. *1*) to select your project.`,
         ].join("\n");
 
-        await this.sendTextMessage(senderPhone, listMsg, { companyId, userId: user.id });
+        await this.sendTextMessage(activePhone, listMsg, { companyId, userId: user.id });
         return { status: "processed", action: "projects_listed" };
       }
 
@@ -1120,7 +1152,7 @@ export class WhatsAppEvolutionService {
 
         if (!assigned.length) {
           await this.sendTextMessage(
-            senderPhone,
+            activePhone,
             `📋 You currently have *no active projects assigned*. Please contact your ERP supervisor.`,
             { companyId, userId: user.id }
           );
@@ -1130,7 +1162,7 @@ export class WhatsAppEvolutionService {
         if (assigned.length === 1) {
           // Exactly 1 project assigned: safe auto-select!
           const single = assigned[0];
-          setWhatsAppSession(senderPhone, {
+          setWhatsAppSession(activePhone, {
             selectedEstimateId: single.estimateId,
             uploadType: catChosen,
             pendingUploadType: undefined,
@@ -1138,7 +1170,7 @@ export class WhatsAppEvolutionService {
           });
 
           await this.sendTextMessage(
-            senderPhone,
+            activePhone,
             `✅ *Project Selected:* ${single.estimateNumber} — ${single.subject || single.title}\n📂 *Category:* ${catLabel}\n\nPlease send your photos or documents now!\nSend *menu* anytime to change options.`,
             { companyId, userId: user.id }
           );
@@ -1146,13 +1178,13 @@ export class WhatsAppEvolutionService {
         }
 
         // Multiple projects: prompt which project
-        setWhatsAppSession(senderPhone, {
+        setWhatsAppSession(activePhone, {
           pendingUploadType: catChosen,
           state: "AWAITING_PROJECT_SELECTION",
         });
 
         await this.sendTextMessage(
-          senderPhone,
+          activePhone,
           `⚠️ *Multiple Projects Assigned*\nYou chose *${catLabel}*. Please select which project this upload belongs to:\n\n${formatProjectList(assigned)}\n\n👉 Reply with the project number (e.g. *1*).`,
           { companyId, userId: user.id }
         );
@@ -1178,7 +1210,7 @@ export class WhatsAppEvolutionService {
               ? "Transportation Photo"
               : "Installation Photo";
 
-          setWhatsAppSession(senderPhone, {
+          setWhatsAppSession(activePhone, {
             state: "UPLOADING",
             selectedEstimateId: selectedProject.estimateId,
             uploadType: cat,
@@ -1186,7 +1218,7 @@ export class WhatsAppEvolutionService {
           });
 
           await this.sendTextMessage(
-            senderPhone,
+            activePhone,
             `✅ *Project Selected:* ${selectedProject.estimateNumber}\n📂 *Category:* ${catLabel}\n\nPlease send your photos or documents now!\nSend *menu* anytime to return to options.`,
             { companyId, userId: user.id }
           );
@@ -1194,7 +1226,7 @@ export class WhatsAppEvolutionService {
         }
 
         // Project chosen first without category: prompt for the 3 categories
-        setWhatsAppSession(senderPhone, {
+        setWhatsAppSession(activePhone, {
           state: "PROJECT_SELECTED",
           selectedEstimateId: selectedProject.estimateId,
         });
@@ -1212,7 +1244,7 @@ export class WhatsAppEvolutionService {
           `Send *menu* anytime to return to options.`,
         ].join("\n");
 
-        await this.sendTextMessage(senderPhone, categoryPrompt, { companyId, userId: user.id });
+        await this.sendTextMessage(activePhone, categoryPrompt, { companyId, userId: user.id });
         return { status: "processed", action: "project_selected" };
       }
 
@@ -1224,10 +1256,10 @@ export class WhatsAppEvolutionService {
           "3": { type: "transport_receipt", label: "Transportation Photo" },
         };
         const selected = catMap[trimmedText];
-        setWhatsAppSession(senderPhone, { uploadType: selected.type, state: "UPLOADING" });
+        setWhatsAppSession(activePhone, { uploadType: selected.type, state: "UPLOADING" });
 
         await this.sendTextMessage(
-          senderPhone,
+          activePhone,
           `✅ Category set to: *${selected.label}*\n\nPlease send your photos or documents now!\nSend *menu* anytime to switch options.`,
           { companyId, userId: user.id }
         );
@@ -1245,18 +1277,18 @@ export class WhatsAppEvolutionService {
         if (!targetEstimateId) {
           if (assigned.length === 1) {
             targetEstimateId = assigned[0].estimateId;
-            setWhatsAppSession(senderPhone, { selectedEstimateId: targetEstimateId });
+            setWhatsAppSession(activePhone, { selectedEstimateId: targetEstimateId });
           } else if (assigned.length > 1) {
-            setWhatsAppSession(senderPhone, { state: "AWAITING_PROJECT_SELECTION" });
+            setWhatsAppSession(activePhone, { state: "AWAITING_PROJECT_SELECTION" });
             await this.sendTextMessage(
-              senderPhone,
+              activePhone,
               `⚠️ *Multiple Projects Assigned*\nPlease select which project this upload belongs to first:\n\n${formatProjectList(assigned)}\n\n👉 Reply with the project number (e.g. *1*).`,
               { companyId, userId: user.id }
             );
             return { status: "processed", action: "upload_rejected_ambiguous_project" };
           } else {
             await this.sendTextMessage(
-              senderPhone,
+              activePhone,
               `⚠️ *No Project Selected*\nPlease send *menu* to see available options.`,
               { companyId, userId: user.id }
             );
@@ -1266,9 +1298,9 @@ export class WhatsAppEvolutionService {
 
         const project = assigned.find((p) => p.estimateId === targetEstimateId);
         if (!project) {
-          clearWhatsAppSession(senderPhone);
+          clearWhatsAppSession(activePhone);
           await this.sendTextMessage(
-            senderPhone,
+            activePhone,
             `⛔ *Assignment Revoked:* Your access to this project has ended. Send *menu* to view your current active projects.`,
             { companyId, userId: user.id }
           );
@@ -1277,7 +1309,7 @@ export class WhatsAppEvolutionService {
 
         const [estimate] = await db.select().from(estimates).where(eq(estimates.id, project.estimateId)).limit(1);
         if (!estimate) {
-          await this.sendTextMessage(senderPhone, `❌ Error: Project record not found in Sunrise ERP.`, { companyId });
+          await this.sendTextMessage(activePhone, `❌ Error: Project record not found in Sunrise ERP.`, { companyId });
           return { status: "processed", action: "upload_error_estimate_missing" };
         }
 
@@ -1296,7 +1328,7 @@ export class WhatsAppEvolutionService {
           category = session.pendingUploadType || session.uploadType || "photo";
         } else {
           await this.sendTextMessage(
-            senderPhone,
+            activePhone,
             `❓ *Unrecognized Caption:* "${rawCaption}"\n\nPlease select the correct upload category:\n1. 📸 Installation Photo\n2. 📄 Delivery Challan (DC) + Signed WCC proof\n3. 🚚 Transportation Photo\n\n👉 Reply with *1*, *2*, or *3*.`,
             { companyId, userId: user.id }
           );
@@ -1365,7 +1397,7 @@ export class WhatsAppEvolutionService {
           uploadedVia: "whatsapp",
           uploadedAt: new Date(),
           metadata: {
-            whatsappPhone: senderPhone,
+            whatsappPhone: activePhone,
             remoteJid,
             messageId,
             caption: rawCaption || null,
@@ -1387,7 +1419,7 @@ export class WhatsAppEvolutionService {
         await db.insert(botUploadInbox).values({
           companyId: estimate.companyId || companyId,
           source: "whatsapp",
-          senderId: senderPhone,
+          senderId: activePhone,
           senderName: user.name,
           messageText: rawCaption || `WhatsApp ${category.replace("_", " ")}`,
           mediaUrl: relativePath,
@@ -1401,7 +1433,7 @@ export class WhatsAppEvolutionService {
           mappedAt: new Date(),
           mappedBy: user.id,
           remarks: `Auto-linked via WhatsApp bot to project ${estimate.estimateNumber}`,
-          rawPayload: payload,
+          rawPayload: sanitizedPayload,
         });
 
         const categoryLabels: Record<string, string> = {
@@ -1413,7 +1445,7 @@ export class WhatsAppEvolutionService {
         const label = categoryLabels[category] || category;
 
         await this.sendTextMessage(
-          senderPhone,
+          activePhone,
           `✅ *Upload Received!*\n\n📁 *Project:* ${estimate.estimateNumber}\n📂 *Category:* ${label}\n📎 *File:* ${messageObj.documentMessage?.fileName || uniqueFileName}\n\nYour evidence has been securely saved in Sunrise Media ERP Project Workspace.\n\nSend more anytime or send *menu* to return to options.`,
           { companyId, userId: user.id }
         );
@@ -1423,7 +1455,7 @@ export class WhatsAppEvolutionService {
 
       // Default fallback guidance
       await this.sendTextMessage(
-        senderPhone,
+        activePhone,
         `👋 *Sunrise Media ERP Assistant*\n\nSend *menu* to view your available options and assigned projects.`,
         { companyId, userId: user.id }
       );
