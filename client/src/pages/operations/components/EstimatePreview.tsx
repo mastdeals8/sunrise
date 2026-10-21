@@ -2443,12 +2443,20 @@ Sunrise Media`;
         <WhatsAppShareModal
           isOpen={showWhatsAppModal}
           onClose={() => setShowWhatsAppModal(false)}
-          defaultPhone={clients.find((c: any) => c.id === selectedEstimate.clientId)?.mobile || ""}
+          defaultPhone={
+            clients.find((c: any) => c.id === selectedEstimate.clientId)?.mobile ||
+            stores.find((s: any) => s.id === selectedEstimate.storeId)?.contactPhone ||
+            ""
+          }
           recipientName={clients.find((c: any) => c.id === selectedEstimate.clientId)?.name || "Client"}
           documentType="estimate"
           documentNumber={selectedEstimate.estimateNumber}
-          documentUrl={isBoltMode ? undefined : `/api/operations/estimates/${selectedEstimate.id}/export-pdf`}
+          estimateId={selectedEstimate.id}
+          estimate={selectedEstimate}
+          stores={stores}
+          documentUrl={isBoltMode ? undefined : `/api/operations/estimates/${selectedEstimate.id}/pdf`}
           totalAmount={selectedEstimate.totalAmount || undefined}
+          companyId={selectedEstimate.companyId || 1}
         />
       )}
 

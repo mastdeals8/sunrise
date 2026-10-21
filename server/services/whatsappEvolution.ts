@@ -91,8 +91,11 @@ export const clearWhatsAppSession = (phone: string) => {
  */
 export function normalizeWhatsAppNumber(raw: string): string {
   if (!raw) return "";
-  const digits = raw.replace(/\D/g, "");
+  let digits = raw.replace(/\D/g, "");
   if (!digits) return "";
+  if (digits.length === 11 && digits.startsWith("0")) {
+    digits = digits.slice(1);
+  }
   if (digits.length === 10) {
     return `91${digits}`;
   }
@@ -388,6 +391,11 @@ export class WhatsAppEvolutionService {
     options?: { companyId?: number; userId?: number }
   ): Promise<{ success: boolean; messageId?: string; error?: string }> {
     const companyId = options?.companyId || 1;
+    const normalizedNumber = normalizeWhatsAppNumber(to);
+    if (!normalizedNumber || normalizedNumber.length < 10) {
+      return { success: false, error: "Invalid recipient phone number." };
+    }
+
     if (process.env.WHATSAPP_MOCK === "1") {
       return { success: true, messageId: `mock-wa-${Date.now()}` };
     }
@@ -395,11 +403,6 @@ export class WhatsAppEvolutionService {
     const config = await this.getConfig(companyId);
     if (!config.serverUrl || !config.apiKey) {
       return { success: false, error: "WhatsApp Evolution API server URL or API key is not configured." };
-    }
-
-    const normalizedNumber = normalizeWhatsAppNumber(to);
-    if (!normalizedNumber || normalizedNumber.length < 10) {
-      return { success: false, error: "Invalid recipient phone number." };
     }
 
     try {
@@ -459,6 +462,11 @@ export class WhatsAppEvolutionService {
     options?: { companyId?: number; userId?: number }
   ): Promise<{ success: boolean; messageId?: string; error?: string }> {
     const companyId = options?.companyId || 1;
+    const normalizedNumber = normalizeWhatsAppNumber(to);
+    if (!normalizedNumber || normalizedNumber.length < 10) {
+      return { success: false, error: "Invalid recipient phone number." };
+    }
+
     if (process.env.WHATSAPP_MOCK === "1") {
       return { success: true, messageId: `mock-wa-media-${Date.now()}` };
     }
@@ -468,12 +476,18 @@ export class WhatsAppEvolutionService {
       return { success: false, error: "WhatsApp Evolution API server URL or API key is not configured." };
     }
 
-    const normalizedNumber = normalizeWhatsAppNumber(to);
-    if (!normalizedNumber || normalizedNumber.length < 10) {
-      return { success: false, error: "Invalid recipient phone number." };
-    }
-
     try {
+      let finalMedia = mediaUrl;
+      if (finalMedia && finalMedia.startsWith("/uploads/")) {
+        const diskPath = path.resolve(process.cwd(), finalMedia.replace(/^\//, ""));
+        if (fs.existsSync(diskPath)) {
+          const fileBuf = await fs.promises.readFile(diskPath);
+          const ext = path.extname(diskPath).toLowerCase();
+          const mime = ext === ".jpg" || ext === ".jpeg" ? "image/jpeg" : ext === ".png" ? "image/png" : "application/pdf";
+          finalMedia = `data:${mime};base64,${fileBuf.toString("base64")}`;
+        }
+      }
+
       const resp = await fetch(`${config.serverUrl}/message/sendMedia/${config.instanceName}`, {
         method: "POST",
         headers: {
@@ -485,7 +499,7 @@ export class WhatsAppEvolutionService {
           mediatype: mediaType,
           mimetype: mediaType === "image" ? "image/jpeg" : "application/pdf",
           caption,
-          media: mediaUrl,
+          media: finalMedia,
           fileName,
         }),
       });
@@ -498,7 +512,12 @@ export class WhatsAppEvolutionService {
           platform: "whatsapp",
           direction: "outbound",
           event: "send_media_failed",
-          payload: { to: normalizedNumber, mediaUrl, fileName, error: errorMsg },
+          payload: {
+            to: normalizedNumber,
+            mediaSummary: finalMedia?.startsWith("data:") ? `[base64 attachment: ${fileName}]` : finalMedia,
+            fileName,
+            error: errorMsg,
+          },
           status: "error",
           error: errorMsg,
         });

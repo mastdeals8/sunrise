@@ -48,7 +48,7 @@ import { formatProductDetails } from "../shared/productDetails";
 import { isServiceEstimateItem, resolveServiceProduct, serviceProductLabel } from "../shared/serviceProductDisplay";
 import { computeStoreBreakdown } from "../shared/storeBreakdown";
 import { estimateItemsToInvoiceLines } from "../shared/invoiceConversion";
-import { whatsappEvolution } from "./services/whatsappEvolution";
+import { whatsappEvolution, normalizeWhatsAppNumber } from "./services/whatsappEvolution";
 import { installerService } from "./services/installerService";
 
 export async function registerRoutes(app: Express): Promise<Server> {
@@ -6651,38 +6651,192 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // POST Send WhatsApp message (text or document/media)
-  app.post("/api/whatsapp/send", authenticateToken, requireRole(["admin", "manager"]), async (req: AuthRequest, res: Response) => {
+  // POST Send WhatsApp message (text or document/media with estimate PDF support)
+  app.post("/api/whatsapp/send", authenticateToken, requireRole(["admin", "manager", "staff", "sales", "accounts"]), async (req: AuthRequest, res: Response) => {
     try {
-      const { to, text, mediaUrl, caption, fileName, mediaType } = req.body;
+      const { to, text, mediaUrl, mediaBase64, caption, fileName, mediaType, estimateId } = req.body;
       const companyId = req.companyId || 1;
       const userId = req.user?.id;
 
       if (!to) {
-        return res.status(400).json({ message: "Recipient phone number ('to') is required" });
+        return res.status(400).json({ success: false, message: "Recipient phone number ('to') is required" });
       }
 
-      if (mediaUrl) {
+      const normalizedNumber = normalizeWhatsAppNumber(to);
+      if (!normalizedNumber || normalizedNumber.length < 10) {
+        return res.status(400).json({ success: false, message: "Valid recipient WhatsApp phone number (minimum 10 digits) is required" });
+      }
+
+      let finalMedia = mediaBase64 || mediaUrl;
+      let finalFileName = fileName;
+      let targetCompanyId = companyId;
+
+      if (estimateId) {
+        const [est] = await db.select().from(estimates).where(eq(estimates.id, Number(estimateId))).limit(1);
+        if (!est) {
+          return res.status(404).json({ success: false, message: `Estimate #${estimateId} not found` });
+        }
+
+        if (companyId && est.companyId && est.companyId !== companyId && req.user?.role !== "super_admin") {
+          return res.status(403).json({ success: false, message: "Access denied: Estimate belongs to a different company workspace" });
+        }
+
+        targetCompanyId = est.companyId || companyId;
+
+        // If client did not provide pre-rendered base64, render canonical PDF on server
+        if (!finalMedia) {
+          try {
+            const rendered = await renderEstimatePdfBuffer({
+              estimateId: est.id,
+              scale: 100,
+              density: "normal",
+              layout: "portrait",
+            });
+            finalMedia = `data:application/pdf;base64,${rendered.buffer.toString("base64")}`;
+            if (!finalFileName) finalFileName = rendered.filename;
+          } catch (renderErr: any) {
+            console.error("[whatsapp-estimate-pdf-render-failed]", renderErr);
+            return res.status(500).json({
+              success: false,
+              message: `Failed to generate estimate PDF: ${renderErr.message || "Renderer error"}. The message was not sent.`,
+              error: renderErr.message,
+            });
+          }
+        }
+
+        if (!finalFileName) {
+          finalFileName = `${(est.estimateNumber || "ESTIMATE").replace(/[/\\?%*:|"<>]/g, "-")}.pdf`;
+        }
+      }
+
+      if (finalMedia) {
+        const docCaption = caption || text || "";
+        const docFileName = finalFileName || "document.pdf";
+        const docMediaType = mediaType || "document";
+
         const result = await whatsappEvolution.sendMediaMessage(
-          to,
-          mediaUrl,
-          caption || text || "",
-          fileName || "document.pdf",
-          mediaType || "document",
-          { companyId, userId }
+          normalizedNumber,
+          finalMedia,
+          docCaption,
+          docFileName,
+          docMediaType,
+          { companyId: targetCompanyId, userId }
         );
-        if (!result.success) return res.status(500).json({ message: result.error });
-        return res.json(result);
+
+        if (!result.success) {
+          // Requirement 10: Do not silently fall back to sending text only if PDF attachment fails!
+          return res.status(500).json({
+            success: false,
+            message: `Failed to send PDF attachment via WhatsApp: ${result.error || "Provider error"}. The message was not sent.`,
+            error: result.error,
+          });
+        }
+
+        return res.json({
+          success: true,
+          messageId: result.messageId,
+          fileName: docFileName,
+          recipient: normalizedNumber,
+        });
       } else {
         if (!text) {
-          return res.status(400).json({ message: "Message text is required when mediaUrl is not provided" });
+          return res.status(400).json({ success: false, message: "Message text is required when no media or estimate is provided" });
         }
-        const result = await whatsappEvolution.sendTextMessage(to, text, { companyId, userId });
-        if (!result.success) return res.status(500).json({ message: result.error });
-        return res.json(result);
+        const result = await whatsappEvolution.sendTextMessage(normalizedNumber, text, { companyId: targetCompanyId, userId });
+        if (!result.success) return res.status(500).json({ success: false, message: result.error });
+        return res.json({
+          success: true,
+          messageId: result.messageId,
+          recipient: normalizedNumber,
+        });
       }
     } catch (err: any) {
-      res.status(500).json({ message: err.message });
+      console.error("[whatsapp-send-error]", err);
+      res.status(500).json({ success: false, message: err.message || "Failed to process WhatsApp send request" });
+    }
+  });
+
+  // POST Dedicated route to share an Estimate via WhatsApp with PDF attachment
+  app.post("/api/operations/estimates/:id/share-whatsapp", authenticateToken, requireRole(["admin", "manager", "staff", "sales", "accounts"]), async (req: AuthRequest, res: Response) => {
+    try {
+      const estimateId = parseInt(req.params.id, 10);
+      const { to, text, message, mediaBase64, fileName } = req.body;
+      const companyId = req.companyId || 1;
+      const userId = req.user?.id;
+
+      const recipientPhone = to || req.body.recipientPhone;
+      if (!recipientPhone) {
+        return res.status(400).json({ success: false, message: "Recipient phone number is required" });
+      }
+
+      const normalizedNumber = normalizeWhatsAppNumber(recipientPhone);
+      if (!normalizedNumber || normalizedNumber.length < 10) {
+        return res.status(400).json({ success: false, message: "Valid recipient WhatsApp phone number (minimum 10 digits) is required" });
+      }
+
+      const [est] = await db.select().from(estimates).where(eq(estimates.id, estimateId)).limit(1);
+      if (!est) {
+        return res.status(404).json({ success: false, message: `Estimate #${estimateId} not found` });
+      }
+
+      if (companyId && est.companyId && est.companyId !== companyId && req.user?.role !== "super_admin") {
+        return res.status(403).json({ success: false, message: "Access denied: Estimate belongs to a different company workspace" });
+      }
+
+      let pdfPayload = mediaBase64;
+      let docFileName = fileName;
+
+      if (!pdfPayload) {
+        try {
+          const rendered = await renderEstimatePdfBuffer({
+            estimateId: est.id,
+            scale: 100,
+            density: "normal",
+            layout: "portrait",
+          });
+          pdfPayload = `data:application/pdf;base64,${rendered.buffer.toString("base64")}`;
+          if (!docFileName) docFileName = rendered.filename;
+        } catch (renderErr: any) {
+          console.error("[share-whatsapp-render-failed]", renderErr);
+          return res.status(500).json({
+            success: false,
+            message: `Failed to generate estimate PDF: ${renderErr.message || "Renderer error"}. The message was not sent.`,
+            error: renderErr.message,
+          });
+        }
+      }
+
+      if (!docFileName) {
+        docFileName = `${(est.estimateNumber || "ESTIMATE").replace(/[/\\?%*:|"<>]/g, "-")}.pdf`;
+      }
+
+      const msgText = message || text || "";
+      const sendResult = await whatsappEvolution.sendMediaMessage(
+        normalizedNumber,
+        pdfPayload,
+        msgText,
+        docFileName,
+        "document",
+        { companyId: est.companyId || companyId, userId }
+      );
+
+      if (!sendResult.success) {
+        return res.status(500).json({
+          success: false,
+          message: `Failed to send PDF attachment via WhatsApp: ${sendResult.error || "Provider error"}. The message was not sent.`,
+          error: sendResult.error,
+        });
+      }
+
+      return res.json({
+        success: true,
+        messageId: sendResult.messageId,
+        fileName: docFileName,
+        recipient: normalizedNumber,
+      });
+    } catch (err: any) {
+      console.error("[share-whatsapp-error]", err);
+      res.status(500).json({ success: false, message: err.message || "Failed to share estimate via WhatsApp" });
     }
   });
 
