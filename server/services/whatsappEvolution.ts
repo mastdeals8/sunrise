@@ -469,6 +469,11 @@ export class WhatsAppEvolutionService {
     options?: { companyId?: number; userId?: number }
   ): Promise<{ success: boolean; messageId?: string; error?: string }> {
     const companyId = options?.companyId || 1;
+    if (!to || to.includes("@lid") || (to.length > 13 && !to.startsWith("91"))) {
+      console.warn(`[whatsapp] Cannot send text to unresolvable identifier: ${to}`);
+      return { success: false, error: "Cannot send WhatsApp message to raw LID without resolved phone number." };
+    }
+
     const normalizedNumber = normalizeWhatsAppNumber(to);
     if (!normalizedNumber || normalizedNumber.length < 10) {
       return { success: false, error: "Invalid recipient phone number." };
@@ -499,7 +504,13 @@ export class WhatsAppEvolutionService {
 
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok) {
-        const errorMsg = data.message || `HTTP ${resp.status}`;
+        const errorMsg =
+          (Array.isArray(data.message) ? data.message.join(", ") : data.message) ||
+          (Array.isArray(data.response?.message)
+            ? data.response.message.map((m: any) => typeof m === "object" ? JSON.stringify(m) : m).join(", ")
+            : (typeof data.response?.message === "object" ? JSON.stringify(data.response.message) : data.response?.message)) ||
+          data.error ||
+          `HTTP ${resp.status}`;
         await db.insert(webhookLogs).values({
           companyId,
           platform: "whatsapp",
@@ -612,21 +623,23 @@ export class WhatsAppEvolutionService {
   /**
    * Retrieves active assigned projects for a WhatsApp worker from fieldAccessLinks.
    */
-  async getAssignedProjects(phone: string, companyId: number = 1) {
-    const cleanPhone = phone.replace(/[^0-9]/g, "").slice(-10);
-    if (!cleanPhone) return [];
+  async getAssignedProjects(phone: string, companyId: number = 1, userId?: number) {
+    const cleanPhone = phone ? phone.replace(/[^0-9]/g, "").slice(-10) : "";
+    if (!cleanPhone && !userId) return [];
 
     // Find user in users table
-    const [user] = await db
-      .select()
-      .from(users)
-      .where(
-        or(
-          sql`RIGHT(REGEXP_REPLACE(${users.phone}, '[^0-9]', '', 'g'), 10) = ${cleanPhone}`,
-          sql`RIGHT(REGEXP_REPLACE(${users.whatsappPhone}, '[^0-9]', '', 'g'), 10) = ${cleanPhone}`
-        )
-      )
-      .limit(1);
+    const [user] = userId
+      ? await db.select().from(users).where(eq(users.id, userId)).limit(1)
+      : await db
+          .select()
+          .from(users)
+          .where(
+            or(
+              cleanPhone ? sql`RIGHT(REGEXP_REPLACE(${users.phone}, '[^0-9]', '', 'g'), 10) = ${cleanPhone}` : sql`false`,
+              cleanPhone ? sql`RIGHT(REGEXP_REPLACE(${users.whatsappPhone}, '[^0-9]', '', 'g'), 10) = ${cleanPhone}` : sql`false`
+            )
+          )
+          .limit(1);
 
     if (!user || !user.isActive) return [];
 
@@ -636,7 +649,7 @@ export class WhatsAppEvolutionService {
       .from(fieldAccessLinks)
       .where(
         and(
-          sql`(${fieldAccessLinks.metadata}->>'userId' = ${String(user.id)} OR ${fieldAccessLinks.recipientContact} = ${user.phone || ""} OR RIGHT(REGEXP_REPLACE(${fieldAccessLinks.recipientContact}, '[^0-9]', '', 'g'), 10) = ${cleanPhone})`,
+          sql`(${fieldAccessLinks.metadata}->>'userId' = ${String(user.id)} OR ${fieldAccessLinks.recipientContact} = ${user.phone || ""} OR ${fieldAccessLinks.recipientContact} = ${user.whatsappPhone || ""} OR (LENGTH(${cleanPhone}) >= 10 AND RIGHT(REGEXP_REPLACE(${fieldAccessLinks.recipientContact}, '[^0-9]', '', 'g'), 10) = ${cleanPhone}))`,
           isNull(fieldAccessLinks.revokedAt),
           gt(fieldAccessLinks.expiresAt, new Date())
         )
@@ -1070,9 +1083,13 @@ export class WhatsAppEvolutionService {
         await db.update(users).set({ whatsappChatId: remoteJid, whatsappVerified: true }).where(eq(users.id, user.id));
       }
 
-      const activePhone = replyPhone || senderPhone;
+      const activePhone = replyPhone;
+      if (!activePhone) {
+        console.warn(`[whatsapp] Cannot reply to sender ${remoteJid}: no registered phone number found in Sunrise ERP.`);
+        return { status: "processed", action: "skipped_unresolvable_phone" };
+      }
       const session = getWhatsAppSession(activePhone);
-      const assigned = await this.getAssignedProjects(activePhone, companyId);
+      const assigned = await this.getAssignedProjects(activePhone, companyId, user.id);
 
       // B. COMMAND: /start, menu, hi, hello, help
       const isGreeting =
