@@ -99,11 +99,22 @@ if (process.env.BOLT_PREVIEW === "true") {
 
     app.use((req, res, next) => {
       const origin = req.headers.origin;
-      if (origin && CORS_ORIGINS.includes(origin)) {
+      const isAllowedOrigin =
+        !origin ||
+        CORS_ORIGINS.includes("*") ||
+        CORS_ORIGINS.includes(origin) ||
+        /\.bolt\.(app|new)$/i.test(origin) ||
+        /^https?:\/\/localhost(:\d+)?$/i.test(origin) ||
+        /^https?:\/\/127\.0\.0\.1(:\d+)?$/i.test(origin);
+
+      if (origin && isAllowedOrigin) {
         res.setHeader("Access-Control-Allow-Origin", origin);
         res.setHeader("Vary", "Origin");
         res.setHeader("Access-Control-Allow-Credentials", "true");
-        res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
+        res.setHeader(
+          "Access-Control-Allow-Headers",
+          "Authorization, Content-Type, X-Company-Id, X-Webhook-Secret"
+        );
         res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
       }
       if (req.method === "OPTIONS") return res.sendStatus(204);

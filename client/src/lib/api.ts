@@ -37,24 +37,53 @@ function _cacheSignedUrl(path: string, url: string): void {
 // In Bolt mode, block /api/* calls so they do not silently fail on index.html.
 // In Express mode, guarantee X-Company-Id is always sent for /api/* calls so that
 // queries and writes are strictly scoped to the active workspace.
+const DEFAULT_EXPRESS_BACKEND_URL = "https://erp-backend-production-6e20.up.railway.app";
+
 if (typeof window !== "undefined") {
   const _origFetch = window.fetch;
   window.fetch = function (input: RequestInfo | URL, init?: RequestInit) {
-    const url =
+    const rawUrl =
       typeof input === "string"
         ? input
         : input instanceof URL
           ? input.href
           : (input as Request).url;
 
-    if (isBoltMode && url.startsWith("/api/")) {
-      const err = new Error(`[Bolt] Blocked legacy /api call: ${url}`);
-      console.error(err);
-      return Promise.reject(err);
+    const activeId = getActiveCompanyId();
+
+    if (isBoltMode && rawUrl.startsWith("/api/")) {
+      const backendBase =
+        (import.meta as any).env?.VITE_EXPRESS_BACKEND_URL ||
+        (window as any).__EXPRESS_BACKEND_URL__ ||
+        DEFAULT_EXPRESS_BACKEND_URL;
+
+      if (!backendBase) {
+        const err = new Error(`[Bolt] Blocked legacy /api call: ${rawUrl}`);
+        console.error(err);
+        return Promise.reject(err);
+      }
+
+      const targetUrl = `${backendBase.replace(/\/+$/, "")}${rawUrl}`;
+      let headers: Headers;
+      if (init?.headers) {
+        headers = new Headers(init.headers);
+      } else if (input instanceof Request) {
+        headers = new Headers(input.headers);
+      } else {
+        headers = new Headers();
+      }
+
+      if (!headers.has("X-Company-Id") && activeId) {
+        headers.set("X-Company-Id", String(activeId));
+      }
+
+      return _origFetch.call(window, targetUrl, {
+        ...init,
+        headers,
+      });
     }
 
-    if (!isBoltMode && (url.startsWith("/api/") || url.includes("/api/"))) {
-      const activeId = getActiveCompanyId();
+    if (!isBoltMode && (rawUrl.startsWith("/api/") || rawUrl.includes("/api/"))) {
       let headers: Headers;
       if (init?.headers) {
         headers = new Headers(init.headers);

@@ -139,19 +139,6 @@ const WhatsAppSettings: React.FC = () => {
 
   const fetchConfig = async () => {
     try {
-      if (isBoltMode) {
-        const { data, error } = await supabase.from("bot_settings").select("*").eq("platform", "whatsapp").limit(1).maybeSingle();
-        if (data && !error) {
-          const settings = data.settings || {};
-          setServerUrl(settings.serverUrl || "https://sunrise-production-76df.up.railway.app");
-          setInstanceName(settings.instanceName || `sunrise_company_${companyId}`);
-          setWebhookSecret(settings.webhookSecret || "");
-          if (data.bot_token) setApiKey(data.bot_token);
-        } else {
-          setServerUrl("https://sunrise-production-76df.up.railway.app");
-        }
-        return;
-      }
       const res = await fetch("/api/automation/whatsapp", { headers });
       if (res.ok) {
         const data = await res.json();
@@ -160,36 +147,31 @@ const WhatsAppSettings: React.FC = () => {
         setInstanceName(settings.instanceName || `sunrise_company_${companyId}`);
         setWebhookSecret(settings.webhookSecret || "");
         if (data.botToken) setApiKey(data.botToken);
+        return;
+      }
+      // Bolt direct fallback if backend fetch fails
+      if (isBoltMode) {
+        const { data, error } = await supabase.from("bot_settings").select("*").eq("platform", "whatsapp").limit(1).maybeSingle();
+        if (data && !error) {
+          const settings = data.settings || {};
+          setServerUrl(settings.serverUrl || "https://sunrise-production-76df.up.railway.app");
+          setInstanceName(settings.instanceName || `sunrise_company_${companyId}`);
+          setWebhookSecret(settings.webhookSecret || "");
+          if (data.bot_token) setApiKey("••••" + String(data.bot_token).slice(-4));
+        } else {
+          setServerUrl("https://sunrise-production-76df.up.railway.app");
+        }
       }
     } catch (e) {
       console.error("Failed to fetch WhatsApp config", e);
+      if (isBoltMode) {
+        setServerUrl("https://sunrise-production-76df.up.railway.app");
+      }
     }
   };
 
   const fetchStatus = async (showToast: boolean = false) => {
     try {
-      if (isBoltMode) {
-        // In Bolt mode, check Evolution API endpoint directly if configured
-        const targetUrl = serverUrl || "https://sunrise-production-76df.up.railway.app";
-        try {
-          const healthRes = await fetch(`${targetUrl}/health`, { signal: AbortSignal.timeout(4000) });
-          if (healthRes.ok) {
-            setStatus({
-              serverOnline: true,
-              sessionState: "open",
-              instanceName: instanceName || `sunrise_company_${companyId}`,
-              version: "v2.2.2",
-            });
-            if (showToast) {
-              setMsg({ text: "Connected to Evolution API (Railway hosted).", ok: true });
-            }
-            return;
-          }
-        } catch {
-          // ignore
-        }
-      }
-
       const res = await fetch("/api/whatsapp/status", { headers });
       if (res.ok) {
         const data: WhatsAppStatus = await res.json();
@@ -206,15 +188,34 @@ const WhatsAppSettings: React.FC = () => {
           setQrBase64(data.qrCode);
           setPairingCode(data.pairingCode || null);
         }
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setStatus({
+          serverOnline: false,
+          sessionState: "disconnected",
+          instanceName: instanceName || `sunrise_company_${companyId}`,
+          error: errData.message || `HTTP ${res.status}: Backend unreachable`,
+        });
       }
     } catch (e: any) {
       console.error("Failed to fetch status", e);
+      setStatus({
+        serverOnline: false,
+        sessionState: "disconnected",
+        instanceName: instanceName || `sunrise_company_${companyId}`,
+        error: "Express backend or Evolution API is unreachable.",
+      });
     }
   };
 
   const fetchLogs = async () => {
     setLogsLoading(true);
     try {
+      const res = await fetch("/api/automation/logs/whatsapp", { headers });
+      if (res.ok) {
+        setLogs(await res.json());
+        return;
+      }
       if (isBoltMode) {
         const { data } = await supabase
           .from("webhook_logs")
@@ -236,12 +237,9 @@ const WhatsAppSettings: React.FC = () => {
             }))
           );
         }
-        return;
       }
-      const res = await fetch("/api/automation/logs/whatsapp", { headers });
-      if (res.ok) {
-        setLogs(await res.json());
-      }
+    } catch {
+      // ignore
     } finally {
       setLogsLoading(false);
     }
@@ -252,6 +250,28 @@ const WhatsAppSettings: React.FC = () => {
     setSavingConfig(true);
     setMsg(null);
     try {
+      const payload: any = {
+        enabled: true,
+        apiKey: apiKey.trim(),
+        settings: {
+          serverUrl: serverUrl.trim(),
+          instanceName: instanceName.trim(),
+          webhookSecret: webhookSecret.trim(),
+        },
+      };
+
+      const res = await fetch("/api/automation/whatsapp", {
+        method: "PUT",
+        headers,
+        body: JSON.stringify(payload),
+      });
+
+      if (res.ok) {
+        setMsg({ text: "Configuration saved successfully. Verifying service...", ok: true });
+        await fetchStatus(true);
+        return;
+      }
+
       if (isBoltMode) {
         const updateData: any = {
           platform: "whatsapp",
@@ -272,30 +292,33 @@ const WhatsAppSettings: React.FC = () => {
         return;
       }
 
-      const payload: any = {
-        enabled: true,
-        apiKey: apiKey.trim(),
-        settings: {
-          serverUrl: serverUrl.trim(),
-          instanceName: instanceName.trim(),
-          webhookSecret: webhookSecret.trim(),
-        },
-      };
-
-      const res = await fetch("/api/automation/whatsapp", {
-        method: "PUT",
-        headers,
-        body: JSON.stringify(payload),
-      });
-
-      if (res.ok) {
-        setMsg({ text: "Configuration saved successfully. Verifying service...", ok: true });
-        await fetchStatus(true);
-      } else {
-        const err = await res.json();
-        setMsg({ text: err.message || "Failed to save configuration", ok: false });
-      }
+      const err = await res.json().catch(() => ({}));
+      setMsg({ text: err.message || "Failed to save configuration", ok: false });
     } catch (e: any) {
+      if (isBoltMode) {
+        try {
+          const updateData: any = {
+            platform: "whatsapp",
+            enabled: true,
+            updated_at: new Date().toISOString(),
+            settings: {
+              serverUrl: serverUrl.trim() || "https://sunrise-production-76df.up.railway.app",
+              instanceName: instanceName.trim(),
+              webhookSecret: webhookSecret.trim(),
+            },
+          };
+          if (apiKey.trim() && !apiKey.trim().startsWith("••••")) {
+            updateData.bot_token = apiKey.trim();
+          }
+          await supabase.from("bot_settings").upsert(updateData, { onConflict: "platform" });
+          setMsg({ text: "Configuration saved successfully.", ok: true });
+          await fetchStatus(true);
+          return;
+        } catch (dbErr: any) {
+          setMsg({ text: dbErr.message || "Failed to save configuration", ok: false });
+          return;
+        }
+      }
       setMsg({ text: e.message || "Failed to save configuration", ok: false });
     } finally {
       setSavingConfig(false);
