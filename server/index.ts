@@ -95,6 +95,7 @@ if (process.env.BOLT_PREVIEW === "true") {
     ]);
 
     const app = express();
+    app.set("trust proxy", 1);
 
     app.use(
       helmet({
