@@ -2311,7 +2311,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/finance/payments", authenticateToken, async (req: AuthRequest, res: Response) => {
     try {
       const type = req.query.type as string | undefined;
-      const list = await storage.getAllPayments({ type });
+      const list = await storage.getAllPayments({ type, companyId: req.companyId });
       res.json(list);
     } catch (err: any) {
       res.status(500).json({ message: err.message });
@@ -2328,6 +2328,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Invalid payment data", errors: parsed.error.errors });
       }
 
+      parsed.data.companyId = req.companyId || parsed.data.companyId || 1;
       const created = await storage.createPayment(parsed.data);
       res.status(201).json(created);
     } catch (err: any) {
@@ -2356,6 +2357,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Invalid payment data", errors: parsed.error.errors });
       }
 
+      parsed.data.companyId = req.companyId || parsed.data.companyId || 1;
       const created = await storage.createPaymentWithAllocations(parsed.data, allocations || []);
 
       res.status(201).json(created);
@@ -2366,9 +2368,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/finance/ledgers/summary", authenticateToken, async (req: AuthRequest, res: Response) => {
     try {
-      const allClients = await storage.getAllClients();
-      const allInvoices = await storage.getAllInvoices({ type: "sales" });
-      const allPayments = await storage.getAllPayments({ type: "receipt" });
+      const allClients = await storage.getAllClients(req.companyId);
+      const allInvoices = await storage.getAllInvoices({ type: "sales", companyId: req.companyId });
+      const allPayments = await storage.getAllPayments({ type: "receipt", companyId: req.companyId });
 
       const summaryList = allClients.map(client => {
         const clientInvoices = allInvoices.filter(i => i.clientId === client.id || i.partyName === client.name);
@@ -2403,8 +2405,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Client not found" });
       }
 
-      const clientInvoices = await db.select().from(invoices).where(eq(invoices.clientId, cId)).orderBy(invoices.date);
-      const clientPayments = await db.select().from(payments).where(eq(payments.clientId, cId)).orderBy(payments.date);
+      // Multi-company isolation guard: Client must belong to the authorized company workspace
+      if (req.companyId && client.companyId && client.companyId !== req.companyId) {
+        return res.status(404).json({ message: "Client not found" });
+      }
+
+      const invoiceConds = [eq(invoices.clientId, cId)];
+      if (req.companyId) {
+        invoiceConds.push(eq(invoices.companyId, req.companyId));
+      }
+      const clientInvoices = await db.select().from(invoices).where(and(...invoiceConds)).orderBy(invoices.date);
+
+      const paymentConds = [eq(payments.clientId, cId)];
+      if (req.companyId) {
+        paymentConds.push(eq(payments.companyId, req.companyId));
+      }
+      const clientPayments = await db.select().from(payments).where(and(...paymentConds)).orderBy(payments.date);
 
       // Map to combined chronological transaction array
       const items: any[] = [];
@@ -7875,17 +7891,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return { label, start, end };
   }
 
-  async function loadNumberingConfig(kind: string): Promise<{ prefix: string; startAt: number; fyAware: boolean; tallyCurrentNumber?: number; fySequences?: Record<string, number> }> {
+  async function loadNumberingConfig(kind: string, comp?: any): Promise<{ prefix: string; startAt: number; fyAware: boolean; tallyCurrentNumber?: number; fySequences?: Record<string, number> }> {
+    const compPrefix = kind === "invoice" ? comp?.invoicePrefix : kind === "estimate" ? comp?.estimatePrefix : comp?.dcPrefix;
+    const compNumCfg = (comp?.numberingConfig as any)?.[kind] || {};
     const fallback = {
-      invoice:  { prefix: "SM",     startAt: 101, fyAware: true },
-      estimate: { prefix: "SM/E",   startAt: 101, fyAware: true },
-      dc:       { prefix: "SM/DC",  startAt: 101, fyAware: true },
+      invoice:  { prefix: compPrefix || (comp?.id === 1 ? "SM" : "INV"),     startAt: comp?.id === 1 ? 101 : 1, fyAware: true },
+      estimate: { prefix: compPrefix || (comp?.id === 1 ? "SM/E" : "EST"),   startAt: comp?.id === 1 ? 101 : 1, fyAware: true },
+      dc:       { prefix: compPrefix || (comp?.id === 1 ? "SM/DC" : "DC"),    startAt: comp?.id === 1 ? 101 : 1, fyAware: true },
     }[kind] ?? { prefix: "DOC", startAt: 1, fyAware: false };
+
+    if (compNumCfg && Object.keys(compNumCfg).length > 0) {
+      return {
+        prefix: typeof compNumCfg.prefix === "string" ? compNumCfg.prefix : fallback.prefix,
+        startAt: Number.isFinite(Number(compNumCfg.startAt)) ? Number(compNumCfg.startAt) : fallback.startAt,
+        fyAware: compNumCfg.fyAware !== false,
+        tallyCurrentNumber: Number.isFinite(Number(compNumCfg.tallyCurrentNumber)) ? Number(compNumCfg.tallyCurrentNumber) : undefined,
+        fySequences: compNumCfg.fySequences && typeof compNumCfg.fySequences === "object" ? compNumCfg.fySequences : undefined,
+      };
+    }
+
     try {
       const value = await storage.getAppSetting(`numbering.${kind}`);
       const v = (value as any) ?? {};
       return {
-        prefix: typeof v.prefix === "string" ? v.prefix : fallback.prefix,
+        prefix: compPrefix || (typeof v.prefix === "string" ? v.prefix : fallback.prefix),
         startAt: Number.isFinite(Number(v.startAt)) ? Number(v.startAt) : fallback.startAt,
         fyAware: v.fyAware !== false,
         tallyCurrentNumber: Number.isFinite(Number(v.tallyCurrentNumber)) ? Number(v.tallyCurrentNumber) : undefined,
@@ -7909,8 +7938,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.warn("[nextDocumentNumber] RPC call failed, falling back to local sequence logic:", e?.message);
     }
 
-    const cfg = await loadNumberingConfig(kind);
     const comp = await storage.getCompany(cId).catch(() => undefined);
+    const cfg = await loadNumberingConfig(kind, comp);
     const map = docKindMap[kind];
     const all = (await db.select().from(map.table).where(eq((map.table as any).companyId, cId))) as any[];
     const fy = fyForDate(date || new Date());
@@ -7918,8 +7947,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const companyPrefix = kind === "invoice" ? (comp?.invoicePrefix || "SM") : kind === "estimate" ? (comp?.estimatePrefix || "SM/E") : (comp?.dcPrefix || "SM/DC");
 
     if (kind === "invoice") {
-      const prefix = cId === 1 ? "SM" : (comp?.invoicePrefix || "INV");
-      const tallyStart = cId === 1 ? (cfg.fySequences?.[fy.label] ?? cfg.tallyCurrentNumber ?? (cfg.startAt > 1 ? cfg.startAt : 0)) : 0;
+      const prefix = comp?.invoicePrefix || (cId === 1 ? "SM" : "INV");
+      const tallyStart = cId === 1 ? (cfg.fySequences?.[fy.label] ?? cfg.tallyCurrentNumber ?? (cfg.startAt > 1 ? cfg.startAt : 0)) : (cfg.startAt > 1 ? cfg.startAt : 0);
       let maxSeq = Math.max(0, tallyStart);
 
       const standardMatcher = new RegExp(`^${escapeReg(fy.label)}/${escapeReg(prefix)}/(\\d+)$`, "i");
@@ -7942,7 +7971,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
     const startAt = kind === "estimate" && cId === 1
       ? estimateFyStartAtOverrides[fy.label] ?? cfg.startAt
-      : (cId === 1 ? cfg.startAt : 1);
+      : (cId === 1 ? cfg.startAt : (cfg.startAt || 1));
     const prefix = companyPrefix;
     const fyMatcher = cfg.fyAware
       ? new RegExp(`^${escapeReg(prefix)}/${escapeReg(fy.label)}/(\\d+)$`)

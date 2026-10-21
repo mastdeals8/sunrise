@@ -23,7 +23,39 @@ async function loadNumberingConfig(
   db: SupabaseClient,
   kind: string,
   fyLabel?: string,
+  companyId?: number,
 ): Promise<{ prefix: string; startAt: number; fyAware: boolean }> {
+  if (companyId) {
+    try {
+      const { data: comp } = await db
+        .from("companies")
+        .select("invoice_prefix, estimate_prefix, dc_prefix, numbering_config")
+        .eq("id", companyId)
+        .maybeSingle();
+      if (comp) {
+        const compPrefix = kind === "invoice" ? comp.invoice_prefix : kind === "estimate" ? comp.estimate_prefix : comp.dc_prefix;
+        const numCfg = (comp.numbering_config as any)?.[kind] || {};
+        let startAt = Number.isFinite(Number(numCfg.startAt)) ? Number(numCfg.startAt) : (companyId === 1 ? 101 : 1);
+        if (kind === "invoice") {
+          const tallyStart = Number(
+            (fyLabel && numCfg.fySequences?.[fyLabel]) ||
+            numCfg.tallyCurrentNumber ||
+            numCfg.startAt ||
+            (companyId === 1 && fyLabel === "26-27" ? 170 : 0)
+          );
+          if (tallyStart > 0) startAt = Math.max(startAt, tallyStart);
+        }
+        return {
+          prefix: compPrefix || (companyId === 1 ? "SM" : "INV"),
+          startAt,
+          fyAware: numCfg.fyAware !== false,
+        };
+      }
+    } catch {
+      // Fall through to app_settings
+    }
+  }
+
   const fallback = ({
     invoice:  { prefix: "SM",     startAt: 101, fyAware: true },
     estimate: { prefix: "SM/E",   startAt: 101, fyAware: true },
@@ -83,7 +115,7 @@ export async function nextDocumentNumber(
   }
 
   const fy = fyForDate(docDate);
-  const cfg = await loadNumberingConfig(db, kind, fy.label);
+  const cfg = await loadNumberingConfig(db, kind, fy.label, companyId);
   const map = tableForKind[kind];
 
   const startAt =
@@ -100,9 +132,10 @@ export async function nextDocumentNumber(
   let maxSeq = startAt - 1;
 
   if (kind === "invoice") {
-    // Required Sunrise invoice format: <FY>/SM/<number> (e.g. 26-27/SM/171)
-    const stdMatcher = new RegExp(`^${escapeReg(fy.label)}/SM/(\\d+)$`, "i");
-    const legMatcher = new RegExp(`^SM/INV/${escapeReg(fy.label)}/(\\d+)$`, "i");
+    // Required invoice format: <FY>/<prefix>/<number> (e.g. 26-27/SM/171, 26-27/DEL/001)
+    const prefix = cfg.prefix || "SM";
+    const stdMatcher = new RegExp(`^${escapeReg(fy.label)}/${escapeReg(prefix)}/(\\d+)$`, "i");
+    const legMatcher = new RegExp(`^${escapeReg(prefix)}/INV/${escapeReg(fy.label)}/(\\d+)$`, "i");
 
     for (const row of (rows ?? [])) {
       const docNum = String((row as any)[map.column] || "").trim();
@@ -113,7 +146,7 @@ export async function nextDocumentNumber(
       }
     }
     const next = maxSeq + 1;
-    return `${fy.label}/SM/${next}`;
+    return `${fy.label}/${prefix}/${String(next).padStart(3, "0")}`;
   }
 
   const fyMatcher = cfg.fyAware
@@ -130,6 +163,6 @@ export async function nextDocumentNumber(
   }
   const next = maxSeq + 1;
   return cfg.fyAware
-    ? `${cfg.prefix}/${fy.label}/${next}`
-    : `${cfg.prefix}/${next}`;
+    ? `${cfg.prefix}/${fy.label}/${String(next).padStart(3, "0")}`
+    : `${cfg.prefix}/${String(next).padStart(3, "0")}`;
 }

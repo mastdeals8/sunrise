@@ -780,75 +780,100 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createPaymentWithAllocations(payment: InsertPayment, allocations: any[]): Promise<Payment> {
-    const result = await db.insert(payments).values({
-      ...payment,
-      allocatedInvoices: allocations
-    } as any).returning();
-    const createdPayment = result[0];
+    return await db.transaction(async (tx) => {
+      const pCompanyId = payment.companyId || 1;
 
-    // Trigger Double-Entry accounting logic on payment or receipt!
-    await this.generatePaymentJournal(createdPayment);
+      // Cross-company guard & existence check
+      for (const alloc of allocations) {
+        const invoiceId = Number(alloc.invoiceId);
+        if (!invoiceId) continue;
 
-    // Update each allocated invoice's ledger balance
-    for (const alloc of allocations) {
-      const invoiceId = Number(alloc.invoiceId);
-      const allocAmount = Number(alloc.amount);
-      if (!invoiceId || !allocAmount) continue;
-
-      const invoiceList = await db.select().from(invoices).where(eq(invoices.id, invoiceId)).limit(1);
-      const invoice = invoiceList[0];
-      if (invoice) {
-        const newPaid = Number(invoice.paidAmount || 0) + allocAmount;
-        const newBalance = Math.max(0, Number(invoice.totalAmount) - newPaid);
-        const newStatus = newBalance <= 0 ? "paid" : (newPaid > 0 ? "partial" : "unpaid");
-
-        await db.update(invoices).set({
-          paidAmount: newPaid,
-          balanceAmount: newBalance,
-          status: newStatus
-        }).where(eq(invoices.id, invoiceId));
+        const [invoice] = await tx.select().from(invoices).where(eq(invoices.id, invoiceId)).limit(1);
+        if (!invoice) {
+          throw new Error(`Invoice ID ${invoiceId} not found`);
+        }
+        if (invoice.companyId && invoice.companyId !== pCompanyId) {
+          throw new Error(`Cross-company payment allocation forbidden: Invoice #${invoice.invoiceNumber} belongs to Company ${invoice.companyId}, not Company ${pCompanyId}`);
+        }
       }
-    }
 
-    return createdPayment;
+      // 1. Insert payment atomically
+      const result = await tx.insert(payments).values({
+        ...payment,
+        allocatedInvoices: allocations
+      } as any).returning();
+      const createdPayment = result[0];
+
+      // 2. Trigger Double-Entry accounting logic on payment or receipt!
+      await this.generatePaymentJournal(createdPayment, tx);
+
+      // 3. Update each allocated invoice's ledger balance
+      for (const alloc of allocations) {
+        const invoiceId = Number(alloc.invoiceId);
+        const allocAmount = Number(alloc.amount);
+        if (!invoiceId || !allocAmount) continue;
+
+        const [invoice] = await tx.select().from(invoices).where(eq(invoices.id, invoiceId)).limit(1);
+        if (invoice) {
+          const newPaid = Number(invoice.paidAmount || 0) + allocAmount;
+          const newBalance = Math.max(0, Number(invoice.totalAmount) - newPaid);
+          const newStatus = newBalance <= 0 ? "paid" : (newPaid > 0 ? "partial" : "unpaid");
+
+          await tx.update(invoices).set({
+            paidAmount: newPaid,
+            balanceAmount: newBalance,
+            status: newStatus
+          }).where(eq(invoices.id, invoiceId));
+        }
+      }
+
+      return createdPayment;
+    });
   }
 
-  private async generatePaymentJournal(pay: Payment) {
-    const bankAccount = await this.getAccountByCode("112000"); // Bank Account
+  private async generatePaymentJournal(pay: Payment, tx?: any) {
+    const executor = tx || db;
+    const [bankAccount] = await executor.select().from(chartOfAccounts).where(eq(chartOfAccounts.code, "112000")).limit(1);
     
     if (pay.type === 'receipt') {
       // Customer payment received: Debit: Bank (112000), Credit: Accounts Receivable (120000)
-      const arAccount = await this.getAccountByCode("120000");
+      const [arAccount] = await executor.select().from(chartOfAccounts).where(eq(chartOfAccounts.code, "120000")).limit(1);
       if (bankAccount && arAccount) {
         const entryNumber = `JV-PY-${pay.id}-${Date.now().toString().slice(-4)}`;
-        await this.createJournalEntry({
+        const [createdEntry] = await executor.insert(journalEntries).values({
           entryNumber,
           entryDate: pay.date,
           sourceModule: "payments",
           referenceNumber: pay.voucherNumber,
           description: `Customer Receipt: ${pay.partyName}`,
           createdBy: 1
-        }, [
-          { journalEntryId: 0, accountId: bankAccount.id, debit: pay.amount, credit: 0, description: "Bank Deposit", lineNumber: 1 },
-          { journalEntryId: 0, accountId: arAccount.id, debit: 0, credit: pay.amount, description: "AR Credit", lineNumber: 2 }
-        ]);
+        }).returning();
+        if (createdEntry) {
+          await executor.insert(journalEntryLines).values([
+            { journalEntryId: createdEntry.id, accountId: bankAccount.id, debit: pay.amount, credit: 0, description: "Bank Deposit", lineNumber: 1 },
+            { journalEntryId: createdEntry.id, accountId: arAccount.id, debit: 0, credit: pay.amount, description: "AR Credit", lineNumber: 2 }
+          ]);
+        }
       }
     } else {
       // Supplier payment paid: Debit: Accounts Payable (210000), Credit: Bank (112000)
-      const apAccount = await this.getAccountByCode("210000");
+      const [apAccount] = await executor.select().from(chartOfAccounts).where(eq(chartOfAccounts.code, "210000")).limit(1);
       if (bankAccount && apAccount) {
         const entryNumber = `JV-PY-${pay.id}-${Date.now().toString().slice(-4)}`;
-        await this.createJournalEntry({
+        const [createdEntry] = await executor.insert(journalEntries).values({
           entryNumber,
           entryDate: pay.date,
           sourceModule: "payments",
           referenceNumber: pay.voucherNumber,
           description: `Supplier Payment: ${pay.partyName}`,
           createdBy: 1
-        }, [
-          { journalEntryId: 0, accountId: apAccount.id, debit: pay.amount, credit: 0, description: "AP Debit", lineNumber: 1 },
-          { journalEntryId: 0, accountId: bankAccount.id, debit: 0, credit: pay.amount, description: "Bank Withdrawal", lineNumber: 2 }
-        ]);
+        }).returning();
+        if (createdEntry) {
+          await executor.insert(journalEntryLines).values([
+            { journalEntryId: createdEntry.id, accountId: apAccount.id, debit: pay.amount, credit: 0, description: "AP Debit", lineNumber: 1 },
+            { journalEntryId: createdEntry.id, accountId: bankAccount.id, debit: 0, credit: pay.amount, description: "Bank Withdrawal", lineNumber: 2 }
+          ]);
+        }
       }
     }
   }

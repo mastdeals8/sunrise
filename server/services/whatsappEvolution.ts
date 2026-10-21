@@ -889,11 +889,16 @@ export class WhatsAppEvolutionService {
       throw new Error("Invalid webhook secret.");
     }
 
-    // Sanitize payload before logging (strip API keys, base64 QR codes, session credentials)
+    // Sanitize payload before logging (strip API keys, base64 QR codes, session credentials, secrets)
     const sanitizedPayload = { ...payload };
     if (sanitizedPayload.apikey) sanitizedPayload.apikey = "[REDACTED]";
     if (sanitizedPayload.apiKey) sanitizedPayload.apiKey = "[REDACTED]";
-    if (sanitizedPayload.data?.qrcode?.base64) sanitizedPayload.data = { ...sanitizedPayload.data, qrcode: { base64: "[REDACTED_QR]" } };
+    if (sanitizedPayload.token) sanitizedPayload.token = "[REDACTED]";
+    if (sanitizedPayload.webhookSecret) sanitizedPayload.webhookSecret = "[REDACTED]";
+    if (sanitizedPayload.headers?.apikey) sanitizedPayload.headers = { ...sanitizedPayload.headers, apikey: "[REDACTED]" };
+    if (sanitizedPayload.headers?.authorization) sanitizedPayload.headers = { ...sanitizedPayload.headers, authorization: "[REDACTED]" };
+    if (sanitizedPayload.data?.qrcode?.base64) sanitizedPayload.data = { ...sanitizedPayload.data, qrcode: { ...sanitizedPayload.data.qrcode, base64: "[REDACTED_QR]" } };
+    if (sanitizedPayload.data?.qrcode?.code) sanitizedPayload.data = { ...sanitizedPayload.data, qrcode: { ...sanitizedPayload.data.qrcode, code: "[REDACTED_QR_CODE]" } };
     if (sanitizedPayload.data?.base64) sanitizedPayload.data = { ...sanitizedPayload.data, base64: "[REDACTED_BASE64]" };
 
     // Log the inbound event
