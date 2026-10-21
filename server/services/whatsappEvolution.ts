@@ -279,6 +279,79 @@ export class WhatsAppEvolutionService {
   }
 
   /**
+   * Ensures the instance-level webhook in Evolution API is properly configured for the Express backend.
+   * Idempotent: reads the active webhook configuration first, only writes if missing, disabled, or mismatched.
+   */
+  async ensureInstanceWebhook(companyId: number = 1): Promise<{ success: boolean; configured: boolean; url?: string; error?: string }> {
+    if (process.env.WHATSAPP_MOCK === "1") {
+      return { success: true, configured: true };
+    }
+
+    const config = await this.getConfig(companyId);
+    if (!config.serverUrl || !config.apiKey) {
+      return { success: false, configured: false, error: "Evolution API server URL or API key is not configured." };
+    }
+
+    const backendUrl = (
+      process.env.APP_URL ||
+      (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : "") ||
+      (process.env.RAILWAY_STATIC_URL ? `https://${process.env.RAILWAY_STATIC_URL}` : "") ||
+      "https://erp-backend-production-6e20.up.railway.app"
+    ).replace(/\/+$/, "");
+
+    const expectedWebhookUrl = `${backendUrl}/api/webhook/whatsapp`;
+    const requiredEvents = ["MESSAGES_UPSERT", "CONNECTION_UPDATE", "QRCODE_UPDATED"];
+
+    try {
+      // 1. Check existing webhook configuration
+      const findResp = await fetch(`${config.serverUrl}/webhook/find/${config.instanceName}`, {
+        headers: { apikey: config.apiKey },
+      });
+
+      if (findResp.ok) {
+        const existing = await findResp.json().catch(() => null);
+        if (
+          existing &&
+          existing.enabled === true &&
+          existing.url === expectedWebhookUrl &&
+          Array.isArray(existing.events) &&
+          requiredEvents.every((ev) => existing.events.includes(ev))
+        ) {
+          return { success: true, configured: true, url: existing.url };
+        }
+      }
+
+      // 2. Set or update the webhook configuration
+      const setResp = await fetch(`${config.serverUrl}/webhook/set/${config.instanceName}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", apikey: config.apiKey },
+        body: JSON.stringify({
+          webhook: {
+            enabled: true,
+            url: expectedWebhookUrl,
+            byEvents: false,
+            events: requiredEvents,
+          },
+        }),
+      });
+
+      if (!setResp.ok) {
+        const errJson = await setResp.json().catch(() => ({}));
+        return {
+          success: false,
+          configured: false,
+          error: errJson.message || `Failed to set webhook: HTTP ${setResp.status}`,
+        };
+      }
+
+      const resData = await setResp.json().catch(() => ({}));
+      return { success: true, configured: true, url: resData.url || expectedWebhookUrl };
+    } catch (err: any) {
+      return { success: false, configured: false, error: err.message || "Failed to configure instance webhook." };
+    }
+  }
+
+  /**
    * Initializes the Evolution API instance and generates QR code for pairing.
    */
   async connectInstance(companyId: number = 1): Promise<{ success: boolean; qrCode?: string; pairingCode?: string; error?: string }> {
@@ -303,6 +376,11 @@ export class WhatsAppEvolutionService {
           integration: "WHATSAPP-BAILEYS",
         }),
       }).catch(() => {});
+
+      // 2. Ensure instance webhook is configured idempotently
+      await this.ensureInstanceWebhook(companyId).catch((whErr) => {
+        console.warn("[whatsapp] ensureInstanceWebhook warning:", whErr?.message);
+      });
 
       // 2. Request QR code connection
       const connectResp = await fetch(`${config.serverUrl}/instance/connect/${config.instanceName}`, {

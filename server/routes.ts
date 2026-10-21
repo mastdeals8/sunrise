@@ -6640,6 +6640,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // POST Sync instance-level webhook configuration
+  app.post("/api/whatsapp/sync-webhook", authenticateToken, requireRole(["admin", "manager"]), async (req: AuthRequest, res: Response) => {
+    try {
+      const companyId = req.companyId || 1;
+      const result = await whatsappEvolution.ensureInstanceWebhook(companyId);
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
   // POST Disconnect / logout session
   app.post("/api/whatsapp/disconnect", authenticateToken, requireRole(["admin"]), async (req: AuthRequest, res: Response) => {
     try {
