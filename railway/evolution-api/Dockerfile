@@ -1,4 +1,4 @@
-FROM atendai/evolution-api:v2.2.2
+FROM evoapicloud/evolution-api:v2.2.2
 
 # Expose Evolution API default port
 EXPOSE 8080

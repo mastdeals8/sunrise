@@ -2,7 +2,7 @@ version: "3.8"
 
 services:
   evolution-api:
-    image: atendai/evolution-api:v2.2.2
+    image: evoapicloud/evolution-api:v2.2.2
     container_name: sunrise_evolution_api
     restart: unless-stopped
     ports:
