@@ -7,9 +7,10 @@ import {
   estimates,
   clients,
   stores,
+  executionStores,
   botSettings,
 } from "../../shared/schema";
-import { eq, and, sql, isNull, gt, or } from "drizzle-orm";
+import { eq, and, sql, isNull, gt, or, desc } from "drizzle-orm";
 import crypto from "crypto";
 
 /**
@@ -433,6 +434,131 @@ export class InstallerService {
       .where(eq(fieldAccessLinks.id, linkId));
 
     return true;
+  }
+
+  /**
+   * Lists all ongoing, eligible estimate projects for assignment in the active company.
+   * Formats real project labels with estimate number, subject/title, store names, and store count.
+   * Excludes completed, cancelled, rejected, and archived projects.
+   */
+  async listEligibleProjects(companyId: number, search?: string) {
+    const rows = await db
+      .select({
+        estimate: estimates,
+        client: clients,
+        store: stores,
+      })
+      .from(estimates)
+      .leftJoin(clients, eq(clients.id, estimates.clientId))
+      .leftJoin(stores, eq(stores.id, estimates.storeId))
+      .where(
+        and(
+          eq(estimates.companyId, companyId),
+          sql`${estimates.status} NOT IN ('rejected', 'cancelled', 'completed', 'archived')`
+        )
+      )
+      .orderBy(desc(estimates.id));
+
+    const results = [];
+    for (const row of rows) {
+      const est = row.estimate;
+      const execStores = await db
+        .select()
+        .from(executionStores)
+        .where(eq(executionStores.estimateId, est.id));
+
+      let storeNames: string[] = [];
+      if (execStores.length > 0) {
+        storeNames = execStores.map((s) => s.storeName || s.storeCode || "").filter(Boolean);
+      }
+      if (storeNames.length === 0 && row.store) {
+        storeNames = [row.store.name || row.store.storeCode || "Store"];
+      }
+
+      const storeCount = storeNames.length;
+      let storeSummary = "Main Project";
+      if (storeCount === 1) {
+        storeSummary = storeNames[0];
+      } else if (storeCount > 1) {
+        storeSummary = `${storeNames.slice(0, 3).join(", ")}${storeCount > 3 ? "..." : ""}`;
+      }
+
+      const formattedLabel = `${est.estimateNumber} — ${est.subject || est.title} (${storeSummary} — ${storeCount} store${storeCount === 1 ? "" : "s"})`;
+
+      const item = {
+        id: est.id,
+        estimateId: est.id,
+        estimateNumber: est.estimateNumber,
+        title: est.title,
+        subject: est.subject || "",
+        clientName: row.client?.name || "",
+        storeNames,
+        storeCount,
+        storeSummary,
+        label: formattedLabel,
+        status: est.status,
+      };
+
+      if (search && search.trim()) {
+        const q = search.trim().toLowerCase();
+        const matches =
+          item.estimateNumber.toLowerCase().includes(q) ||
+          item.title.toLowerCase().includes(q) ||
+          item.subject.toLowerCase().includes(q) ||
+          item.clientName.toLowerCase().includes(q) ||
+          storeNames.some((sn) => sn.toLowerCase().includes(q)) ||
+          item.label.toLowerCase().includes(q);
+        if (!matches) continue;
+      }
+
+      results.push(item);
+    }
+    return results;
+  }
+
+  /**
+   * Batch assigns multiple projects to one installer in a single workflow.
+   * Reports per-project success and failure.
+   */
+  async batchAssignProjectsToInstaller(
+    companyId: number,
+    params: {
+      installerId: number;
+      estimateIds: number[];
+      allowedStoreCodes?: string[];
+      allowedDocumentTypes?: string[];
+      createdBy?: number;
+    }
+  ): Promise<{
+    successful: Array<{ estimateId: number; estimateNumber: string; linkId: number }>;
+    failed: Array<{ estimateId: number; error: string }>;
+  }> {
+    const successful: Array<{ estimateId: number; estimateNumber: string; linkId: number }> = [];
+    const failed: Array<{ estimateId: number; error: string }> = [];
+
+    for (const estId of params.estimateIds) {
+      try {
+        const res = await this.assignProjectToInstaller(companyId, {
+          installerId: params.installerId,
+          estimateId: estId,
+          allowedStoreCodes: params.allowedStoreCodes,
+          allowedDocumentTypes: params.allowedDocumentTypes,
+          createdBy: params.createdBy,
+        });
+        successful.push({
+          estimateId: res.estimateId,
+          estimateNumber: res.estimateNumber,
+          linkId: res.linkId,
+        });
+      } catch (err: any) {
+        failed.push({
+          estimateId: estId,
+          error: err?.message || "Failed to assign project",
+        });
+      }
+    }
+
+    return { successful, failed };
   }
 }
 

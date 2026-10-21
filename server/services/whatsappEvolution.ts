@@ -11,6 +11,8 @@ import {
   fieldAccessLinks,
   estimates,
   executionDocuments,
+  deliveryChallans,
+  executionStores,
 } from "../../shared/schema";
 import { eq, desc, and, or, sql, isNull, gt } from "drizzle-orm";
 import fs from "fs";
@@ -54,9 +56,10 @@ export interface WhatsAppAccessRequest {
 }
 
 export interface WhatsAppUserSession {
-  state: "IDLE" | "PROJECT_SELECTED" | "UPLOADING";
+  state: "IDLE" | "MENU" | "PROJECT_SELECTED" | "AWAITING_PROJECT_SELECTION" | "UPLOADING";
   selectedEstimateId?: number;
-  uploadType?: "photo" | "signed_challan" | "wcc" | "signed_wcc" | "extra";
+  uploadType?: "photo" | "signed_dc" | "transport_receipt";
+  pendingUploadType?: "photo" | "signed_dc" | "transport_receipt";
   lastInteraction: number;
 }
 
@@ -550,6 +553,9 @@ export class WhatsAppEvolutionService {
       subject: string;
       clientName: string;
       storeName: string;
+      storeCount: number;
+      storeNames: string[];
+      storeSummary: string;
       storeId?: number;
     }> = [];
 
@@ -561,16 +567,30 @@ export class WhatsAppEvolutionService {
 
       const [est] = await db.select().from(estimates).where(eq(estimates.id, link.estimateId)).limit(1);
       if (!est) continue;
+      if (companyId && est.companyId && est.companyId !== companyId) continue;
 
       let clientName = "";
       if (est.clientId) {
         const [c] = await db.select().from(clients).where(eq(clients.id, est.clientId)).limit(1);
         if (c) clientName = c.name;
       }
-      let storeName = "";
-      if (est.storeId) {
+
+      let storeNames: string[] = [];
+      const execStores = await db.select().from(executionStores).where(eq(executionStores.estimateId, est.id));
+      if (execStores.length > 0) {
+        storeNames = execStores.map((s) => s.storeName || s.storeCode || "").filter(Boolean);
+      }
+      if (storeNames.length === 0 && est.storeId) {
         const [s] = await db.select().from(stores).where(eq(stores.id, est.storeId)).limit(1);
-        if (s) storeName = s.name || s.storeCode || "";
+        if (s) storeNames = [s.name || s.storeCode || "Store"];
+      }
+
+      const storeCount = storeNames.length;
+      let storeSummary = "Main Project";
+      if (storeCount === 1) {
+        storeSummary = `${storeNames[0]} — 1 store`;
+      } else if (storeCount > 1) {
+        storeSummary = `${storeNames.slice(0, 3).join(", ")}${storeCount > 3 ? "..." : ""} — ${storeCount} stores`;
       }
 
       projectList.push({
@@ -580,7 +600,10 @@ export class WhatsAppEvolutionService {
         title: est.title,
         subject: est.subject || "",
         clientName,
-        storeName,
+        storeName: storeNames[0] || "",
+        storeCount,
+        storeNames,
+        storeSummary,
         storeId: est.storeId || undefined,
       });
     }
@@ -920,115 +943,236 @@ export class WhatsAppEvolutionService {
       }
 
       const session = getWhatsAppSession(senderPhone);
+      const assigned = await this.getAssignedProjects(senderPhone, companyId);
 
-      // B. COMMAND: /start, projects, menu, hi, hello
-      if (
-        lowerText === "projects" ||
+      // B. COMMAND: /start, menu, hi, hello, help
+      const isGreeting =
         lowerText === "/start" ||
         lowerText === "menu" ||
+        lowerText === "/menu" ||
         lowerText === "hi" ||
         lowerText === "hello" ||
-        lowerText === "help"
-      ) {
-        clearWhatsAppSession(senderPhone);
-        const assigned = await this.getAssignedProjects(senderPhone, companyId);
+        lowerText === "hey" ||
+        lowerText === "welcome" ||
+        lowerText === "help";
 
+      if (isGreeting) {
+        clearWhatsAppSession(senderPhone);
+        setWhatsAppSession(senderPhone, { state: "MENU" });
+
+        const menuText = [
+          `👋 *Welcome to Sunrise Media ERP*`,
+          `Hello *${user.name}*, please choose an option:`,
+          ``,
+          `1. 📂 Select a project`,
+          `2. 📸 Upload an installation photo`,
+          `3. 📄 Upload a delivery challan (DC) + Signed WCC proof`,
+          `4. 🚚 Upload a transportation photo`,
+          ``,
+          `👉 *Reply with 1, 2, 3, or 4*.`,
+        ].join("\n");
+
+        await this.sendTextMessage(senderPhone, menuText, { companyId, userId: user.id });
+        return { status: "processed", action: "menu_presented" };
+      }
+
+      // Helper function to render project list
+      const formatProjectList = (projs: typeof assigned) =>
+        projs
+          .map((p, idx) => `*${idx + 1}.* 🔘 ${p.estimateNumber} — ${p.subject || p.title} (${p.storeSummary || p.storeName || "Site"})`)
+          .join("\n");
+
+      // C. SELECT A PROJECT: Reply 1 from MENU or explicit "projects" command
+      if (
+        (session.state === "MENU" && trimmedText === "1") ||
+        lowerText === "projects" ||
+        lowerText === "select a project" ||
+        lowerText === "select project"
+      ) {
         if (!assigned.length) {
           await this.sendTextMessage(
             senderPhone,
-            `👋 Welcome back, *${user.name}*!\n\n📋 You currently have *no active projects assigned*. Please contact your ERP supervisor to assign projects to you.`,
+            `👋 Welcome, *${user.name}*!\n\n📋 You currently have *no active projects assigned*. Please contact your ERP supervisor to assign projects to you.`,
             { companyId, userId: user.id }
           );
           return { status: "processed", action: "projects_empty" };
         }
 
-        const projectLines = assigned.map((p, idx) => `*${idx + 1}.* 🔘 ${p.estimateNumber}\n    🏢 ${p.clientName || "Sunrise Client"} — ${p.storeName || p.title}`);
-
-        const menuText = [
-          `👋 Welcome back, *${user.name}*!`,
-          ``,
+        setWhatsAppSession(senderPhone, { state: "AWAITING_PROJECT_SELECTION" });
+        const listMsg = [
           `📋 *Your Assigned Projects:*`,
-          ...projectLines,
+          formatProjectList(assigned),
           ``,
-          `👉 *Reply with the project number* (e.g. *1*) to select a project and upload evidence.`,
+          `👉 *Reply with the project number* (e.g. *1*) to select your project.`,
         ].join("\n");
 
-        await this.sendTextMessage(senderPhone, menuText, { companyId, userId: user.id });
+        await this.sendTextMessage(senderPhone, listMsg, { companyId, userId: user.id });
         return { status: "processed", action: "projects_listed" };
       }
 
-      // C. NUMBER SELECTION WHEN CHOOSING A PROJECT
-      const assigned = await this.getAssignedProjects(senderPhone, companyId);
-      const numericChoice = parseInt(trimmedText, 10);
+      // D. CATEGORY FIRST FROM MENU: Reply 2, 3, or 4
+      if (session.state === "MENU" && ["2", "3", "4"].includes(trimmedText)) {
+        const catChosen: "photo" | "signed_dc" | "transport_receipt" =
+          trimmedText === "2" ? "photo" : trimmedText === "3" ? "signed_dc" : "transport_receipt";
+        const catLabel =
+          catChosen === "signed_dc"
+            ? "Delivery Challan (DC) + Signed WCC proof"
+            : catChosen === "transport_receipt"
+            ? "Transportation Photo"
+            : "Installation Photo";
 
-      if (session.state === "IDLE" && !isNaN(numericChoice) && numericChoice >= 1 && numericChoice <= assigned.length) {
+        if (!assigned.length) {
+          await this.sendTextMessage(
+            senderPhone,
+            `📋 You currently have *no active projects assigned*. Please contact your ERP supervisor.`,
+            { companyId, userId: user.id }
+          );
+          return { status: "processed", action: "projects_empty" };
+        }
+
+        if (assigned.length === 1) {
+          // Exactly 1 project assigned: safe auto-select!
+          const single = assigned[0];
+          setWhatsAppSession(senderPhone, {
+            selectedEstimateId: single.estimateId,
+            uploadType: catChosen,
+            pendingUploadType: undefined,
+            state: "UPLOADING",
+          });
+
+          await this.sendTextMessage(
+            senderPhone,
+            `✅ *Project Selected:* ${single.estimateNumber} — ${single.subject || single.title}\n📂 *Category:* ${catLabel}\n\nPlease send your photos or documents now!\nSend *menu* anytime to change options.`,
+            { companyId, userId: user.id }
+          );
+          return { status: "processed", action: "category_autoselected_single_project" };
+        }
+
+        // Multiple projects: prompt which project
+        setWhatsAppSession(senderPhone, {
+          pendingUploadType: catChosen,
+          state: "AWAITING_PROJECT_SELECTION",
+        });
+
+        await this.sendTextMessage(
+          senderPhone,
+          `⚠️ *Multiple Projects Assigned*\nYou chose *${catLabel}*. Please select which project this upload belongs to:\n\n${formatProjectList(assigned)}\n\n👉 Reply with the project number (e.g. *1*).`,
+          { companyId, userId: user.id }
+        );
+        return { status: "processed", action: "prompt_project_for_category" };
+      }
+
+      // E. NUMBER SELECTION WHEN IN AWAITING_PROJECT_SELECTION
+      const numericChoice = parseInt(trimmedText, 10);
+      if (
+        (session.state === "AWAITING_PROJECT_SELECTION" || session.state === "IDLE") &&
+        !isNaN(numericChoice) &&
+        numericChoice >= 1 &&
+        numericChoice <= assigned.length
+      ) {
         const selectedProject = assigned[numericChoice - 1];
+
+        if (session.pendingUploadType) {
+          const cat = session.pendingUploadType;
+          const catLabel =
+            cat === "signed_dc"
+              ? "Delivery Challan (DC) + Signed WCC proof"
+              : cat === "transport_receipt"
+              ? "Transportation Photo"
+              : "Installation Photo";
+
+          setWhatsAppSession(senderPhone, {
+            state: "UPLOADING",
+            selectedEstimateId: selectedProject.estimateId,
+            uploadType: cat,
+            pendingUploadType: undefined,
+          });
+
+          await this.sendTextMessage(
+            senderPhone,
+            `✅ *Project Selected:* ${selectedProject.estimateNumber}\n📂 *Category:* ${catLabel}\n\nPlease send your photos or documents now!\nSend *menu* anytime to return to options.`,
+            { companyId, userId: user.id }
+          );
+          return { status: "processed", action: "project_and_category_ready" };
+        }
+
+        // Project chosen first without category: prompt for the 3 categories
         setWhatsAppSession(senderPhone, {
           state: "PROJECT_SELECTED",
           selectedEstimateId: selectedProject.estimateId,
-          uploadType: "photo",
         });
 
         const categoryPrompt = [
-          `📁 *Project Selected: ${selectedProject.estimateNumber}*`,
-          `🏢 *Client:* ${selectedProject.clientName || "Sunrise Client"}`,
-          `📍 *Store/Site:* ${selectedProject.storeName || selectedProject.subject || "Site Execution"}`,
+          `📁 *Project Selected: ${selectedProject.estimateNumber}* — ${selectedProject.subject || selectedProject.title}`,
+          `📍 *Stores:* ${selectedProject.storeSummary || selectedProject.storeName || "Site Execution"}`,
           ``,
           `*Choose what you want to upload:*`,
-          `1. 📸 Installation Photos`,
-          `2. 📄 Delivery Challan (DC)`,
-          `3. 📝 WCC Document`,
-          `4. ✍️ Signed WCC Proof`,
-          `5. 📑 Other Documents`,
+          `1. 📸 Installation Photo`,
+          `2. 📄 Delivery Challan (DC) + Signed WCC proof`,
+          `3. 🚚 Transportation Photo`,
           ``,
-          `👉 *Reply with number (1-5)* or send your photo/document directly now!`,
-          `Send *projects* anytime to switch projects.`,
+          `👉 *Reply with number (1-3)* or send your photo/document directly now!`,
+          `Send *menu* anytime to return to options.`,
         ].join("\n");
 
         await this.sendTextMessage(senderPhone, categoryPrompt, { companyId, userId: user.id });
         return { status: "processed", action: "project_selected" };
       }
 
-      // D. CATEGORY SELECTION (1-5)
-      if (session.state === "PROJECT_SELECTED" && ["1", "2", "3", "4", "5"].includes(trimmedText)) {
-        const catMap: Record<string, { type: "photo" | "signed_challan" | "wcc" | "signed_wcc" | "extra"; label: string }> = {
-          "1": { type: "photo", label: "Installation Photos" },
-          "2": { type: "signed_challan", label: "Delivery Challan (DC)" },
-          "3": { type: "wcc", label: "WCC Document" },
-          "4": { type: "signed_wcc", label: "Signed WCC Proof" },
-          "5": { type: "extra", label: "Other Documents" },
+      // F. CATEGORY SELECTION (1-3) AFTER PROJECT WAS SELECTED
+      if (session.state === "PROJECT_SELECTED" && ["1", "2", "3"].includes(trimmedText)) {
+        const catMap: Record<string, { type: "photo" | "signed_dc" | "transport_receipt"; label: string }> = {
+          "1": { type: "photo", label: "Installation Photo" },
+          "2": { type: "signed_dc", label: "Delivery Challan (DC) + Signed WCC proof" },
+          "3": { type: "transport_receipt", label: "Transportation Photo" },
         };
         const selected = catMap[trimmedText];
         setWhatsAppSession(senderPhone, { uploadType: selected.type, state: "UPLOADING" });
 
         await this.sendTextMessage(
           senderPhone,
-          `✅ Category set to: *${selected.label}*\n\nPlease send your photos or documents now!\nSend *projects* anytime to switch projects.`,
+          `✅ Category set to: *${selected.label}*\n\nPlease send your photos or documents now!\nSend *menu* anytime to switch options.`,
           { companyId, userId: user.id }
         );
         return { status: "processed", action: "category_selected" };
       }
 
-      // E. MEDIA UPLOADS (Image or Document)
+      // G. MEDIA UPLOADS (Image or Document)
       const hasImage = Boolean(messageObj.imageMessage);
       const hasDoc = Boolean(messageObj.documentMessage);
 
       if (hasImage || hasDoc) {
-        if (!session.selectedEstimateId) {
-          await this.sendTextMessage(
-            senderPhone,
-            `⚠️ *No Project Selected*\nPlease send *projects* first to select which project you are uploading for.`,
-            { companyId, userId: user.id }
-          );
-          return { status: "processed", action: "upload_rejected_no_project" };
+        let targetEstimateId = session.selectedEstimateId;
+
+        // Auto-select if exactly 1 project assigned
+        if (!targetEstimateId) {
+          if (assigned.length === 1) {
+            targetEstimateId = assigned[0].estimateId;
+            setWhatsAppSession(senderPhone, { selectedEstimateId: targetEstimateId });
+          } else if (assigned.length > 1) {
+            setWhatsAppSession(senderPhone, { state: "AWAITING_PROJECT_SELECTION" });
+            await this.sendTextMessage(
+              senderPhone,
+              `⚠️ *Multiple Projects Assigned*\nPlease select which project this upload belongs to first:\n\n${formatProjectList(assigned)}\n\n👉 Reply with the project number (e.g. *1*).`,
+              { companyId, userId: user.id }
+            );
+            return { status: "processed", action: "upload_rejected_ambiguous_project" };
+          } else {
+            await this.sendTextMessage(
+              senderPhone,
+              `⚠️ *No Project Selected*\nPlease send *menu* to see available options.`,
+              { companyId, userId: user.id }
+            );
+            return { status: "processed", action: "upload_rejected_no_project" };
+          }
         }
 
-        const project = assigned.find((p) => p.estimateId === session.selectedEstimateId);
+        const project = assigned.find((p) => p.estimateId === targetEstimateId);
         if (!project) {
           clearWhatsAppSession(senderPhone);
           await this.sendTextMessage(
             senderPhone,
-            `⛔ *Assignment Revoked:* Your access to this project has ended. Send *projects* to view your current active projects.`,
+            `⛔ *Assignment Revoked:* Your access to this project has ended. Send *menu* to view your current active projects.`,
             { companyId, userId: user.id }
           );
           return { status: "processed", action: "upload_rejected_revoked" };
@@ -1040,8 +1184,27 @@ export class WhatsAppEvolutionService {
           return { status: "processed", action: "upload_error_estimate_missing" };
         }
 
-        // Determine category
-        const category = session.uploadType || (hasImage ? "photo" : "signed_challan");
+        // Caption normalization & 3-category mapping
+        const rawCaption = (messageObj.imageMessage?.caption || messageObj.documentMessage?.caption || "").trim();
+        const capUpper = rawCaption.toUpperCase();
+
+        let category: "photo" | "signed_dc" | "transport_receipt";
+        if (capUpper === "INSTALLATION" || capUpper === "INSTALLATION PHOTO") {
+          category = "photo";
+        } else if (capUpper === "DC" || capUpper === "DELIVERY CHALLAN" || capUpper === "SIGNED WCC" || capUpper === "WCC") {
+          category = "signed_dc";
+        } else if (capUpper === "TRANSPORTATION" || capUpper === "TRANSPORT" || capUpper === "TRANSPORT PHOTO") {
+          category = "transport_receipt";
+        } else if (rawCaption === "") {
+          category = session.pendingUploadType || session.uploadType || "photo";
+        } else {
+          await this.sendTextMessage(
+            senderPhone,
+            `❓ *Unrecognized Caption:* "${rawCaption}"\n\nPlease select the correct upload category:\n1. 📸 Installation Photo\n2. 📄 Delivery Challan (DC) + Signed WCC proof\n3. 🚚 Transportation Photo\n\n👉 Reply with *1*, *2*, or *3*.`,
+            { companyId, userId: user.id }
+          );
+          return { status: "processed", action: "upload_rejected_ambiguous_caption" };
+        }
 
         // Download or save media file
         const uploadDir = path.resolve(process.cwd(), "uploads");
@@ -1081,12 +1244,21 @@ export class WhatsAppEvolutionService {
           }
         }
 
+        // Query existing DC if any
+        const [existingDc] = await db
+          .select()
+          .from(deliveryChallans)
+          .where(eq(deliveryChallans.estimateId, estimate.id))
+          .orderBy(desc(deliveryChallans.id))
+          .limit(1);
+
         // Link into executionDocuments
         await db.insert(executionDocuments).values({
           companyId: estimate.companyId || companyId,
           estimateId: estimate.id,
-          storeCode: project.storeName || null,
+          storeCode: project.storeSummary || project.storeName || null,
           documentType: category,
+          deliveryChallanId: existingDc ? existingDc.id : null,
           filePath: relativePath,
           originalFileName: messageObj.documentMessage?.fileName || uniqueFileName,
           mimeType: hasImage ? "image/jpeg" : "application/pdf",
@@ -1099,9 +1271,20 @@ export class WhatsAppEvolutionService {
             whatsappPhone: senderPhone,
             remoteJid,
             messageId,
-            caption: trimmedText || null,
+            caption: rawCaption || null,
           },
         });
+
+        // Update deliveryChallans if existing without falsely marking unsigned WCC complete
+        if (existingDc) {
+          if (category === "signed_dc") {
+            await db.update(deliveryChallans).set({ signedChallanPath: relativePath }).where(eq(deliveryChallans.id, existingDc.id));
+          } else if (category === "transport_receipt") {
+            await db.update(deliveryChallans).set({ transportReceiptPath: relativePath }).where(eq(deliveryChallans.id, existingDc.id));
+          } else if (category === "photo") {
+            await db.update(deliveryChallans).set({ photoPath: relativePath }).where(eq(deliveryChallans.id, existingDc.id));
+          }
+        }
 
         // Insert into botUploadInbox
         await db.insert(botUploadInbox).values({
@@ -1109,7 +1292,7 @@ export class WhatsAppEvolutionService {
           source: "whatsapp",
           senderId: senderPhone,
           senderName: user.name,
-          messageText: trimmedText || `WhatsApp ${category}`,
+          messageText: rawCaption || `WhatsApp ${category.replace("_", " ")}`,
           mediaUrl: relativePath,
           mediaLocalPath: localPath,
           mediaType: hasImage ? "photo" : "document",
@@ -1126,17 +1309,15 @@ export class WhatsAppEvolutionService {
 
         const categoryLabels: Record<string, string> = {
           photo: "Installation Photo",
-          signed_challan: "Delivery Challan (DC)",
-          wcc: "WCC Document",
-          signed_wcc: "Signed WCC Proof",
-          extra: "Other Document",
+          signed_dc: "Delivery Challan (DC) + Signed WCC proof",
+          transport_receipt: "Transportation Photo",
         };
 
         const label = categoryLabels[category] || category;
 
         await this.sendTextMessage(
           senderPhone,
-          `✅ *Upload Received!*\n\n📁 *Project:* ${estimate.estimateNumber}\n📂 *Category:* ${label}\n📎 *File:* ${messageObj.documentMessage?.fileName || uniqueFileName}\n\nYour evidence has been securely saved in Sunrise Media ERP Project Workspace.\n\nSend more anytime or send *projects* to switch projects.`,
+          `✅ *Upload Received!*\n\n📁 *Project:* ${estimate.estimateNumber}\n📂 *Category:* ${label}\n📎 *File:* ${messageObj.documentMessage?.fileName || uniqueFileName}\n\nYour evidence has been securely saved in Sunrise Media ERP Project Workspace.\n\nSend more anytime or send *menu* to return to options.`,
           { companyId, userId: user.id }
         );
 
@@ -1146,7 +1327,7 @@ export class WhatsAppEvolutionService {
       // Default fallback guidance
       await this.sendTextMessage(
         senderPhone,
-        `👋 *Sunrise Media ERP Assistant*\n\nSend *projects* to view your assigned projects and begin uploading site evidence.`,
+        `👋 *Sunrise Media ERP Assistant*\n\nSend *menu* to view your available options and assigned projects.`,
         { companyId, userId: user.id }
       );
       return { status: "processed", action: "help_guided" };

@@ -8,6 +8,7 @@ import {
   clients,
   stores,
   executionDocuments,
+  executionStores,
   botUploadInbox,
   webhookLogs,
   deliveryChallans,
@@ -38,9 +39,10 @@ const TELEGRAM_API = "https://api.telegram.org";
 
 // ── In-Memory Session & Deduplication Caches ──
 export interface TelegramUserSession {
-  state: "IDLE" | "AWAITING_CONTACT" | "PROJECT_SELECTED" | "UPLOADING";
+  state: "IDLE" | "MENU" | "AWAITING_CONTACT" | "PROJECT_SELECTED" | "AWAITING_PROJECT_SELECTION" | "UPLOADING";
   selectedEstimateId?: number;
-  uploadType?: "photo" | "dc" | "extra";
+  uploadType?: "photo" | "signed_dc" | "transport_receipt" | "dc" | "extra";
+  pendingUploadType?: "photo" | "signed_dc" | "transport_receipt";
   lastInteraction: number;
 }
 
@@ -507,6 +509,9 @@ export const getUserAssignedProjects = async (chatId: string) => {
     subject: string;
     clientName: string;
     storeName: string;
+    storeCount: number;
+    storeNames: string[];
+    storeSummary: string;
   }> = [];
 
   for (const estId of estimateIds) {
@@ -519,10 +524,23 @@ export const getUserAssignedProjects = async (chatId: string) => {
       const [c] = await db.select().from(clients).where(eq(clients.id, est.clientId)).limit(1);
       if (c) clientName = c.name;
     }
-    let storeName = "";
-    if (est.storeId) {
+
+    let storeNames: string[] = [];
+    const execStores = await db.select().from(executionStores).where(eq(executionStores.estimateId, est.id));
+    if (execStores.length > 0) {
+      storeNames = execStores.map((s) => s.storeName || s.storeCode || "").filter(Boolean);
+    }
+    if (storeNames.length === 0 && est.storeId) {
       const [s] = await db.select().from(stores).where(eq(stores.id, est.storeId)).limit(1);
-      if (s) storeName = s.name || s.storeCode || "";
+      if (s) storeNames = [s.name || s.storeCode || "Store"];
+    }
+
+    const storeCount = storeNames.length;
+    let storeSummary = "Main Project";
+    if (storeCount === 1) {
+      storeSummary = `${storeNames[0]} — 1 store`;
+    } else if (storeCount > 1) {
+      storeSummary = `${storeNames.slice(0, 3).join(", ")}${storeCount > 3 ? "..." : ""} — ${storeCount} stores`;
     }
 
     assignedList.push({
@@ -532,7 +550,10 @@ export const getUserAssignedProjects = async (chatId: string) => {
       title: est.title,
       subject: est.subject || "",
       clientName,
-      storeName,
+      storeName: storeNames[0] || "",
+      storeCount,
+      storeNames,
+      storeSummary,
     });
   }
   return assignedList;
@@ -800,7 +821,121 @@ export const handleTelegramWebhook = async (payload: any, uploadDir: string): Pr
       return { handled: true, action: "admin_verified" };
     }
 
-    // C. User Project Selection: proj:<estimateId>
+    // C. Menu Actions: menu:projects, menu:cat:photo, menu:cat:dc, menu:cat:transport
+    if (data === "menu:projects") {
+      const assigned = await getUserAssignedProjects(fromId);
+      if (!assigned.length) {
+        await editMessageText(
+          botToken,
+          fromId,
+          cb.message?.message_id,
+          "📋 You have no active projects assigned. Contact your ERP administrator to assign projects to you."
+        );
+        await answerCallbackQuery(botToken, cbId);
+        return { handled: true, action: "no_projects" };
+      }
+
+      const buttons = assigned.map((p) => [
+        {
+          text: `🔘 ${p.estimateNumber} — ${p.subject || p.title} (${p.storeSummary || p.storeName || "Site"})`,
+          callback_data: `proj:${p.estimateId}`,
+        },
+      ]);
+
+      await editMessageText(
+        botToken,
+        fromId,
+        cb.message?.message_id,
+        "📋 *Your Assigned Projects*\n\nSelect a project below to proceed:",
+        {
+          parse_mode: "Markdown",
+          reply_markup: { inline_keyboard: buttons },
+        }
+      );
+      await answerCallbackQuery(botToken, cbId);
+      return { handled: true, action: "menu_projects_listed" };
+    }
+
+    if (data.startsWith("menu:cat:")) {
+      const cat = data.replace("menu:cat:", "") as "photo" | "dc" | "transport";
+      const catType = cat === "dc" ? "signed_dc" : cat === "transport" ? "transport_receipt" : "photo";
+      const catLabel =
+        cat === "dc"
+          ? "Delivery Challan (DC) + Signed WCC proof"
+          : cat === "transport"
+          ? "Transportation Photo"
+          : "Installation Photo";
+
+      const assigned = await getUserAssignedProjects(fromId);
+      if (!assigned.length) {
+        await editMessageText(
+          botToken,
+          fromId,
+          cb.message?.message_id,
+          "📋 You have no active projects assigned. Contact your ERP administrator to assign projects to you."
+        );
+        await answerCallbackQuery(botToken, cbId);
+        return { handled: true, action: "no_projects" };
+      }
+
+      if (assigned.length === 1) {
+        // Exactly one project assigned -> safe auto-select
+        const singleProj = assigned[0];
+        setUserSession(fromId, {
+          state: "UPLOADING",
+          selectedEstimateId: singleProj.estimateId,
+          uploadType: catType,
+          pendingUploadType: undefined,
+        });
+
+        await editMessageText(
+          botToken,
+          fromId,
+          cb.message?.message_id,
+          `📸 *Ready for ${catLabel}*\nProject: *${singleProj.estimateNumber}* (${singleProj.subject || singleProj.title})\n\nPlease send your photo(s) or document now.`,
+          {
+            parse_mode: "Markdown",
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: "🏁 Finish Upload", callback_data: "nav:finish" }],
+                [{ text: "🔙 Switch Project", callback_data: "menu:projects" }],
+                [{ text: "❌ Cancel", callback_data: "nav:cancel" }],
+              ],
+            },
+          }
+        );
+        await answerCallbackQuery(botToken, cbId);
+        return { handled: true, action: "category_single_project_auto_selected" };
+      }
+
+      // Multiple projects assigned -> ask which project
+      setUserSession(fromId, {
+        state: "AWAITING_PROJECT_SELECTION",
+        pendingUploadType: catType,
+      });
+
+      const buttons = assigned.map((p) => [
+        {
+          text: `🔘 ${p.estimateNumber} — ${p.subject || p.title} (${p.storeSummary || p.storeName || "Site"})`,
+          callback_data: `proj:${p.estimateId}`,
+        },
+      ]);
+
+      await editMessageText(
+        botToken,
+        fromId,
+        cb.message?.message_id,
+        `📸 You chose *${catLabel}*.\n\nWhich project does this upload belong to?\nSelect below:`,
+        {
+          parse_mode: "Markdown",
+          reply_markup: { inline_keyboard: buttons },
+        }
+      );
+      await answerCallbackQuery(botToken, cbId);
+      return { handled: true, action: "category_ask_project" };
+    }
+
+    // D. User Project Selection: proj:<estimateId>
     if (data.startsWith("proj:")) {
       const estimateId = parseInt(data.split(":")[1], 10);
       const assigned = await getUserAssignedProjects(fromId);
@@ -811,6 +946,46 @@ export const handleTelegramWebhook = async (payload: any, uploadDir: string): Pr
         return { handled: true, action: "project_not_assigned" };
       }
 
+      const session = getUserSession(fromId);
+
+      // If user selected category first, proceed directly to upload
+      if (session.pendingUploadType) {
+        const catType = session.pendingUploadType;
+        const catLabel =
+          catType === "signed_dc"
+            ? "Delivery Challan (DC) + Signed WCC proof"
+            : catType === "transport_receipt"
+            ? "Transportation Photo"
+            : "Installation Photo";
+
+        setUserSession(fromId, {
+          state: "UPLOADING",
+          selectedEstimateId: estimateId,
+          uploadType: catType,
+          pendingUploadType: undefined,
+        });
+
+        await editMessageText(
+          botToken,
+          fromId,
+          cb.message?.message_id,
+          `📸 *Ready for ${catLabel}*\nProject: *${project.estimateNumber}* (${project.subject || project.title})\n\nPlease send your photo(s) or document now.`,
+          {
+            parse_mode: "Markdown",
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: "🏁 Finish Upload", callback_data: "nav:finish" }],
+                [{ text: "🔙 Switch Project", callback_data: "menu:projects" }],
+                [{ text: "❌ Cancel", callback_data: "nav:cancel" }],
+              ],
+            },
+          }
+        );
+        await answerCallbackQuery(botToken, cbId);
+        return { handled: true, action: "project_selected_for_pending_category" };
+      }
+
+      // Otherwise, project selected first -> ask which of the 3 categories
       setUserSession(fromId, { state: "PROJECT_SELECTED", selectedEstimateId: estimateId });
 
       const msg = [
@@ -825,10 +1000,10 @@ export const handleTelegramWebhook = async (payload: any, uploadDir: string): Pr
         parse_mode: "Markdown",
         reply_markup: {
           inline_keyboard: [
-            [{ text: "📸 Installation Photos", callback_data: `up:photo:${estimateId}` }],
-            [{ text: "📄 Delivery Challan (DC)", callback_data: `up:dc:${estimateId}` }],
-            [{ text: "📑 Other Documents", callback_data: `up:extra:${estimateId}` }],
-            [{ text: "🔙 Switch Project", callback_data: "nav:projects" }],
+            [{ text: "📸 1. Installation Photo", callback_data: `up:photo:${estimateId}` }],
+            [{ text: "📄 2. Delivery Challan (DC) + Signed WCC proof", callback_data: `up:dc:${estimateId}` }],
+            [{ text: "🚚 3. Transportation Photo", callback_data: `up:transport:${estimateId}` }],
+            [{ text: "🔙 Switch Project", callback_data: "menu:projects" }],
           ],
         },
       });
@@ -836,10 +1011,10 @@ export const handleTelegramWebhook = async (payload: any, uploadDir: string): Pr
       return { handled: true, action: "project_selected" };
     }
 
-    // D. User Category Action Selection: up:<type>:<estimateId>
+    // E. User Category Action Selection: up:<type>:<estimateId>
     if (data.startsWith("up:")) {
       const parts = data.split(":");
-      const uploadType = parts[1] as "photo" | "dc" | "extra";
+      const uploadTypeRaw = parts[1];
       const estimateId = parseInt(parts[2], 10);
 
       const assigned = await getUserAssignedProjects(fromId);
@@ -849,9 +1024,18 @@ export const handleTelegramWebhook = async (payload: any, uploadDir: string): Pr
         return { handled: true, action: "project_assignment_invalid" };
       }
 
-      setUserSession(fromId, { state: "UPLOADING", selectedEstimateId: estimateId, uploadType });
+      const catType: "photo" | "signed_dc" | "transport_receipt" =
+        uploadTypeRaw === "dc" ? "signed_dc" : uploadTypeRaw === "transport" ? "transport_receipt" : "photo";
 
-      const typeLabel = uploadType === "photo" ? "Installation Photos" : uploadType === "dc" ? "Delivery Challan (DC)" : "Documents";
+      setUserSession(fromId, { state: "UPLOADING", selectedEstimateId: estimateId, uploadType: catType });
+
+      const typeLabel =
+        catType === "signed_dc"
+          ? "Delivery Challan (DC) + Signed WCC proof"
+          : catType === "transport_receipt"
+          ? "Transportation Photo"
+          : "Installation Photo";
+
       const prompt = [
         `📸 *Ready for ${typeLabel}*`,
         `Project: *${project.estimateNumber}*`,
@@ -875,7 +1059,7 @@ export const handleTelegramWebhook = async (payload: any, uploadDir: string): Pr
       return { handled: true, action: "upload_category_selected" };
     }
 
-    // E. Navigation & Control Callbacks
+    // F. Navigation & Control Callbacks
     if (data === "nav:projects") {
       const assigned = await getUserAssignedProjects(fromId);
       if (!assigned.length) {
@@ -891,7 +1075,7 @@ export const handleTelegramWebhook = async (payload: any, uploadDir: string): Pr
 
       const buttons = assigned.map((p) => [
         {
-          text: `🔘 ${p.estimateNumber} — ${p.clientName || p.title}`,
+          text: `🔘 ${p.estimateNumber} — ${p.subject || p.title} (${p.storeSummary || p.storeName || "Site"})`,
           callback_data: `proj:${p.estimateId}`,
         },
       ]);
@@ -917,8 +1101,8 @@ export const handleTelegramWebhook = async (payload: any, uploadDir: string): Pr
         fromId,
         cb.message?.message_id,
         data === "nav:finish"
-          ? "✅ *Upload Session Completed.*\n\nThank you for uploading project evidence. Send /projects anytime to select another project."
-          : "❌ *Upload Cancelled.*\n\nSend /projects anytime to select an assigned project.",
+          ? "✅ *Upload Session Completed.*\n\nThank you for uploading project evidence. Send /start or /projects anytime to select another project."
+          : "❌ *Upload Cancelled.*\n\nSend /start or /projects anytime to select an assigned project.",
         { parse_mode: "Markdown" }
       );
       await answerCallbackQuery(botToken, cbId);
@@ -1152,33 +1336,26 @@ export const handleTelegramWebhook = async (payload: any, uploadDir: string): Pr
 
     if (user && user.isActive) {
       const assigned = await getUserAssignedProjects(chatId);
-      if (!assigned.length) {
-        await sendTelegramMessage(
-          botToken,
-          chatId,
-          `👋 Welcome back, *${user.name}*!\n\n📋 You currently have *no active projects assigned*. Please contact your ERP administrator to assign projects to you.`,
-          { parse_mode: "Markdown", reply_markup: { remove_keyboard: true } }
-        );
-        return { handled: true, action: "start_approved_no_projects" };
-      }
 
-      const buttons = assigned.map((p) => [
-        {
-          text: `🔘 ${p.estimateNumber} — ${p.clientName || p.title}`,
-          callback_data: `proj:${p.estimateId}`,
-        },
-      ]);
+      const welcomeMenuButtons = [
+        [{ text: "1. 📁 Select a project", callback_data: "menu:projects" }],
+        [{ text: "2. 📸 Upload an installation photo", callback_data: "menu:cat:photo" }],
+        [{ text: "3. 📄 Upload a delivery challan (DC)", callback_data: "menu:cat:dc" }],
+        [{ text: "4. 🚚 Upload a transportation photo", callback_data: "menu:cat:transport" }],
+      ];
+
+      setUserSession(chatId, { state: "MENU" });
 
       await sendTelegramMessage(
         botToken,
         chatId,
-        `👋 Welcome back, *${user.name}*!\n\n📋 *Your Assigned Projects:*\nSelect a project below to upload installation photos or delivery challans:`,
+        `👋 *Welcome to Sunrise Media ERP, ${user.name}!*\n\nPlease choose an option below:\n1. 📁 Select a project\n2. 📸 Upload an installation photo\n3. 📄 Upload a delivery challan (DC)\n4. 🚚 Upload a transportation photo\n\nTap an option or reply with *1*, *2*, *3*, or *4*.`,
         {
           parse_mode: "Markdown",
-          reply_markup: { inline_keyboard: buttons },
+          reply_markup: { inline_keyboard: welcomeMenuButtons },
         }
       );
-      return { handled: true, action: "start_approved_projects_listed" };
+      return { handled: true, action: "welcome_menu_displayed" };
     }
 
     // 2. Check if pending request exists
@@ -1213,7 +1390,125 @@ export const handleTelegramWebhook = async (payload: any, uploadDir: string): Pr
     return { handled: true, action: "start_prompt_contact" };
   }
 
-  // C. /projects Command
+  // C. General Greetings (hi, hello, menu, etc.) for approved users
+  const lowerText = text.toLowerCase();
+  if (lowerText === "hi" || lowerText === "hello" || lowerText === "menu" || lowerText === "/menu") {
+    const [user] = await db.select().from(users).where(eq(users.telegramChatId, chatId)).limit(1);
+    if (user && user.isActive) {
+      setUserSession(chatId, { state: "MENU" });
+      const welcomeMenuButtons = [
+        [{ text: "1. 📁 Select a project", callback_data: "menu:projects" }],
+        [{ text: "2. 📸 Upload an installation photo", callback_data: "menu:cat:photo" }],
+        [{ text: "3. 📄 Upload a delivery challan (DC)", callback_data: "menu:cat:dc" }],
+        [{ text: "4. 🚚 Upload a transportation photo", callback_data: "menu:cat:transport" }],
+      ];
+
+      await sendTelegramMessage(
+        botToken,
+        chatId,
+        `👋 *Welcome to Sunrise Media ERP, ${user.name}!*\n\nPlease choose an option below:\n1. 📁 Select a project\n2. 📸 Upload an installation photo\n3. 📄 Upload a delivery challan (DC)\n4. 🚚 Upload a transportation photo\n\nTap an option or reply with *1*, *2*, *3*, or *4*.`,
+        {
+          parse_mode: "Markdown",
+          reply_markup: { inline_keyboard: welcomeMenuButtons },
+        }
+      );
+      return { handled: true, action: "welcome_menu_displayed" };
+    }
+  }
+
+  // D. Numbered Replies (1, 2, 3, 4)
+  if (["1", "2", "3", "4"].includes(text)) {
+    const [user] = await db.select().from(users).where(eq(users.telegramChatId, chatId)).limit(1);
+    if (user && user.isActive) {
+      const assigned = await getUserAssignedProjects(chatId);
+
+      if (text === "1") {
+        // Select a project
+        if (!assigned.length) {
+          await sendTelegramMessage(
+            botToken,
+            chatId,
+            `📋 You currently have *no active projects assigned*. Please contact your ERP administrator.`
+          );
+          return { handled: true, action: "projects_none" };
+        }
+        const buttons = assigned.map((p) => [
+          {
+            text: `🔘 ${p.estimateNumber} — ${p.subject || p.title} (${p.storeSummary || p.storeName || "Site"})`,
+            callback_data: `proj:${p.estimateId}`,
+          },
+        ]);
+        await sendTelegramMessage(
+          botToken,
+          chatId,
+          `📋 *Your Assigned Projects*\n\nSelect a project below:`,
+          { parse_mode: "Markdown", reply_markup: { inline_keyboard: buttons } }
+        );
+        return { handled: true, action: "projects_listed" };
+      }
+
+      const catMap: Record<string, { type: "photo" | "signed_dc" | "transport_receipt"; label: string }> = {
+        "2": { type: "photo", label: "Installation Photo" },
+        "3": { type: "signed_dc", label: "Delivery Challan (DC) + Signed WCC proof" },
+        "4": { type: "transport_receipt", label: "Transportation Photo" },
+      };
+      const cat = catMap[text];
+      if (cat) {
+        if (!assigned.length) {
+          await sendTelegramMessage(
+            botToken,
+            chatId,
+            `📋 You currently have *no active projects assigned*. Please contact your ERP administrator.`
+          );
+          return { handled: true, action: "projects_none" };
+        }
+
+        if (assigned.length === 1) {
+          setUserSession(chatId, {
+            state: "UPLOADING",
+            selectedEstimateId: assigned[0].estimateId,
+            uploadType: cat.type,
+            pendingUploadType: undefined,
+          });
+          await sendTelegramMessage(
+            botToken,
+            chatId,
+            `📸 *Ready for ${cat.label}*\nProject: *${assigned[0].estimateNumber}* (${assigned[0].subject || assigned[0].title})\n\nPlease send your photo(s) or document now.`,
+            {
+              parse_mode: "Markdown",
+              reply_markup: {
+                inline_keyboard: [
+                  [{ text: "🏁 Finish Upload", callback_data: "nav:finish" }],
+                  [{ text: "🔙 Switch Project", callback_data: "menu:projects" }],
+                ],
+              },
+            }
+          );
+          return { handled: true, action: "category_single_project_auto_selected" };
+        }
+
+        setUserSession(chatId, {
+          state: "AWAITING_PROJECT_SELECTION",
+          pendingUploadType: cat.type,
+        });
+        const buttons = assigned.map((p) => [
+          {
+            text: `🔘 ${p.estimateNumber} — ${p.subject || p.title} (${p.storeSummary || p.storeName || "Site"})`,
+            callback_data: `proj:${p.estimateId}`,
+          },
+        ]);
+        await sendTelegramMessage(
+          botToken,
+          chatId,
+          `📸 You chose *${cat.label}*.\n\nWhich project does this upload belong to?\nSelect below:`,
+          { parse_mode: "Markdown", reply_markup: { inline_keyboard: buttons } }
+        );
+        return { handled: true, action: "category_ask_project" };
+      }
+    }
+  }
+
+  // E. /projects Command
   if (text.startsWith("/projects")) {
     const [user] = await db.select().from(users).where(eq(users.telegramChatId, chatId)).limit(1);
     if (!user || !user.isActive) {
@@ -1237,7 +1532,7 @@ export const handleTelegramWebhook = async (payload: any, uploadDir: string): Pr
 
     const buttons = assigned.map((p) => [
       {
-        text: `🔘 ${p.estimateNumber} — ${p.clientName || p.title}`,
+        text: `🔘 ${p.estimateNumber} — ${p.subject || p.title} (${p.storeSummary || p.storeName || "Site"})`,
         callback_data: `proj:${p.estimateId}`,
       },
     ]);
@@ -1254,7 +1549,7 @@ export const handleTelegramWebhook = async (payload: any, uploadDir: string): Pr
     return { handled: true, action: "projects_listed" };
   }
 
-  // D. Photo and Document Uploads
+  // F. Photo and Document Uploads
   const photo = msg.photo ? msg.photo[msg.photo.length - 1] : null;
   const doc = msg.document;
 
@@ -1270,20 +1565,41 @@ export const handleTelegramWebhook = async (payload: any, uploadDir: string): Pr
       return { handled: true, action: "upload_rejected_unapproved" };
     }
 
-    // 2. Verify active project session
+    // 2. Verify active project session or safe auto-select if single project assigned
     const session = getUserSession(chatId);
-    if (!session.selectedEstimateId) {
-      await sendTelegramMessage(
-        botToken,
-        chatId,
-        `⚠️ *No Project Selected*\nPlease send /projects first to choose which project you are uploading for.`
-      );
-      return { handled: true, action: "upload_rejected_no_project" };
+    const assigned = await getUserAssignedProjects(chatId);
+    let targetEstimateId = session.selectedEstimateId;
+
+    if (!targetEstimateId) {
+      if (assigned.length === 1) {
+        targetEstimateId = assigned[0].estimateId;
+        setUserSession(chatId, { selectedEstimateId: targetEstimateId });
+      } else if (assigned.length > 1) {
+        const buttons = assigned.map((p) => [
+          {
+            text: `🔘 ${p.estimateNumber} — ${p.subject || p.title} (${p.storeSummary || p.storeName || "Site"})`,
+            callback_data: `proj:${p.estimateId}`,
+          },
+        ]);
+        await sendTelegramMessage(
+          botToken,
+          chatId,
+          `⚠️ *Multiple Projects Assigned*\nPlease select which project this upload belongs to first:`,
+          { parse_mode: "Markdown", reply_markup: { inline_keyboard: buttons } }
+        );
+        return { handled: true, action: "upload_rejected_ambiguous_project" };
+      } else {
+        await sendTelegramMessage(
+          botToken,
+          chatId,
+          `📋 You currently have *no active projects assigned*. Please contact your ERP supervisor.`
+        );
+        return { handled: true, action: "upload_rejected_no_project" };
+      }
     }
 
     // 3. Verify server-side project assignment is still valid and unrevoked
-    const assigned = await getUserAssignedProjects(chatId);
-    const activeProject = assigned.find((p) => p.estimateId === session.selectedEstimateId);
+    const activeProject = assigned.find((p) => p.estimateId === targetEstimateId);
     if (!activeProject) {
       clearUserSession(chatId);
       await sendTelegramMessage(
@@ -1294,10 +1610,43 @@ export const handleTelegramWebhook = async (payload: any, uploadDir: string): Pr
       return { handled: true, action: "upload_rejected_revoked" };
     }
 
-    const [estimate] = await db.select().from(estimates).where(eq(estimates.id, session.selectedEstimateId)).limit(1);
+    const [estimate] = await db.select().from(estimates).where(eq(estimates.id, targetEstimateId)).limit(1);
     if (!estimate) {
       await sendTelegramMessage(botToken, chatId, `❌ Error: Target project record not found in database.`);
       return { handled: true, action: "upload_error_estimate_missing" };
+    }
+
+    // 4. Determine category from caption or session
+    const rawCaption = (msg.caption || "").trim();
+    const capUpper = rawCaption.toUpperCase();
+
+    let category: "photo" | "signed_dc" | "transport_receipt";
+    if (capUpper === "INSTALLATION" || capUpper === "INSTALLATION PHOTO") {
+      category = "photo";
+    } else if (capUpper === "DC" || capUpper === "DELIVERY CHALLAN" || capUpper === "SIGNED WCC" || capUpper === "WCC") {
+      category = "signed_dc";
+    } else if (capUpper === "TRANSPORTATION" || capUpper === "TRANSPORT" || capUpper === "TRANSPORT PHOTO") {
+      category = "transport_receipt";
+    } else if (rawCaption === "") {
+      const sType = session.pendingUploadType || session.uploadType;
+      category = (sType === "signed_dc" || (sType as any) === "dc") ? "signed_dc" : (sType === "transport_receipt" || (sType as any) === "transport") ? "transport_receipt" : "photo";
+    } else {
+      await sendTelegramMessage(
+        botToken,
+        chatId,
+        `❓ *Unrecognized Caption:* "${rawCaption}"\n\nPlease select the correct upload category:`,
+        {
+          parse_mode: "Markdown",
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "📸 1. Installation Photo", callback_data: `up:photo:${targetEstimateId}` }],
+              [{ text: "📄 2. Delivery Challan (DC) + Signed WCC proof", callback_data: `up:dc:${targetEstimateId}` }],
+              [{ text: "🚚 3. Transportation Photo", callback_data: `up:transport:${targetEstimateId}` }],
+            ],
+          },
+        }
+      );
+      return { handled: true, action: "upload_rejected_unknown_caption" };
     }
 
     const fileId = photo?.file_id || doc?.file_id;
@@ -1306,22 +1655,28 @@ export const handleTelegramWebhook = async (payload: any, uploadDir: string): Pr
       return { handled: true, action: "upload_error_no_file_id" };
     }
 
-    // 4. Download file from Telegram Bot API
+    // 5. Download file from Telegram Bot API
     const download = await downloadTelegramFile(botToken, fileId, uploadDir);
     if (!download.ok) {
       await sendTelegramMessage(botToken, chatId, `❌ Upload failed: ${download.error}. Please retry.`);
       return { handled: true, action: "upload_download_failed" };
     }
 
-    // 5. Determine upload category
-    const category = session.uploadType === "dc" ? "signed_dc" : session.uploadType === "extra" ? "extra" : "photo";
+    // 6. Query if Delivery Challan exists for this estimate
+    const [existingDc] = await db
+      .select()
+      .from(deliveryChallans)
+      .where(eq(deliveryChallans.estimateId, estimate.id))
+      .limit(1);
 
-    // 6. Link to executionDocuments
+    // 7. Link to executionDocuments with strict category
     const [execDoc] = await db
       .insert(executionDocuments)
       .values({
         companyId: estimate.companyId || 1,
         estimateId: estimate.id,
+        deliveryChallanId: existingDc?.id || null,
+        storeCode: activeProject.storeName || null,
         documentType: category,
         filePath: download.filePath,
         originalFileName: download.fileName,
@@ -1340,7 +1695,18 @@ export const handleTelegramWebhook = async (payload: any, uploadDir: string): Pr
       })
       .returning();
 
-    // 7. Insert into botUploadInbox
+    // 8. If DC exists, update corresponding field without falsely marking unsigned proofs complete
+    if (existingDc) {
+      if (category === "signed_dc") {
+        await db.update(deliveryChallans).set({ signedChallanPath: download.filePath }).where(eq(deliveryChallans.id, existingDc.id));
+      } else if (category === "transport_receipt") {
+        await db.update(deliveryChallans).set({ transportReceiptPath: download.filePath }).where(eq(deliveryChallans.id, existingDc.id));
+      } else if (category === "photo") {
+        await db.update(deliveryChallans).set({ photoPath: download.filePath }).where(eq(deliveryChallans.id, existingDc.id));
+      }
+    }
+
+    // 9. Insert into botUploadInbox
     await db.insert(botUploadInbox).values({
       companyId: estimate.companyId || 1,
       source: "telegram",
@@ -1360,31 +1726,37 @@ export const handleTelegramWebhook = async (payload: any, uploadDir: string): Pr
       rawPayload: payload,
     });
 
-    // 8. Handle media group deduplication / response
+    // 10. Handle media group deduplication / response
     const mediaGroupId = msg.media_group_id;
     if (mediaGroupId) {
       const existing = mediaGroupDebounce.get(mediaGroupId) || { count: 0 };
       existing.count += 1;
       mediaGroupDebounce.set(mediaGroupId, existing);
 
-      // Send single confirmation after 1.5 seconds if album
       if (!existing.timer) {
         existing.timer = setTimeout(async () => {
           mediaGroupDebounce.delete(mediaGroupId);
           await sendTelegramMessage(
             botToken,
             chatId,
-            `✅ Received *${existing.count}* ${category === "photo" ? "photos" : "documents"} for project *${estimate.estimateNumber}*.\n\nSend more or send /projects to switch projects.`,
+            `✅ Received *${existing.count}* files for project *${estimate.estimateNumber}*.\n\nSend more or send /projects to switch projects.`,
             { parse_mode: "Markdown" }
           );
         }, 1500);
         if (typeof existing.timer?.unref === "function") existing.timer.unref();
       }
     } else {
+      const label =
+        category === "signed_dc"
+          ? "Delivery Challan (DC) + Signed WCC proof"
+          : category === "transport_receipt"
+          ? "Transportation Photo"
+          : "Installation Photo";
+
       await sendTelegramMessage(
         botToken,
         chatId,
-        `✅ *Saved:* ${category === "photo" ? "Photo" : "Document"} uploaded and linked to project *${estimate.estimateNumber}*.\n\nSend more or send /projects to finish.`,
+        `✅ *Saved:* ${label} uploaded and linked to project *${estimate.estimateNumber}*.\n\nSend more or send /projects to finish.`,
         { parse_mode: "Markdown" }
       );
     }

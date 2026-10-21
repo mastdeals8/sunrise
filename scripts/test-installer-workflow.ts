@@ -245,7 +245,7 @@ async function runInstallerWorkflowTests() {
           imageMessage: {
             url: "https://example.com/fake-evidence.jpg",
             mimetype: "image/jpeg",
-            caption: "Front elevation acrylic board installed",
+            caption: "INSTALLATION",
           },
         },
         pushName: testName,

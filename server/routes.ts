@@ -6515,14 +6515,38 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // POST Single Assignment for BOTH Telegram and WhatsApp
+  // GET Eligible Ongoing Estimates for Project Assignment (Company Scoped)
+  app.get("/api/automation/installers/eligible-estimates", authenticateToken, requireRole(["admin", "manager"]), async (req: AuthRequest, res: Response) => {
+    try {
+      const companyId = req.companyId || 1;
+      const search = req.query.search as string | undefined;
+      const list = await installerService.listEligibleProjects(companyId, search);
+      res.json(list);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // POST Assignment (Single or Batch) for BOTH Telegram and WhatsApp
   app.post("/api/automation/installers/assign", authenticateToken, requireRole(["admin", "manager"]), async (req: AuthRequest, res: Response) => {
     try {
       const companyId = req.companyId || 1;
-      const { installerId, estimateId, allowedStoreCodes, allowedDocumentTypes } = req.body;
-      if (!installerId || !estimateId) {
-        return res.status(400).json({ message: "installerId and estimateId are required" });
+      const { installerId, estimateId, estimateIds, allowedStoreCodes, allowedDocumentTypes } = req.body;
+      if (!installerId || (!estimateId && (!Array.isArray(estimateIds) || estimateIds.length === 0))) {
+        return res.status(400).json({ message: "installerId and estimateId or estimateIds are required" });
       }
+
+      if (Array.isArray(estimateIds) && estimateIds.length > 0) {
+        const results = await installerService.batchAssignProjectsToInstaller(companyId, {
+          installerId: Number(installerId),
+          estimateIds: estimateIds.map(Number),
+          allowedStoreCodes,
+          allowedDocumentTypes,
+          createdBy: req.user?.id,
+        });
+        return res.status(201).json({ success: true, results });
+      }
+
       const assignment = await installerService.assignProjectToInstaller(companyId, {
         installerId: Number(installerId),
         estimateId: Number(estimateId),

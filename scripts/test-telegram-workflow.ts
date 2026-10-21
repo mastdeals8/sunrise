@@ -52,7 +52,7 @@ async function runTelegramWorkflowTests() {
 
   const testAdminChatId = `admin_${Date.now()}`;
   const testStaffChatId = `staff_${Date.now()}`;
-  const testStaffPhone = "+919876543210";
+  const testStaffPhone = `+91987${Date.now().toString().slice(-7)}`;
   const testStaffName = "Test Ramesh Installer";
 
   try {
@@ -267,7 +267,7 @@ async function runTelegramWorkflowTests() {
         message_id: 30,
         from: { id: 88888 },
         chat: { id: testStaffChatId, type: "private" },
-        caption: "Main fascia signage installed with backlights",
+        caption: "INSTALLATION",
         photo: [
           { file_id: "test_photo_low", width: 100, height: 100 },
           { file_id: "test_photo_high", width: 800, height: 800 },

@@ -25,6 +25,8 @@ import {
   ArrowUp,
   ArrowDown,
   Ban,
+  CheckSquare,
+  Square,
 } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
 import { supabase, isBoltMode } from "../lib/supabase";
@@ -111,10 +113,16 @@ export const UnifiedInstallerDirectory: React.FC<{ companyId?: number }> = ({ co
   // Assign Project Modal
   const [showAssignModal, setShowAssignModal] = useState(false);
   const [selectedInstaller, setSelectedInstaller] = useState<InstallerContact | null>(null);
-  const [selectedEstimateId, setSelectedEstimateId] = useState<number | "">("");
+  const [selectedEstimateIds, setSelectedEstimateIds] = useState<number[]>([]);
+  const [assignSearch, setAssignSearch] = useState("");
+  const [expandedStoreEstIds, setExpandedStoreEstIds] = useState<number[]>([]);
   const [storeCodesInput, setStoreCodesInput] = useState("");
   const [assigning, setAssigning] = useState(false);
   const [assignError, setAssignError] = useState<string | null>(null);
+  const [batchResults, setBatchResults] = useState<{
+    successful: Array<{ estimateId: number; estimateNumber: string }>;
+    failed: Array<{ estimateId: number; error: string }>;
+  } | null>(null);
 
   // Expanded projects view per installer
   const [expandedId, setExpandedId] = useState<number | null>(null);
@@ -208,31 +216,65 @@ export const UnifiedInstallerDirectory: React.FC<{ companyId?: number }> = ({ co
 
   const fetchEstimates = async () => {
     try {
-      if (isBoltMode) {
-        const { data } = await supabase
-          .from("estimates")
-          .select("id, estimate_number, title, subject")
-          .order("id", { ascending: false })
-          .limit(100);
-        if (data) {
-          setEstimates(
-            data.map((d: any) => ({
-              id: d.id,
-              estimateNumber: d.estimate_number,
-              title: d.title || d.subject || `Estimate #${d.id}`,
-            }))
-          );
+      if (!isBoltMode) {
+        const res = await fetch("/api/automation/installers/eligible-estimates", { headers });
+        if (res.ok) {
+          const data = await res.json();
+          setEstimates(data);
+          return;
         }
-        return;
       }
 
-      const res = await fetch("/api/operations/estimates", { headers });
-      if (res.ok) {
-        const data = await res.json();
-        setEstimates(data);
+      // Bolt mode / fallback direct query
+      const { data: estData } = await supabase
+        .from("estimates")
+        .select("id, estimate_number, title, subject, status, store_id, client_id, stores(name, store_code)")
+        .eq("company_id", companyId)
+        .not("status", "in", '("rejected","cancelled","completed","archived")')
+        .order("id", { ascending: false });
+
+      if (estData) {
+        const { data: storeRows } = await supabase
+          .from("execution_stores")
+          .select("estimate_id, store_name, store_code");
+
+        const byEst = new Map<number, string[]>();
+        (storeRows || []).forEach((r: any) => {
+          const list = byEst.get(r.estimate_id) || [];
+          list.push(r.store_name || r.store_code || "");
+          byEst.set(r.estimate_id, list);
+        });
+
+        const list = estData.map((d: any) => {
+          let storeNames = byEst.get(d.id) || [];
+          if (storeNames.length === 0 && d.stores) {
+            storeNames = [d.stores.name || d.stores.store_code || "Store"];
+          }
+          const storeCount = storeNames.length;
+          let storeSummary = "Main Project";
+          if (storeCount === 1) {
+            storeSummary = storeNames[0];
+          } else if (storeCount > 1) {
+            storeSummary = `${storeNames.slice(0, 3).join(", ")}${storeCount > 3 ? "..." : ""}`;
+          }
+          const label = `${d.estimate_number} — ${d.subject || d.title} (${storeSummary} — ${storeCount} store${storeCount === 1 ? "" : "s"})`;
+          return {
+            id: d.id,
+            estimateId: d.id,
+            estimateNumber: d.estimate_number,
+            title: d.title,
+            subject: d.subject || "",
+            storeNames,
+            storeCount,
+            storeSummary,
+            label,
+            status: d.status,
+          };
+        });
+        setEstimates(list);
       }
-    } catch {
-      // ignore
+    } catch (err) {
+      console.error("Failed to load eligible estimates", err);
     }
   };
 
@@ -338,57 +380,68 @@ export const UnifiedInstallerDirectory: React.FC<{ companyId?: number }> = ({ co
     }
 
     try {
-      if (isBoltMode) {
-        const payload: any = {
-          name: formName.trim(),
-          phone: formPhone.trim().startsWith("+") ? formPhone.trim() : `+91${cleanPhone.slice(-10)}`,
-          whatsapp_phone: formWhatsappPhone.trim()
-            ? formWhatsappPhone.trim().startsWith("+")
-              ? formWhatsappPhone.trim()
-              : `+91${formWhatsappPhone.replace(/\D/g, "").slice(-10)}`
-            : formPhone.trim().startsWith("+")
-            ? formPhone.trim()
-            : `+91${cleanPhone.slice(-10)}`,
-          role: formRole,
-          notes: formNotes.trim() || null,
-          is_active: formIsActive,
-        };
+      const normalizedPhone = formPhone.trim().startsWith("+") ? formPhone.trim() : `+91${cleanPhone.slice(-10)}`;
+      const normalizedWhatsapp = formWhatsappPhone.trim()
+        ? formWhatsappPhone.trim().startsWith("+")
+          ? formWhatsappPhone.trim()
+          : `+91${formWhatsappPhone.replace(/\D/g, "").slice(-10)}`
+        : normalizedPhone;
 
-        if (editingInstaller) {
-          const { error } = await supabase.from("users").update(payload).eq("id", editingInstaller.id);
-          if (error) throw new Error(error.message);
-        } else {
-          payload.username = `installer_${cleanPhone.slice(-10)}_${Math.random().toString(36).slice(2, 6)}`;
-          payload.email = `${payload.username}@sunrisemedia.local`;
-          payload.password = "installer_temp_pass";
-          const { error } = await supabase.from("users").insert(payload);
-          if (error) throw new Error(error.message);
+      const payload: any = {
+        id: editingInstaller ? editingInstaller.id : undefined,
+        company_id: companyId,
+        name: formName.trim(),
+        phone: normalizedPhone,
+        whatsapp_phone: normalizedWhatsapp,
+        role: formRole,
+        notes: formNotes.trim() || undefined,
+        is_active: formIsActive,
+      };
+
+      let saved = false;
+
+      // 1. Try Express backend endpoint first
+      if (!isBoltMode) {
+        try {
+          const res = await fetch("/api/automation/installers", {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              id: payload.id,
+              name: payload.name,
+              phone: payload.phone,
+              whatsappPhone: payload.whatsapp_phone,
+              role: payload.role,
+              notes: payload.notes,
+              isActive: payload.is_active,
+            }),
+          });
+          if (res.ok) {
+            saved = true;
+          } else {
+            const err = await res.json().catch(() => ({}));
+            if (err?.message && !err.message.includes("Failed to fetch")) {
+              throw new Error(err.message || "Failed to save installer");
+            }
+          }
+        } catch (fetchErr: any) {
+          if (!isBoltMode && fetchErr.message && !fetchErr.message.includes("Failed to fetch")) {
+            throw fetchErr;
+          }
         }
-
-        setShowAddModal(false);
-        showToast(editingInstaller ? "Installer updated successfully" : "New installer registered successfully");
-        await fetchInstallers();
-        return;
       }
 
-      // Express API mode
-      const res = await fetch("/api/automation/installers", {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          id: editingInstaller ? editingInstaller.id : undefined,
-          name: formName.trim(),
-          phone: formPhone.trim(),
-          whatsappPhone: formWhatsappPhone.trim() || undefined,
-          role: formRole,
-          notes: formNotes.trim() || undefined,
-          isActive: formIsActive,
-        }),
-      });
-
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.message || "Failed to save installer");
+      // 2. If not saved via backend, use secure admin_upsert_installer RPC (avoids users table permission denial!)
+      if (!saved) {
+        const { data: rpcRes, error: rpcErr } = await supabase.rpc("admin_upsert_installer", {
+          payload,
+        });
+        if (rpcErr) {
+          throw new Error(rpcErr.message);
+        }
+        if (rpcRes && !rpcRes.success) {
+          throw new Error(rpcRes.error || "Failed to save installer contact");
+        }
       }
 
       setShowAddModal(false);
@@ -430,10 +483,14 @@ export const UnifiedInstallerDirectory: React.FC<{ companyId?: number }> = ({ co
 
   const openAssignModal = (inst?: InstallerContact) => {
     setSelectedInstaller(inst || (installers[0] || null));
-    setSelectedEstimateId(estimates[0]?.id || "");
+    setSelectedEstimateIds([]);
+    setAssignSearch("");
+    setExpandedStoreEstIds([]);
     setStoreCodesInput("");
     setAssignError(null);
+    setBatchResults(null);
     setShowAssignModal(true);
+    fetchEstimates();
   };
 
   const handleSaveAssignment = async (e: React.FormEvent) => {
@@ -442,13 +499,14 @@ export const UnifiedInstallerDirectory: React.FC<{ companyId?: number }> = ({ co
       setAssignError("Please select an installer.");
       return;
     }
-    if (!selectedEstimateId) {
-      setAssignError("Please select a project/estimate.");
+    if (selectedEstimateIds.length === 0) {
+      setAssignError("Please select at least one project to assign.");
       return;
     }
 
     setAssigning(true);
     setAssignError(null);
+    setBatchResults(null);
 
     const storeCodes = storeCodesInput
       .split(/[,;\s]+/)
@@ -457,57 +515,90 @@ export const UnifiedInstallerDirectory: React.FC<{ companyId?: number }> = ({ co
 
     try {
       if (isBoltMode) {
-        const est = estimates.find((e) => e.id === Number(selectedEstimateId));
-        const tokenHash = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
-        const expiresAt = new Date(Date.now() + 45 * 24 * 60 * 60 * 1000).toISOString();
+        const successful: Array<{ estimateId: number; estimateNumber: string }> = [];
+        const failed: Array<{ estimateId: number; error: string }> = [];
 
-        const { error } = await supabase.from("field_access_links").insert({
-          estimate_id: Number(selectedEstimateId),
-          token_hash: tokenHash,
-          token_prefix: tokenHash.slice(0, 8),
-          channel: "dual", // Valid for both Telegram and WhatsApp!
-          recipient_name: selectedInstaller.name,
-          recipient_contact: selectedInstaller.phone || selectedInstaller.whatsappPhone || "",
-          allowed_store_codes: storeCodes.length > 0 ? storeCodes : null,
-          allowed_document_types: ["photo", "signed_challan", "wcc", "signed_wcc", "extra"],
-          expires_at: expiresAt,
-          metadata: {
-            userId: selectedInstaller.id,
-            companyId,
-            estimateNumber: est?.estimateNumber || `EST-${selectedEstimateId}`,
-            title: est?.title || `Project #${selectedEstimateId}`,
-            assignedVia: "unified_installer_directory",
-          },
-        });
+        for (const estId of selectedEstimateIds) {
+          try {
+            const est = estimates.find((e) => e.id === estId);
+            const tokenHash = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+            const expiresAt = new Date(Date.now() + 45 * 24 * 60 * 60 * 1000).toISOString();
 
-        if (error) throw new Error(error.message);
+            const { error } = await supabase.from("field_access_links").insert({
+              estimate_id: estId,
+              token_hash: tokenHash,
+              token_prefix: tokenHash.slice(0, 8),
+              channel: "dual",
+              recipient_name: selectedInstaller.name,
+              recipient_contact: selectedInstaller.phone || selectedInstaller.whatsappPhone || "",
+              allowed_store_codes: storeCodes.length > 0 ? storeCodes : null,
+              allowed_document_types: ["photo", "signed_challan", "wcc", "signed_wcc", "extra"],
+              expires_at: expiresAt,
+              metadata: {
+                userId: selectedInstaller.id,
+                companyId,
+                estimateNumber: est?.estimateNumber || `EST-${estId}`,
+                title: est?.title || `Project #${estId}`,
+                assignedVia: "unified_installer_directory",
+              },
+            });
 
-        setShowAssignModal(false);
-        showToast(`Assigned ${est?.estimateNumber || "Project"} to ${selectedInstaller.name} on both channels!`);
+            if (error) throw new Error(error.message);
+            successful.push({ estimateId: estId, estimateNumber: est?.estimateNumber || `EST-${estId}` });
+          } catch (err: any) {
+            failed.push({ estimateId: estId, error: err?.message || "Failed to assign" });
+          }
+        }
+
+        setBatchResults({ successful, failed });
         await fetchInstallers();
+        if (failed.length === 0) {
+          showToast(`Assigned ${successful.length} project(s) to ${selectedInstaller.name} on both channels!`);
+          setTimeout(() => {
+            setShowAssignModal(false);
+            setBatchResults(null);
+          }, 1500);
+        } else {
+          showToast(`Assigned ${successful.length} project(s), ${failed.length} failed`, false);
+        }
         return;
       }
 
-      // Express API
+      // Express API (supports batch assignment)
       const res = await fetch("/api/automation/installers/assign", {
         method: "POST",
         headers,
         body: JSON.stringify({
           installerId: selectedInstaller.id,
-          estimateId: Number(selectedEstimateId),
+          estimateIds: selectedEstimateIds,
           allowedStoreCodes: storeCodes.length > 0 ? storeCodes : undefined,
           allowedDocumentTypes: ["photo", "signed_challan", "wcc", "signed_wcc", "extra"],
         }),
       });
 
+      const data = await res.json();
       if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.message || "Failed to assign project");
+        throw new Error(data.message || "Failed to assign project(s)");
       }
 
-      setShowAssignModal(false);
-      showToast(`Assigned project to ${selectedInstaller.name} on both Telegram & WhatsApp!`);
-      await fetchInstallers();
+      if (data.results) {
+        const { successful, failed } = data.results;
+        setBatchResults({ successful, failed });
+        await fetchInstallers();
+        if (failed.length === 0) {
+          showToast(`Assigned ${successful.length} project(s) to ${selectedInstaller.name} on both channels!`);
+          setTimeout(() => {
+            setShowAssignModal(false);
+            setBatchResults(null);
+          }, 1500);
+        } else {
+          showToast(`Assigned ${successful.length} project(s), ${failed.length} failed`, false);
+        }
+      } else {
+        showToast(`Assigned project to ${selectedInstaller.name} on both Telegram & WhatsApp!`);
+        setShowAssignModal(false);
+        await fetchInstallers();
+      }
     } catch (err: any) {
       setAssignError(err.message || "Failed to save assignment");
     } finally {
@@ -1288,90 +1379,269 @@ export const UnifiedInstallerDirectory: React.FC<{ companyId?: number }> = ({ co
         </div>
       )}
 
-      {/* MODAL: One-Click Dual-Channel Project Assignment */}
+      {/* MODAL: One-Click Dual-Channel Multi-Project Assignment */}
       {showAssignModal && (
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6 space-y-4 border border-slate-200">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
-                <FolderKanban className="w-4 h-4 text-indigo-600" />
-                Assign Project (Dual-Channel)
-              </h3>
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full p-6 space-y-4 border border-slate-200 max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3 flex-shrink-0">
+              <div>
+                <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                  <FolderKanban className="w-4 h-4 text-indigo-600" />
+                  Assign Ongoing Projects (Dual-Channel)
+                </h3>
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  Browse and assign ongoing company projects to this installer for both Telegram & WhatsApp.
+                </p>
+              </div>
               <button
                 onClick={() => setShowAssignModal(false)}
-                className="text-slate-400 hover:text-slate-600 text-xs"
+                className="text-slate-400 hover:text-slate-600 text-sm p-1 rounded-lg hover:bg-slate-100 transition"
               >
                 ✕
               </button>
             </div>
 
             {assignError && (
-              <div className="p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs">
-                {assignError}
+              <div className="p-3 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-center gap-2 flex-shrink-0">
+                <AlertCircle className="w-4 h-4 text-rose-600 flex-shrink-0" />
+                <span>{assignError}</span>
               </div>
             )}
 
-            <form onSubmit={handleSaveAssignment} className="space-y-3 text-xs">
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Select Installer / Contractor *</label>
+            {batchResults && (
+              <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 text-xs space-y-1.5 flex-shrink-0">
+                {batchResults.successful.length > 0 && (
+                  <div className="text-emerald-700 font-medium flex items-center gap-1.5">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>Assigned {batchResults.successful.length} project(s): {batchResults.successful.map((s) => s.estimateNumber).join(", ")}</span>
+                  </div>
+                )}
+                {batchResults.failed.length > 0 && (
+                  <div className="text-rose-700 font-medium space-y-0.5">
+                    <div className="flex items-center gap-1.5">
+                      <XCircle className="w-3.5 h-3.5 text-rose-600" />
+                      <span>{batchResults.failed.length} project(s) failed:</span>
+                    </div>
+                    <ul className="list-disc pl-5 text-[11px] text-rose-600">
+                      {batchResults.failed.map((f) => (
+                        <li key={f.estimateId}>Project #{f.estimateId}: {f.error}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <form onSubmit={handleSaveAssignment} className="space-y-4 text-xs flex-1 overflow-hidden flex flex-col">
+              <div className="flex-shrink-0">
+                <label className="block font-semibold text-slate-700 mb-1">Installer / Contractor *</label>
                 <select
                   required
                   value={selectedInstaller?.id || ""}
                   onChange={(e) => {
                     const inst = installers.find((i) => i.id === Number(e.target.value));
                     setSelectedInstaller(inst || null);
+                    setSelectedEstimateIds([]);
                   }}
                   className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-800 font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 >
                   <option value="">-- Choose Installer --</option>
                   {installers.map((inst) => (
                     <option key={inst.id} value={inst.id}>
-                      {inst.name} ({normalizePhoneDisplay(inst.phone)})
+                      {inst.name} ({normalizePhoneDisplay(inst.phone)}) — {inst.role}
                     </option>
                   ))}
                 </select>
               </div>
 
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Select Estimate / Project *</label>
-                <select
-                  required
-                  value={selectedEstimateId}
-                  onChange={(e) => setSelectedEstimateId(Number(e.target.value))}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                >
-                  <option value="">-- Choose Project --</option>
-                  {estimates.map((est) => (
-                    <option key={est.id} value={est.id}>
-                      {est.estimateNumber} — {est.title}
-                    </option>
-                  ))}
-                </select>
+              {/* Projects Selector with Search, Select All, and Project Labels */}
+              <div className="flex-1 flex flex-col min-h-0 space-y-2">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <label className="font-semibold text-slate-700">
+                    Select Ongoing Projects *
+                    <span className="ml-2 font-normal text-slate-500">
+                      ({selectedEstimateIds.length} selected)
+                    </span>
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const alreadyAssigned = new Set((selectedInstaller?.assignedProjects || []).map((p) => p.estimateId));
+                        const q = assignSearch.trim().toLowerCase();
+                        const matching = estimates.filter((e) => {
+                          if (alreadyAssigned.has(e.id)) return false;
+                          if (!q) return true;
+                          return (
+                            (e.estimateNumber || "").toLowerCase().includes(q) ||
+                            (e.title || "").toLowerCase().includes(q) ||
+                            (e.subject || "").toLowerCase().includes(q) ||
+                            (e.label || "").toLowerCase().includes(q) ||
+                            (e.storeNames || []).some((sn: string) => sn.toLowerCase().includes(q))
+                          );
+                        });
+                        setSelectedEstimateIds(matching.map((e) => e.id));
+                      }}
+                      className="px-2.5 py-1 text-xs font-medium text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-md transition flex items-center gap-1"
+                    >
+                      <CheckSquare className="w-3.5 h-3.5" />
+                      Select All
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedEstimateIds([])}
+                      className="px-2.5 py-1 text-xs font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-md transition flex items-center gap-1"
+                    >
+                      <Square className="w-3.5 h-3.5" />
+                      Deselect All
+                    </button>
+                  </div>
+                </div>
+
+                {/* Search input */}
+                <div className="relative">
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
+                  <input
+                    type="text"
+                    placeholder="Search by estimate number, subject, title, store name..."
+                    value={assignSearch}
+                    onChange={(e) => setAssignSearch(e.target.value)}
+                    className="w-full pl-9 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500 text-xs"
+                  />
+                </div>
+
+                {/* Scrollable Project Checklist */}
+                <div className="flex-1 overflow-y-auto border border-slate-200 rounded-lg divide-y divide-slate-100 bg-slate-50/50 p-1">
+                  {(() => {
+                    const alreadyAssigned = new Set((selectedInstaller?.assignedProjects || []).map((p) => p.estimateId));
+                    const q = assignSearch.trim().toLowerCase();
+                    const filtered = estimates.filter((e) => {
+                      if (!q) return true;
+                      return (
+                        (e.estimateNumber || "").toLowerCase().includes(q) ||
+                        (e.title || "").toLowerCase().includes(q) ||
+                        (e.subject || "").toLowerCase().includes(q) ||
+                        (e.label || "").toLowerCase().includes(q) ||
+                        (e.storeNames || []).some((sn: string) => sn.toLowerCase().includes(q))
+                      );
+                    });
+
+                    if (filtered.length === 0) {
+                      return (
+                        <div className="p-6 text-center text-slate-400 text-xs">
+                          {assignSearch ? "No eligible ongoing projects match your search." : "No eligible ongoing projects found in this company."}
+                        </div>
+                      );
+                    }
+
+                    return filtered.map((est) => {
+                      const isAssigned = alreadyAssigned.has(est.id);
+                      const isSelected = selectedEstimateIds.includes(est.id);
+                      const isStoresExpanded = expandedStoreEstIds.includes(est.id);
+
+                      return (
+                        <div
+                          key={est.id}
+                          className={`p-2.5 rounded-md transition ${
+                            isAssigned
+                              ? "bg-slate-100/70 opacity-75 cursor-not-allowed"
+                              : isSelected
+                              ? "bg-indigo-50/70 border border-indigo-200"
+                              : "hover:bg-white"
+                          }`}
+                        >
+                          <div className="flex items-start gap-2.5">
+                            <input
+                              type="checkbox"
+                              disabled={isAssigned}
+                              checked={isAssigned || isSelected}
+                              onChange={(e) => {
+                                if (isAssigned) return;
+                                if (e.target.checked) {
+                                  setSelectedEstimateIds([...selectedEstimateIds, est.id]);
+                                } else {
+                                  setSelectedEstimateIds(selectedEstimateIds.filter((id) => id !== est.id));
+                                }
+                              }}
+                              className="mt-0.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer disabled:cursor-not-allowed"
+                            />
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="font-bold text-slate-900">{est.estimateNumber}</span>
+                                <span className="text-slate-400">—</span>
+                                <span className="font-medium text-slate-700">{est.subject || est.title}</span>
+                                {isAssigned ? (
+                                  <span className="text-[10px] bg-slate-200 text-slate-700 font-semibold px-2 py-0.5 rounded-full">
+                                    Already Assigned
+                                  </span>
+                                ) : (
+                                  <span className="text-[10px] bg-indigo-100 text-indigo-700 font-semibold px-2 py-0.5 rounded-full">
+                                    {est.storeCount || 1} {((est.storeCount || 1) === 1 ? "store" : "stores")}
+                                  </span>
+                                )}
+                              </div>
+
+                              <div className="text-[11px] text-slate-500 mt-0.5 flex items-center gap-2">
+                                <span>📍 {est.storeSummary || est.storeName || "Main Project Site"}</span>
+                                {est.storeNames && est.storeNames.length > 1 && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      if (isStoresExpanded) {
+                                        setExpandedStoreEstIds(expandedStoreEstIds.filter((id) => id !== est.id));
+                                      } else {
+                                        setExpandedStoreEstIds([...expandedStoreEstIds, est.id]);
+                                      }
+                                    }}
+                                    className="text-indigo-600 hover:text-indigo-800 underline text-[10px] font-medium"
+                                  >
+                                    {isStoresExpanded ? "Hide store list" : `View all ${est.storeNames.length} stores`}
+                                  </button>
+                                )}
+                              </div>
+
+                              {isStoresExpanded && est.storeNames && est.storeNames.length > 1 && (
+                                <div className="mt-1.5 p-2 bg-white rounded border border-slate-200 text-[10px] text-slate-600 space-y-0.5">
+                                  <div className="font-semibold text-slate-700">All Stores:</div>
+                                  <div className="grid grid-cols-2 gap-1 max-h-24 overflow-y-auto">
+                                    {est.storeNames.map((sn: string, idx: number) => (
+                                      <div key={idx} className="truncate">• {sn}</div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    });
+                  })()}
+                </div>
               </div>
 
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Permitted Stores / Scope (Optional)</label>
+              <div className="flex-shrink-0">
+                <label className="block font-semibold text-slate-700 mb-1">Permitted Store Codes Scope (Optional)</label>
                 <input
                   type="text"
                   placeholder="e.g. ST-001, ST-002 (Leave blank for full project scope)"
                   value={storeCodesInput}
                   onChange={(e) => setStoreCodesInput(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500 text-xs"
                 />
               </div>
 
-              <div className="bg-indigo-50 border border-indigo-100 rounded-lg p-3 text-indigo-900 space-y-1">
-                <div className="font-semibold flex items-center gap-1.5">
-                  <ShieldCheck className="w-4 h-4 text-indigo-600" />
-                  One Assignment, Both Channels
+              <div className="bg-indigo-50 border border-indigo-100 rounded-lg p-2.5 text-indigo-900 space-y-1 flex-shrink-0">
+                <div className="font-semibold flex items-center gap-1.5 text-xs">
+                  <ShieldCheck className="w-3.5 h-3.5 text-indigo-600" />
+                  Dual-Channel Authorization
                 </div>
                 <p className="text-[11px] text-indigo-700">
-                  Saving this assignment will instantly authorize uploads via both Telegram bot and WhatsApp bot.
-                  The installer can upload installation photos, delivery challans, and WCC proofs directly.
+                  Assigning will instantly authorize uploads via both Telegram bot and WhatsApp bot.
+                  The installer can upload installation photos, delivery challans, and transportation photos directly.
                 </p>
               </div>
 
-              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100 flex-shrink-0">
                 <button
                   type="button"
                   onClick={() => setShowAssignModal(false)}
@@ -1381,10 +1651,17 @@ export const UnifiedInstallerDirectory: React.FC<{ companyId?: number }> = ({ co
                 </button>
                 <button
                   type="submit"
-                  disabled={assigning}
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-semibold shadow-sm transition disabled:opacity-50"
+                  disabled={assigning || selectedEstimateIds.length === 0}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-semibold shadow-sm transition disabled:opacity-50 flex items-center gap-1.5"
                 >
-                  {assigning ? "Saving..." : "Save Assignment (Both Channels)"}
+                  {assigning ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Assigning...</span>
+                    </>
+                  ) : (
+                    <span>Assign {selectedEstimateIds.length} Selected Project{selectedEstimateIds.length === 1 ? "" : "s"}</span>
+                  )}
                 </button>
               </div>
             </form>
