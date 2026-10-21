@@ -16,6 +16,7 @@
     "test:service-exports": "tsx scripts/test-service-product-display.ts",
     "test:tally": "tsx scripts/test-tally-export.ts",
     "test:telegram": "tsx scripts/test-telegram-workflow.ts",
+    "test:installer": "tsx scripts/test-installer-workflow.ts",
     "db:push": "drizzle-kit push",
     "postinstall": "node scripts/generate-templates.mjs"
   },

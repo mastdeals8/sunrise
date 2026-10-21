@@ -63,6 +63,10 @@ export const users = pgTable("users", {
   phone: text("phone"),
   authUserId: text("auth_user_id"), // linked Supabase auth.users UUID
   telegramChatId: text("telegram_chat_id"), // Phase 5A: ERP→Telegram bot delivery
+  telegramVerified: boolean("telegram_verified").default(false),
+  whatsappPhone: text("whatsapp_phone"),
+  whatsappChatId: text("whatsapp_chat_id"),
+  whatsappVerified: boolean("whatsapp_verified").default(false),
   // Staff fields
   employeeId: text("employee_id").unique(),
   department: text("department"),

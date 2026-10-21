@@ -132,12 +132,21 @@ export function buildTallyInvoiceXml(
   const company = options.company || {};
   const client = options.client || {};
 
+  const eligibleStatuses = ["submitted", "approved", "paid", "partially_paid"];
+  const currentStatus = (invoice.status || "").toLowerCase();
+  if (currentStatus && !eligibleStatuses.includes(currentStatus)) {
+    throw new Error(`Only submitted or approved invoices can be exported to Tally. Current status: ${invoice.status}`);
+  }
+
   const companyName = settings.companyName || company.name || company.legalName || "Sunrise Media";
-  const salesLedger = settings.salesLedger || "Sales";
-  const cgstLedger = settings.cgstLedger || "CGST";
-  const sgstLedger = settings.sgstLedger || "SGST";
-  const igstLedger = settings.igstLedger || "IGST";
+  const salesLedger = settings.salesLedger !== undefined ? settings.salesLedger : "Sales";
+  const cgstLedger = settings.cgstLedger !== undefined ? settings.cgstLedger : "CGST";
+  const sgstLedger = settings.sgstLedger !== undefined ? settings.sgstLedger : "SGST";
+  const igstLedger = settings.igstLedger !== undefined ? settings.igstLedger : "IGST";
+  const roundOffLedger = settings.roundOffLedger !== undefined ? settings.roundOffLedger : "Round Off";
   const voucherType = settings.voucherType || "Sales";
+
+  if (!salesLedger || !salesLedger.trim()) throw new Error("Missing required Tally mapping: Sales Ledger is not configured.");
 
   const partyName = invoice.partyName || client.name || "Unknown Party";
 
@@ -167,10 +176,23 @@ export function buildTallyInvoiceXml(
 
   if (isInterstate) {
     igst = totalTax;
+    if (igst > 0 && !igstLedger.trim()) {
+      throw new Error("Missing required Tally mapping: IGST Ledger is not configured.");
+    }
   } else {
     cgst = Number((totalTax / 2).toFixed(2));
     sgst = Number((totalTax - cgst).toFixed(2));
+    if (cgst > 0 && !cgstLedger.trim()) {
+      throw new Error("Missing required Tally mapping: CGST Ledger is not configured.");
+    }
+    if (sgst > 0 && !sgstLedger.trim()) {
+      throw new Error("Missing required Tally mapping: SGST Ledger is not configured.");
+    }
   }
+
+  // Calculate round-off difference to ensure exact zero-balance accounting in Tally
+  const expectedTotal = Number((taxable + (isInterstate ? igst : (cgst + sgst))).toFixed(2));
+  const roundOff = Number((amount - expectedTotal).toFixed(2));
 
   const narration = `${invoice.invoiceNumber} — ${partyName}`;
 
@@ -226,6 +248,11 @@ export function buildTallyInvoiceXml(
               <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
               <AMOUNT>${igst.toFixed(2)}</AMOUNT>
             </ALLLEDGERENTRIES.LIST>` : ""}
+            ${Math.abs(roundOff) >= 0.01 ? `<ALLLEDGERENTRIES.LIST>
+              <LEDGERNAME>${escapeXml(roundOffLedger)}</LEDGERNAME>
+              <ISDEEMEDPOSITIVE>${roundOff > 0 ? "No" : "Yes"}</ISDEEMEDPOSITIVE>
+              <AMOUNT>${roundOff > 0 ? roundOff.toFixed(2) : `-${Math.abs(roundOff).toFixed(2)}`}</AMOUNT>
+            </ALLLEDGERENTRIES.LIST>` : ""}
           </VOUCHER>
         </TALLYMESSAGE>
       </REQUESTDATA>
@@ -242,7 +269,7 @@ export function downloadTallyXml(xml: string, invoiceNumber: string): void {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `tally_${invoiceNumber.replace(/[^a-zA-Z0-9_-]/g, "_")}.xml`;
+  a.download = `Tally_SalesVoucher_${invoiceNumber.replace(/[^a-zA-Z0-9_-]/g, "_")}.xml`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);

@@ -19,8 +19,12 @@ import {
   Check,
   Smartphone,
   Info,
+  Users,
+  Settings,
+  Activity,
 } from "lucide-react";
-import { isBoltMode } from "../lib/supabase";
+import { supabase, isBoltMode } from "../lib/supabase";
+import { UnifiedInstallerDirectory } from "../components/UnifiedInstallerDirectory";
 
 interface WhatsAppStatus {
   serverOnline: boolean;
@@ -62,6 +66,7 @@ const WhatsAppSettings: React.FC = () => {
   const [instanceName, setInstanceName] = useState("sunrise_company_1");
   const [webhookSecret, setWebhookSecret] = useState("");
   const [companyId, setCompanyId] = useState<number>(1);
+  const [activeTab, setActiveTab] = useState<"directory" | "connection" | "logs">("directory");
 
   // Test messaging state
   const [testPhone, setTestPhone] = useState("");
@@ -134,11 +139,24 @@ const WhatsAppSettings: React.FC = () => {
 
   const fetchConfig = async () => {
     try {
+      if (isBoltMode) {
+        const { data, error } = await supabase.from("bot_settings").select("*").eq("platform", "whatsapp").limit(1).maybeSingle();
+        if (data && !error) {
+          const settings = data.settings || {};
+          setServerUrl(settings.serverUrl || "https://sunrise-production-76df.up.railway.app");
+          setInstanceName(settings.instanceName || `sunrise_company_${companyId}`);
+          setWebhookSecret(settings.webhookSecret || "");
+          if (data.bot_token) setApiKey(data.bot_token);
+        } else {
+          setServerUrl("https://sunrise-production-76df.up.railway.app");
+        }
+        return;
+      }
       const res = await fetch("/api/automation/whatsapp", { headers });
       if (res.ok) {
         const data = await res.json();
         const settings = data.settings || {};
-        setServerUrl(settings.serverUrl || "");
+        setServerUrl(settings.serverUrl || "https://sunrise-production-76df.up.railway.app");
         setInstanceName(settings.instanceName || `sunrise_company_${companyId}`);
         setWebhookSecret(settings.webhookSecret || "");
         if (data.botToken) setApiKey(data.botToken);
@@ -150,6 +168,28 @@ const WhatsAppSettings: React.FC = () => {
 
   const fetchStatus = async (showToast: boolean = false) => {
     try {
+      if (isBoltMode) {
+        // In Bolt mode, check Evolution API endpoint directly if configured
+        const targetUrl = serverUrl || "https://sunrise-production-76df.up.railway.app";
+        try {
+          const healthRes = await fetch(`${targetUrl}/health`, { signal: AbortSignal.timeout(4000) });
+          if (healthRes.ok) {
+            setStatus({
+              serverOnline: true,
+              sessionState: "open",
+              instanceName: instanceName || `sunrise_company_${companyId}`,
+              version: "v2.2.2",
+            });
+            if (showToast) {
+              setMsg({ text: "Connected to Evolution API (Railway hosted).", ok: true });
+            }
+            return;
+          }
+        } catch {
+          // ignore
+        }
+      }
+
       const res = await fetch("/api/whatsapp/status", { headers });
       if (res.ok) {
         const data: WhatsAppStatus = await res.json();
@@ -175,6 +215,29 @@ const WhatsAppSettings: React.FC = () => {
   const fetchLogs = async () => {
     setLogsLoading(true);
     try {
+      if (isBoltMode) {
+        const { data } = await supabase
+          .from("webhook_logs")
+          .select("*")
+          .eq("platform", "whatsapp")
+          .order("created_at", { ascending: false })
+          .limit(50);
+        if (data) {
+          setLogs(
+            data.map((d: any) => ({
+              id: d.id,
+              platform: d.platform,
+              direction: d.direction || "inbound",
+              event: d.event,
+              status: d.status,
+              error: d.error,
+              createdAt: d.created_at,
+              payload: d.payload,
+            }))
+          );
+        }
+        return;
+      }
       const res = await fetch("/api/automation/logs/whatsapp", { headers });
       if (res.ok) {
         setLogs(await res.json());
@@ -189,6 +252,26 @@ const WhatsAppSettings: React.FC = () => {
     setSavingConfig(true);
     setMsg(null);
     try {
+      if (isBoltMode) {
+        const updateData: any = {
+          platform: "whatsapp",
+          enabled: true,
+          updated_at: new Date().toISOString(),
+          settings: {
+            serverUrl: serverUrl.trim() || "https://sunrise-production-76df.up.railway.app",
+            instanceName: instanceName.trim(),
+            webhookSecret: webhookSecret.trim(),
+          },
+        };
+        if (apiKey.trim() && !apiKey.trim().startsWith("••••")) {
+          updateData.bot_token = apiKey.trim();
+        }
+        await supabase.from("bot_settings").upsert(updateData, { onConflict: "platform" });
+        setMsg({ text: "Configuration saved successfully.", ok: true });
+        await fetchStatus(true);
+        return;
+      }
+
       const payload: any = {
         enabled: true,
         apiKey: apiKey.trim(),
@@ -321,17 +404,6 @@ const WhatsAppSettings: React.FC = () => {
     setTimeout(() => setCopiedWebhook(false), 2000);
   };
 
-  if (isBoltMode) {
-    return (
-      <div className="flex flex-col items-center justify-center h-[50vh] gap-4 text-center px-4">
-        <AlertTriangle className="w-10 h-10 text-amber-500" />
-        <h2 className="text-lg font-bold text-slate-800">WhatsApp Settings require the Express backend</h2>
-        <p className="text-sm text-slate-500 max-w-sm">
-          WhatsApp Evolution API integration requires the active Express server and hosted service.
-        </p>
-      </div>
-    );
-  }
 
   const isConnected = status?.serverOnline && status?.sessionState === "open";
 
@@ -506,6 +578,53 @@ const WhatsAppSettings: React.FC = () => {
         </div>
       )}
 
+      {/* Navigation Tabs */}
+      <div className="flex items-center gap-2 border-b border-slate-200 pb-3">
+        <button
+          onClick={() => setActiveTab("directory")}
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition ${
+            activeTab === "directory"
+              ? "bg-emerald-600 text-white shadow-sm"
+              : "bg-white text-slate-600 hover:bg-slate-50 border border-slate-200"
+          }`}
+        >
+          <Users className="w-4 h-4" />
+          <span>Installer Directory & Dual-Channel Assignments</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab("connection")}
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition ${
+            activeTab === "connection"
+              ? "bg-emerald-600 text-white shadow-sm"
+              : "bg-white text-slate-600 hover:bg-slate-50 border border-slate-200"
+          }`}
+        >
+          <Settings className="w-4 h-4" />
+          <span>Evolution API & QR Pairing</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab("logs")}
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition ${
+            activeTab === "logs"
+              ? "bg-emerald-600 text-white shadow-sm"
+              : "bg-white text-slate-600 hover:bg-slate-50 border border-slate-200"
+          }`}
+        >
+          <Activity className="w-4 h-4" />
+          <span>Webhook Event Logs ({logs.length})</span>
+        </button>
+      </div>
+
+      {/* TAB 1: Unified Installer Directory */}
+      {activeTab === "directory" && (
+        <UnifiedInstallerDirectory companyId={companyId} />
+      )}
+
+      {/* TAB 2: Connection & Evolution API Configuration */}
+      {activeTab === "connection" && (
+        <>
       {/* QR Code Scan Section (Shown when QR is available and not connected) */}
       {!isConnected && qrBase64 && (
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
@@ -741,85 +860,89 @@ const WhatsAppSettings: React.FC = () => {
           </li>
         </ul>
       </div>
+        </>
+      )}
 
-      {/* Webhook & Inbound Activity Logs */}
-      <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
-        <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
-          <div>
-            <h3 className="font-bold text-slate-800 text-sm">Recent WhatsApp Activity & Webhook Logs</h3>
-            <p className="text-xs text-slate-400">Live incoming and outgoing message events logged by the ERP</p>
+      {/* TAB 3: Webhook & Inbound Activity Logs */}
+      {activeTab === "logs" && (
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+          <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+            <div>
+              <h3 className="font-bold text-slate-800 text-sm">Recent WhatsApp Activity & Webhook Logs</h3>
+              <p className="text-xs text-slate-400">Live incoming and outgoing message events logged by the ERP</p>
+            </div>
+            <button
+              onClick={fetchLogs}
+              className="inline-flex items-center gap-1 text-xs text-slate-600 hover:text-slate-900 font-bold px-3 py-1.5 bg-slate-50 hover:bg-slate-100 rounded-xl transition"
+            >
+              <RefreshCw className="w-3.5 h-3.5" /> Refresh Logs
+            </button>
           </div>
-          <button
-            onClick={fetchLogs}
-            className="inline-flex items-center gap-1 text-xs text-slate-600 hover:text-slate-900 font-bold px-3 py-1.5 bg-slate-50 hover:bg-slate-100 rounded-xl transition"
-          >
-            <RefreshCw className="w-3.5 h-3.5" /> Refresh Logs
-          </button>
-        </div>
 
-        {logsLoading ? (
-          <div className="p-8 text-center text-slate-400 text-xs">Loading logs...</div>
-        ) : logs.length === 0 ? (
-          <div className="p-8 text-center text-slate-400 text-xs">
-            No activity logged yet. Webhooks and message deliveries will appear here in real-time.
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs font-sans">
-              <thead className="bg-slate-50 text-[10px] text-slate-400 uppercase tracking-wider border-b border-slate-100">
-                <tr>
-                  <th className="px-5 py-3 text-left">Time</th>
-                  <th className="px-5 py-3 text-left">Direction</th>
-                  <th className="px-5 py-3 text-left">Event</th>
-                  <th className="px-5 py-3 text-center">Status</th>
-                  <th className="px-5 py-3 text-left">Details</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-50">
-                {logs.slice(0, 30).map((log) => (
-                  <tr key={log.id} className="hover:bg-slate-50/50">
-                    <td className="px-5 py-3 text-slate-500 font-mono text-[11px]">
-                      {new Date(log.createdAt).toLocaleString("en-IN")}
-                    </td>
-                    <td className="px-5 py-3">
-                      <span
-                        className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
-                          log.direction === "outbound"
-                            ? "bg-blue-50 text-blue-700 border border-blue-200"
-                            : "bg-purple-50 text-purple-700 border border-purple-200"
-                        }`}
-                      >
-                        {log.direction || "inbound"}
-                      </span>
-                    </td>
-                    <td className="px-5 py-3 text-slate-800 font-mono font-medium">{log.event || "message"}</td>
-                    <td className="px-5 py-3 text-center">
-                      <span
-                        className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${
-                          log.status === "processed"
-                            ? "bg-emerald-50 text-emerald-700"
-                            : log.status === "error"
-                            ? "bg-red-50 text-red-700"
-                            : "bg-slate-100 text-slate-600"
-                        }`}
-                      >
-                        {log.status}
-                      </span>
-                    </td>
-                    <td className="px-5 py-3 text-slate-600 text-[11px] max-w-xs truncate">
-                      {log.error ? (
-                        <span className="text-red-600 font-medium">{log.error}</span>
-                      ) : (
-                        <span>{JSON.stringify(log.payload || {}).slice(0, 80)}...</span>
-                      )}
-                    </td>
+          {logsLoading ? (
+            <div className="p-8 text-center text-slate-400 text-xs">Loading logs...</div>
+          ) : logs.length === 0 ? (
+            <div className="p-8 text-center text-slate-400 text-xs">
+              No activity logged yet. Webhooks and message deliveries will appear here in real-time.
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs font-sans">
+                <thead className="bg-slate-50 text-[10px] text-slate-400 uppercase tracking-wider border-b border-slate-100">
+                  <tr>
+                    <th className="px-5 py-3 text-left">Time</th>
+                    <th className="px-5 py-3 text-left">Direction</th>
+                    <th className="px-5 py-3 text-left">Event</th>
+                    <th className="px-5 py-3 text-center">Status</th>
+                    <th className="px-5 py-3 text-left">Details</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
+                </thead>
+                <tbody className="divide-y divide-slate-50">
+                  {logs.slice(0, 30).map((log) => (
+                    <tr key={log.id} className="hover:bg-slate-50/50">
+                      <td className="px-5 py-3 text-slate-500 font-mono text-[11px]">
+                        {new Date(log.createdAt).toLocaleString("en-IN")}
+                      </td>
+                      <td className="px-5 py-3">
+                        <span
+                          className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                            log.direction === "outbound"
+                              ? "bg-blue-50 text-blue-700 border border-blue-200"
+                              : "bg-purple-50 text-purple-700 border border-purple-200"
+                          }`}
+                        >
+                          {log.direction || "inbound"}
+                        </span>
+                      </td>
+                      <td className="px-5 py-3 text-slate-800 font-mono font-medium">{log.event || "message"}</td>
+                      <td className="px-5 py-3 text-center">
+                        <span
+                          className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${
+                            log.status === "processed"
+                              ? "bg-emerald-50 text-emerald-700"
+                              : log.status === "error"
+                              ? "bg-red-50 text-red-700"
+                              : "bg-slate-100 text-slate-600"
+                          }`}
+                        >
+                          {log.status}
+                        </span>
+                      </td>
+                      <td className="px-5 py-3 text-slate-600 text-[11px] max-w-xs truncate">
+                        {log.error ? (
+                          <span className="text-red-600 font-medium">{log.error}</span>
+                        ) : (
+                          <span>{JSON.stringify(log.payload || {}).slice(0, 80)}...</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 };

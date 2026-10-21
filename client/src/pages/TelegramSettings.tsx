@@ -20,6 +20,7 @@ import {
   Check,
 } from "lucide-react";
 import { supabase, isBoltMode } from "../lib/supabase";
+import { UnifiedInstallerDirectory } from "../components/UnifiedInstallerDirectory";
 
 interface TelegramConfig {
   platform: string;
@@ -674,6 +675,9 @@ const TelegramSettings: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Unified Installer Directory (Dual Channel: Telegram + WhatsApp) */}
+      <UnifiedInstallerDirectory companyId={1} />
 
       {/* 3. Telegram Field Project Assignments */}
       <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">

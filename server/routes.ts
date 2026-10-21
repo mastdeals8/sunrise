@@ -49,6 +49,7 @@ import { isServiceEstimateItem, resolveServiceProduct, serviceProductLabel } fro
 import { computeStoreBreakdown } from "../shared/storeBreakdown";
 import { estimateItemsToInvoiceLines } from "../shared/invoiceConversion";
 import { whatsappEvolution } from "./services/whatsappEvolution";
+import { installerService } from "./services/installerService";
 
 export async function registerRoutes(app: Express): Promise<Server> {
   if (process.env.BOLT_SAFE_BOOT === "true") {
@@ -6438,6 +6439,115 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // ==========================================
+  // UNIFIED INSTALLER DIRECTORY & DUAL-CHANNEL ASSIGNMENTS (Telegram + WhatsApp)
+  // ==========================================
+
+  // GET Installers list with dual-channel status and assignments
+  app.get("/api/automation/installers", authenticateToken, requireRole(["admin", "manager"]), async (req: AuthRequest, res: Response) => {
+    try {
+      const companyId = req.companyId || 1;
+      const search = req.query.search as string | undefined;
+      const list = await installerService.listInstallers(companyId, search);
+      res.json(list);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // POST Upsert Installer contact
+  app.post("/api/automation/installers", authenticateToken, requireRole(["admin", "manager"]), async (req: AuthRequest, res: Response) => {
+    try {
+      const companyId = req.companyId || 1;
+      const contact = await installerService.upsertInstaller(companyId, req.body);
+      res.status(200).json({ success: true, contact });
+    } catch (err: any) {
+      res.status(400).json({ message: err.message });
+    }
+  });
+
+  // DELETE Deactivate Installer
+  app.delete("/api/automation/installers/:id", authenticateToken, requireRole(["admin"]), async (req: AuthRequest, res: Response) => {
+    try {
+      const companyId = req.companyId || 1;
+      const id = parseInt(req.params.id, 10);
+      const success = await installerService.deactivateInstaller(companyId, id, req.user?.id);
+      res.json({ success });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // POST Single Assignment for BOTH Telegram and WhatsApp
+  app.post("/api/automation/installers/assign", authenticateToken, requireRole(["admin", "manager"]), async (req: AuthRequest, res: Response) => {
+    try {
+      const companyId = req.companyId || 1;
+      const { installerId, estimateId, allowedStoreCodes, allowedDocumentTypes } = req.body;
+      if (!installerId || !estimateId) {
+        return res.status(400).json({ message: "installerId and estimateId are required" });
+      }
+      const assignment = await installerService.assignProjectToInstaller(companyId, {
+        installerId: Number(installerId),
+        estimateId: Number(estimateId),
+        allowedStoreCodes,
+        allowedDocumentTypes,
+        createdBy: req.user?.id,
+      });
+      res.status(201).json({ success: true, assignment });
+    } catch (err: any) {
+      res.status(400).json({ message: err.message });
+    }
+  });
+
+  // POST Revoke assignment
+  app.post("/api/automation/installers/revoke-assignment/:linkId", authenticateToken, requireRole(["admin", "manager"]), async (req: AuthRequest, res: Response) => {
+    try {
+      const companyId = req.companyId || 1;
+      const linkId = parseInt(req.params.linkId, 10);
+      const success = await installerService.revokeAssignment(companyId, linkId, req.user?.id);
+      res.json({ success });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // GET WhatsApp pending access requests
+  app.get("/api/automation/whatsapp/requests", authenticateToken, requireRole(["admin", "manager"]), async (req: AuthRequest, res: Response) => {
+    try {
+      const companyId = req.companyId || 1;
+      const requests = await whatsappEvolution.listAccessRequests(companyId);
+      res.json(requests);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // POST Approve WhatsApp access request
+  app.post("/api/automation/whatsapp/requests/approve", authenticateToken, requireRole(["admin"]), async (req: AuthRequest, res: Response) => {
+    try {
+      const companyId = req.companyId || 1;
+      const { phone } = req.body;
+      if (!phone) return res.status(400).json({ message: "Phone number is required" });
+      const result = await whatsappEvolution.approveAccessRequest(companyId, phone, req.user?.username || String(req.user?.id));
+      res.json(result);
+    } catch (err: any) {
+      res.status(400).json({ message: err.message });
+    }
+  });
+
+  // POST Reject WhatsApp access request
+  app.post("/api/automation/whatsapp/requests/reject", authenticateToken, requireRole(["admin"]), async (req: AuthRequest, res: Response) => {
+    try {
+      const companyId = req.companyId || 1;
+      const { phone } = req.body;
+      if (!phone) return res.status(400).json({ message: "Phone number is required" });
+      const result = await whatsappEvolution.rejectAccessRequest(companyId, phone, req.user?.username || String(req.user?.id));
+      res.json(result);
+    } catch (err: any) {
+      res.status(400).json({ message: err.message });
+    }
+  });
+
+  // ==========================================
   // WHATSAPP (Evolution API & Baileys QR-pairing)
   // ==========================================
 
@@ -7235,6 +7345,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const invoice = allInvoices.find(i => i.id === invoiceId);
     if (!invoice) throw new Error("Invoice not found");
 
+    const eligibleStatuses = ["submitted", "approved", "paid", "partially_paid"];
+    const currentStatus = (invoice.status || "").toLowerCase();
+    if (currentStatus && !eligibleStatuses.includes(currentStatus)) {
+      throw new Error(`Only submitted or approved invoices can be exported to Tally. Current status: ${invoice.status}`);
+    }
+
     const companyId = invoice.companyId || 1;
     const company = await storage.getCompany(companyId);
     const rawSettings = await storage.getAppSetting("tally_settings");
@@ -7245,7 +7361,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const cgstLedger = settings.cgstLedger || "CGST";
     const sgstLedger = settings.sgstLedger || "SGST";
     const igstLedger = settings.igstLedger || "IGST";
+    const roundOffLedger = settings.roundOffLedger || "Round Off";
     const voucherType = settings.voucherType || "Sales";
+
+    if (!salesLedger.trim()) throw new Error("Missing required Tally mapping: Sales Ledger is not configured.");
 
     const allClients = await storage.getAllClients();
     const client = allClients.find((c: any) => c.id === invoice.clientId);
@@ -7267,10 +7386,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
     if (isInterstate) {
       igst = totalTax;
+      if (igst > 0 && !igstLedger.trim()) {
+        throw new Error("Missing required Tally mapping: IGST Ledger is not configured.");
+      }
     } else {
       cgst = Number((totalTax / 2).toFixed(2));
       sgst = Number((totalTax - cgst).toFixed(2));
+      if (cgst > 0 && !cgstLedger.trim()) {
+        throw new Error("Missing required Tally mapping: CGST Ledger is not configured.");
+      }
+      if (sgst > 0 && !sgstLedger.trim()) {
+        throw new Error("Missing required Tally mapping: SGST Ledger is not configured.");
+      }
     }
+
+    // Calculate round-off difference to ensure exact zero-balance accounting in Tally
+    const expectedTotal = Number((taxable + (isInterstate ? igst : (cgst + sgst))).toFixed(2));
+    const roundOff = Number((amount - expectedTotal).toFixed(2));
 
     const narration = `${invoice.invoiceNumber} — ${partyName}`;
 
@@ -7326,6 +7458,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
               <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
               <AMOUNT>${igst.toFixed(2)}</AMOUNT>
             </ALLLEDGERENTRIES.LIST>` : ""}
+            ${Math.abs(roundOff) >= 0.01 ? `<ALLLEDGERENTRIES.LIST>
+              <LEDGERNAME>${escapeXml(roundOffLedger)}</LEDGERNAME>
+              <ISDEEMEDPOSITIVE>${roundOff > 0 ? "No" : "Yes"}</ISDEEMEDPOSITIVE>
+              <AMOUNT>${roundOff > 0 ? roundOff.toFixed(2) : `-${Math.abs(roundOff).toFixed(2)}`}</AMOUNT>
+            </ALLLEDGERENTRIES.LIST>` : ""}
           </VOUCHER>
         </TALLYMESSAGE>
       </REQUESTDATA>
@@ -7348,7 +7485,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } as any).where(eq(invoices.id, id));
 
       res.setHeader("Content-Type", "application/xml");
-      res.setHeader("Content-Disposition", `attachment; filename="tally_${invoice.invoiceNumber}.xml"`);
+      res.setHeader("Content-Disposition", `attachment; filename="Tally_SalesVoucher_${invoice.invoiceNumber}.xml"`);
       res.send(xml);
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });

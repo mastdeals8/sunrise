@@ -57,19 +57,25 @@ const SubmittedInvoicesPage: React.FC = () => {
   const [exportingId, setExportingId] = useState<number | null>(null);
 
   const handleExportXml = async (inv: Invoice) => {
+    const eligibleStatuses = ["submitted", "approved", "paid", "partially_paid"];
+    const currentStatus = (inv.status || "").toLowerCase();
+    if (currentStatus && !eligibleStatuses.includes(currentStatus)) {
+      alert(`Only submitted or approved invoices can be exported to Tally. Current status: ${inv.status}`);
+      return;
+    }
+
     setExportingId(inv.id);
     try {
-      if (isBoltMode) {
-        const [settings, company, allClients] = await Promise.all([
-          fetchTallySettings(token),
-          fetchCompany(token, inv.companyId || 1).catch(() => null),
-          fetchClients(token).catch(() => []),
-        ]);
-        const client = (allClients || []).find((c: any) => c.id === inv.clientId);
-        const xml = buildTallyInvoiceXml(inv, { settings, company, client });
-        downloadTallyXml(xml, inv.invoiceNumber);
+      const [settings, company, allClients] = await Promise.all([
+        fetchTallySettings(token),
+        fetchCompany(token, inv.companyId || 1).catch(() => null),
+        fetchClients(token).catch(() => []),
+      ]);
+      const client = (allClients || []).find((c: any) => c.id === inv.clientId);
+      const xml = buildTallyInvoiceXml(inv, { settings, company, client });
+      downloadTallyXml(xml, inv.invoiceNumber);
 
-        // Update status in Supabase
+      if (isBoltMode) {
         await supabase
           .from("invoices")
           .update({
@@ -77,16 +83,8 @@ const SubmittedInvoicesPage: React.FC = () => {
             tally_exported_at: new Date().toISOString(),
           })
           .eq("id", inv.id);
-
-        setInvoices((prev) =>
-          prev.map((i) =>
-            i.id === inv.id ? { ...i, tallyExportStatus: "exported_xml", tallyExportedAt: new Date().toISOString() } : i
-          )
-        );
-        return;
       }
 
-      window.open(`/api/tally/export-xml/${inv.id}`, "_blank");
       setInvoices((prev) =>
         prev.map((i) =>
           i.id === inv.id ? { ...i, tallyExportStatus: "exported_xml", tallyExportedAt: new Date().toISOString() } : i
