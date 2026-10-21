@@ -515,6 +515,9 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
                   implementationPercent: !Array.isArray(groupData) && groupData.implementationPercent !== undefined ? Number(groupData.implementationPercent) : Number(est.implementationPercent || 0),
                   transportAmount: !Array.isArray(groupData) && groupData.transportAmount !== undefined ? Number(groupData.transportAmount) : 0,
                   transportDescription: !Array.isArray(groupData) && groupData.transportDescription ? String(groupData.transportDescription) : "",
+                  transportKm: !Array.isArray(groupData) && groupData.transportKm !== undefined ? Number(groupData.transportKm) : 0,
+                  transportRate: !Array.isArray(groupData) && groupData.transportRate !== undefined ? Number(groupData.transportRate) : 0,
+                  transportType: !Array.isArray(groupData) && groupData.transportType ? (groupData.transportType as "local" | "outstation") : undefined,
                 };
               }).filter(section => section.materialItems.length > 0 || section.serviceItems.length > 0)
             : [{
@@ -526,6 +529,9 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
                 implementationPercent: Number(est.implementationPercent || 0),
                 transportAmount: Number(est.transportAmount || 0),
                 transportDescription: "",
+                transportKm: 0,
+                transportRate: 0,
+                transportType: undefined as "local" | "outstation" | undefined,
               }];
 
           const allRows: any[] = [];
@@ -547,11 +553,17 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
             const hasTransport = section.serviceItems.some(it => (it.lineType || "").toLowerCase() === "transport");
 
             section.serviceItems.forEach(item => {
+              const isTransport = (item.lineType || "").toLowerCase() === "transport"
+                || String(item.unit || "").toLowerCase() === "km";
+              const label = serviceProductLabel(item, products);
+              const isKm = isTransport && String(item.unit || "").toLowerCase() === "km";
               allRows.push({
                 vendorCode: est.vendorCode || "",
-                activityName: serviceProductLabel(item, products),
+                activityName: (isTransport && item.description && item.description !== label)
+                  ? `${label} — ${item.description}`
+                  : label,
                 storeCode: section.storeCode,
-                qty: Number(item.quantity) || 1,
+                qty: isKm ? `${Number(item.quantity) || 0} KM` : (Number(item.quantity) || 1),
                 beforeGst: Number(item.totalPrice || 0),
                 estimateNo: est.estimateNumber || "",
               });
@@ -586,11 +598,21 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
             }
 
             if (!hasTransport && section.transportAmount > 0) {
+              const isKm = (section.transportKm && section.transportKm > 0) || section.transportType === "outstation";
+              const label = serviceProductLabel({
+                lineType: "transport",
+                itemName: section.transportDescription,
+                calculationType: isKm ? "per_km" : "fixed",
+                unit: isKm ? "km" : "job",
+                rate: section.transportRate,
+              }, products);
               allRows.push({
                 vendorCode: est.vendorCode || "",
-                activityName: serviceProductLabel({ lineType: "transport", itemName: section.transportDescription }, products),
+                activityName: (section.transportDescription && section.transportDescription !== label)
+                  ? `${label} — ${section.transportDescription}`
+                  : label,
                 storeCode: section.storeCode,
-                qty: 1,
+                qty: (section.transportKm && section.transportKm > 0) ? `${section.transportKm} KM` : 1,
                 beforeGst: section.transportAmount,
                 estimateNo: est.estimateNumber || "",
               });
@@ -603,8 +625,8 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
           }));
         };
 
-        const summaryNumber = (n: number) =>
-          (Number(n) || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        const summaryNumber = (n: any) =>
+          typeof n === "string" ? n : (Number(n) || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
         const copySummary = async () => {
           if (!selectedEstimate) return;

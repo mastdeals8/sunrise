@@ -3738,6 +3738,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         implPercent: number;
         transportAmt: number;
         transportDescription: string;
+        transportKm?: number;
+        transportRate?: number;
+        transportType?: "local" | "outstation";
       };
       const sections: Section[] = [];
       const storeGrouping = (estimate.storeGrouping as Record<string, any>) || {};
@@ -3760,6 +3763,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
             implPercent: !Array.isArray(groupData) && groupData.implementationPercent !== undefined ? Number(groupData.implementationPercent) : Number(estimate.implementationPercent || 0),
             transportAmt: !Array.isArray(groupData) && groupData.transportAmount !== undefined ? Number(groupData.transportAmount) : 0,
             transportDescription: !Array.isArray(groupData) && groupData.transportDescription ? String(groupData.transportDescription) : "",
+            transportKm: !Array.isArray(groupData) && groupData.transportKm !== undefined ? Number(groupData.transportKm) : 0,
+            transportRate: !Array.isArray(groupData) && groupData.transportRate !== undefined ? Number(groupData.transportRate) : 0,
+            transportType: !Array.isArray(groupData) && groupData.transportType ? groupData.transportType : undefined,
           });
         });
       }
@@ -3773,6 +3779,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           implPercent: Number(estimate.implementationPercent || 0),
           transportAmt: Number(estimate.transportAmount || 0),
           transportDescription: "",
+          transportKm: 0,
+          transportRate: 0,
+          transportType: undefined,
         });
       }
 
@@ -3841,7 +3850,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           ? sec.serviceItems.filter(it => it.lineType === "transport").reduce((s, it) => s + Number(it.totalPrice || 0), 0)
           : sec.transportAmt;
 
-        const serviceRow = (label: string, descr: string, pctLabel: string, base: number) => {
+        const serviceRow = (label: string, descr: string, pctLabel: string, base: number, qtyLabel = "") => {
           if (base <= 0) return;
           const r = printableRows.length;
           const row = blankRow();
@@ -3849,6 +3858,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           row[2] = "9987";
           row[3] = "Standard";
           row[4] = descr;
+          if (qtyLabel) row[7] = qtyLabel;
           row[9] = pctLabel;
           row[10] = r2(base);
           row[11] = 18;
@@ -3863,14 +3873,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const base = Number(item.totalPrice || 0);
           if (base <= 0) return;
           const service = resolveServiceProduct(item, productsList);
+          const isTransport = (item.lineType || "").toLowerCase() === "transport"
+            || service.calculationType === "per_km"
+            || String(item.unit || "").toLowerCase() === "km";
+          const isPerKm = isTransport && (service.calculationType === "per_km" || String(item.unit || "").toLowerCase() === "km");
+          const qtyVal = Number(item.quantity) || 0;
+          let qtyDisplay: string | number = "";
+          if (isPerKm) {
+            qtyDisplay = `${r2(qtyVal)} KM`;
+          } else if (isTransport && qtyVal > 0) {
+            qtyDisplay = r2(qtyVal);
+          }
+          const rateLabel = service.rateLabel || (isPerKm && Number(item.rate) > 0 ? `₹${item.rate}/KM` : "");
+
           const r = printableRows.length;
           const row = blankRow();
           row[1] = service.label;
           row[2] = service.hsn || "9987";
           row[3] = item.isStandard === false ? "Non-standard" : "Standard";
-          row[4] = service.label;
-          row[7] = r2(Number(item.quantity) || 1);
-          row[9] = service.rateLabel;
+          row[4] = item.description || service.label;
+          if (qtyDisplay !== "") row[7] = qtyDisplay;
+          row[9] = rateLabel;
           row[10] = r2(base);
           row[11] = service.gstPercent;
           row[12] = r2(isIgst ? Number(item.igstAmount) || 0 : (Number(item.sgstAmount) || 0) + (Number(item.cgstAmount) || 0));
@@ -3885,10 +3908,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
         } else {
           const packingLabel = serviceProductLabel({ lineType: "packing", rate: sec.packingPercent, calculationType: "percentage" }, productsList);
           const installationLabel = serviceProductLabel({ lineType: "installation", rate: sec.implPercent, calculationType: "percentage" }, productsList);
-          const transportLabel = serviceProductLabel({ lineType: "transport", itemName: sec.transportDescription }, productsList);
+          const isKm = (sec.transportKm && sec.transportKm > 0) || sec.transportType === "outstation";
+          const transportLabel = serviceProductLabel({
+            lineType: "transport",
+            itemName: sec.transportDescription,
+            calculationType: isKm ? "per_km" : "fixed",
+            unit: isKm ? "km" : "job",
+            rate: sec.transportRate || (sec.transportKm && sec.transportKm > 0 ? transAmt / sec.transportKm : 0),
+          }, productsList);
+          const qtyLabel = sec.transportKm && sec.transportKm > 0 ? `${r2(sec.transportKm)} KM` : "";
+          const rateLabel = sec.transportRate && sec.transportRate > 0
+            ? `₹${sec.transportRate}/KM`
+            : (sec.transportKm && sec.transportKm > 0 && transAmt > 0 ? `₹${r2(transAmt / sec.transportKm)}/KM` : "");
           serviceRow(packingLabel, packingLabel, `${sec.packingPercent}%`, packAmt);
           serviceRow(installationLabel, installationLabel, `${sec.implPercent}%`, implAmt);
-          serviceRow(transportLabel, transportLabel, "", transAmt);
+          serviceRow(transportLabel, sec.transportDescription || transportLabel, rateLabel, transAmt, qtyLabel);
         }
 
         // Spacer between stores
@@ -4131,10 +4165,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         srNo: section.srNo,
         vendorCode: estimate.vendorCode || "",
         activityName: isEstimateServiceItem(item)
-          ? serviceProductLabel(item, productsList)
+          ? ((item.description && item.description !== serviceProductLabel(item, productsList))
+              ? `${serviceProductLabel(item, productsList)} — ${item.description}`
+              : serviceProductLabel(item, productsList))
           : (item.itemName || item.description || ""),
         storeCode: section.storeCode,
-        qty: Number(item.quantity || 0),
+        qty: (isEstimateServiceItem(item) && ((item.lineType || "").toLowerCase() === "transport" || String(item.unit || "").toLowerCase() === "km"))
+          ? `${Number(item.quantity || 0)} KM`
+          : Number(item.quantity || 0),
         beforeGst: Number(item.totalPrice || 0),
         estimateNo: estimate.estimateNumber,
       })));

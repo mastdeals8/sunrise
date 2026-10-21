@@ -367,6 +367,9 @@ export async function exportEstimateToExcel(
     implPercent: number;
     transportAmt: number;
     transportDescription: string;
+    transportKm?: number;
+    transportRate?: number;
+    transportType?: "local" | "outstation";
   };
   const sections: Section[] = [];
   const storeKeys = orderedStoreKeysFromItems(sortedItems, storeGrouping);
@@ -391,6 +394,12 @@ export async function exportEstimateToExcel(
           ? Number(groupData.transportAmount) : 0,
         transportDescription: !Array.isArray(groupData) && groupData.transportDescription
           ? String(groupData.transportDescription) : "",
+        transportKm: !Array.isArray(groupData) && groupData.transportKm !== undefined
+          ? Number(groupData.transportKm) : 0,
+        transportRate: !Array.isArray(groupData) && groupData.transportRate !== undefined
+          ? Number(groupData.transportRate) : 0,
+        transportType: !Array.isArray(groupData) && groupData.transportType
+          ? groupData.transportType : undefined,
       });
     });
   }
@@ -406,6 +415,9 @@ export async function exportEstimateToExcel(
       implPercent: Number(estimate.implementationPercent || 0),
       transportAmt: Number(estimate.transportAmount || 0),
       transportDescription: "",
+      transportKm: 0,
+      transportRate: 0,
+      transportType: undefined,
     });
   }
 
@@ -494,14 +506,16 @@ export async function exportEstimateToExcel(
       ? sec.serviceItems.filter(it => it.lineType === "transport").reduce((sum, it) => sum + Number(it.totalPrice || 0), 0)
       : sec.transportAmt;
 
-    const addServiceRow = (label: string, descr: string, pctLabel: string, base: number, matCode = "") => {
+    const addServiceRow = (label: string, descr: string, pctLabel: string, base: number, matCode = "", qtyLabel = "") => {
       if (base <= 0) return;
       const amtCol = showMaterialCodeColumn ? 11 : 10;
       const rateCol = showMaterialCodeColumn ? 10 : 9;
+      const qtyCol = showMaterialCodeColumn ? 8 : 7;
       const ri = addRow((() => {
         const r = blankRow();
         r[1] = label; r[2] = "9987"; r[3] = "Standard"; r[4] = descr;
         if (showMaterialCodeColumn) r[5] = cleanMaterialCode(matCode);
+        if (qtyLabel) r[qtyCol] = qtyLabel;
         r[rateCol] = pctLabel; r[amtCol] = r2(base); r[amtCol + 1] = 18;
         r[amtCol + 2] = r2(base * 0.18); r[amtCol + 3] = r2(base * 1.18);
         return r;
@@ -515,18 +529,34 @@ export async function exportEstimateToExcel(
       const base = Number(item.totalPrice || 0);
       if (base <= 0) return;
       const service = resolveServiceProduct(item, products);
+      const isTransport = (item.lineType || "").toLowerCase() === "transport"
+        || service.calculationType === "per_km"
+        || String(item.unit || "").toLowerCase() === "km";
+      const isPerKm = isTransport && (service.calculationType === "per_km" || String(item.unit || "").toLowerCase() === "km");
+
       const amtCol = showMaterialCodeColumn ? 11 : 10;
       const rateCol = showMaterialCodeColumn ? 10 : 9;
       const qtyCol = showMaterialCodeColumn ? 8 : 7;
       const mc = cleanMaterialCode(item.materialCode || item.material_code);
+
+      const qtyVal = Number(item.quantity) || 0;
+      let qtyDisplay: string | number = "";
+      if (isPerKm) {
+        qtyDisplay = `${r2(qtyVal)} KM`;
+      } else if (isTransport && qtyVal > 0) {
+        qtyDisplay = r2(qtyVal);
+      }
+
+      const rateLabel = service.rateLabel || (isPerKm && Number(item.rate) > 0 ? `₹${item.rate}/KM` : "");
+
       const ri = addRow((() => {
         const r = blankRow();
         r[1] = service.label; r[2] = service.hsn || "9987";
         r[3] = item.isStandard === false ? "Non-standard" : "Standard";
-        r[4] = service.label;
+        r[4] = item.description || service.label;
         if (showMaterialCodeColumn) r[5] = mc;
-        r[qtyCol] = r2(Number(item.quantity) || 1);
-        r[rateCol] = service.rateLabel; r[amtCol] = r2(base);
+        if (qtyDisplay !== "") r[qtyCol] = qtyDisplay;
+        r[rateCol] = rateLabel; r[amtCol] = r2(base);
         r[amtCol + 1] = service.gstPercent;
         r[amtCol + 2] = r2(isIgst ? Number(item.igstAmount) || 0 : (Number(item.sgstAmount) || 0) + (Number(item.cgstAmount) || 0));
         r[amtCol + 3] = r2(Number(item.totalAmount) || 0);
@@ -542,10 +572,21 @@ export async function exportEstimateToExcel(
     } else {
       const packingLabel = serviceProductLabel({ lineType: "packing", rate: sec.packingPercent, calculationType: "percentage" }, products);
       const installationLabel = serviceProductLabel({ lineType: "installation", rate: sec.implPercent, calculationType: "percentage" }, products);
-      const transportLabel = serviceProductLabel({ lineType: "transport", itemName: sec.transportDescription }, products);
+      const isKm = (sec.transportKm && sec.transportKm > 0) || sec.transportType === "outstation";
+      const transportLabel = serviceProductLabel({
+        lineType: "transport",
+        itemName: sec.transportDescription,
+        calculationType: isKm ? "per_km" : "fixed",
+        unit: isKm ? "km" : "job",
+        rate: sec.transportRate || (sec.transportKm && sec.transportKm > 0 ? transAmt / sec.transportKm : 0),
+      }, products);
+      const qtyLabel = sec.transportKm && sec.transportKm > 0 ? `${r2(sec.transportKm)} KM` : "";
+      const rateLabel = sec.transportRate && sec.transportRate > 0
+        ? `₹${sec.transportRate}/KM`
+        : (sec.transportKm && sec.transportKm > 0 && transAmt > 0 ? `₹${r2(transAmt / sec.transportKm)}/KM` : "");
       addServiceRow(packingLabel, packingLabel, `${sec.packingPercent}%`, packAmt, "OT_PACKING000N");
       addServiceRow(installationLabel, installationLabel, `${sec.implPercent}%`, implAmt, "OT_INSTALLATION00N");
-      addServiceRow(transportLabel, transportLabel, "", transAmt, "OT_TRANSPORT001N");
+      addServiceRow(transportLabel, sec.transportDescription || transportLabel, rateLabel, transAmt, "OT_TRANSPORT001N", qtyLabel);
     }
 
     if (sIdx < sections.length - 1) addRow(blankRow());

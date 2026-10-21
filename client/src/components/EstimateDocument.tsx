@@ -187,6 +187,9 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
     implPercent: number;
     transportAmt: number;
     transportDescription?: string | null;
+    transportKm?: number;
+    transportRate?: number;
+    transportType?: "local" | "outstation";
     materialBase: number; // items only (no packing/impl/transport)
     materialSgst: number;
     materialCgst: number;
@@ -251,6 +254,15 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
       const transportDescription = !Array.isArray(groupData) && groupData.transportDescription !== undefined
         ? groupData.transportDescription
         : null;
+      const transportKm = !Array.isArray(groupData) && groupData.transportKm !== undefined
+        ? Number(groupData.transportKm)
+        : 0;
+      const transportRate = !Array.isArray(groupData) && groupData.transportRate !== undefined
+        ? Number(groupData.transportRate)
+        : 0;
+      const transportType = !Array.isArray(groupData) && groupData.transportType
+        ? groupData.transportType
+        : undefined;
       const materialBase = materialItems.reduce((s, it) => s + Number(it.totalPrice || 0), 0);
       const materialSgst = materialItems.reduce((s, it) => s + Number(it.sgstAmount || 0), 0);
       const materialCgst = materialItems.reduce((s, it) => s + Number(it.cgstAmount || 0), 0);
@@ -265,6 +277,9 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
         implPercent: implPct,
         transportAmt: transAmt,
         transportDescription,
+        transportKm,
+        transportRate,
+        transportType,
         materialBase,
         materialSgst,
         materialCgst,
@@ -441,6 +456,7 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
     base: number,
     sectionKey: string,
     matCode = "",
+    qtyLabel = "",
   ) => {
     const firstTaxAmt = base * SERVICE_TAX_PCT / 100;
     const secondTaxAmt = isIgst ? 0 : base * SERVICE_TAX_PCT / 100;
@@ -459,7 +475,7 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
         )}
         <td style={cellCenter}></td>
         <td style={cellCenter}></td>
-        <td style={cellCenter}></td>
+        <td style={cellCenter}>{qtyLabel}</td>
         <td style={cellCenter}></td>
         <td style={cellRight}>{percentLabel}</td>
         <td style={cellRight}>{num(base)}</td>
@@ -473,7 +489,22 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
   const savedServiceRow = (item: EstimateItem, sectionKey: string) => {
     const base = Number(item.totalPrice) || 0;
     const service = resolveServiceProduct(item, products);
-    const rateLabel = service.rateLabel;
+    const isTransport = (item.lineType || "").toLowerCase() === "transport"
+      || service.calculationType === "per_km"
+      || String(item.unit || "").toLowerCase() === "km";
+    const isPerKm = isTransport && (service.calculationType === "per_km" || String(item.unit || "").toLowerCase() === "km");
+
+    const qtyVal = Number(item.quantity) || 0;
+    let qtyDisplay = "";
+    if (isPerKm) {
+      const qtyStr = Number.isInteger(qtyVal) ? String(qtyVal) : String(Number(qtyVal.toFixed(2)));
+      qtyDisplay = `${qtyStr} KM`;
+    } else if (isTransport && qtyVal > 0) {
+      const qtyStr = Number.isInteger(qtyVal) ? String(qtyVal) : String(Number(qtyVal.toFixed(2)));
+      qtyDisplay = item.unit && item.unit !== "pcs" && item.unit !== "job" ? `${qtyStr} ${item.unit}` : qtyStr;
+    }
+
+    const rateLabel = service.rateLabel || (isPerKm && Number(item.rate) > 0 ? `₹${item.rate}/KM` : "");
     const gstPercent = service.gstPercent;
     const gstAmount = isIgst
       ? Number(item.igstAmount) || 0
@@ -494,7 +525,7 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
         )}
         <td style={cellCenter}></td>
         <td style={cellCenter}></td>
-        <td style={cellCenter}></td>
+        <td style={cellCenter}>{qtyDisplay}</td>
         <td style={cellCenter}></td>
         <td style={cellRight}>{rateLabel}</td>
         <td style={cellRight}>{num(base)}</td>
@@ -715,7 +746,21 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
           <>
             {sec.packingPercent > 0 && (() => { const label = serviceProductLabel({ lineType: "packing", rate: sec.packingPercent, calculationType: "percentage" }, products); return serviceRow(label, label, `${sec.packingPercent}%`, sec.packingBase, `s${sIdx}`, "OT_PACKING000N"); })()}
             {sec.implPercent > 0 && (() => { const label = serviceProductLabel({ lineType: "installation", rate: sec.implPercent, calculationType: "percentage" }, products); return serviceRow(label, label, `${sec.implPercent}%`, sec.implBase, `s${sIdx}`, "OT_INSTALLATION00N"); })()}
-            {sec.transportAmt > 0 && (() => { const label = serviceProductLabel({ lineType: "transport", itemName: sec.transportDescription }, products); return serviceRow(label, label, "", sec.transportBase, `s${sIdx}`, "OT_TRANSPORT001N"); })()}
+            {sec.transportAmt > 0 && (() => {
+              const isKm = (sec.transportKm && sec.transportKm > 0) || sec.transportType === "outstation";
+              const label = serviceProductLabel({
+                lineType: "transport",
+                itemName: sec.transportDescription,
+                calculationType: isKm ? "per_km" : "fixed",
+                unit: isKm ? "km" : "job",
+                rate: sec.transportRate || (sec.transportKm && sec.transportKm > 0 ? sec.transportAmt / sec.transportKm : 0),
+              }, products);
+              const qtyLabel = sec.transportKm && sec.transportKm > 0 ? `${sec.transportKm} KM` : "";
+              const rateLabel = sec.transportRate && sec.transportRate > 0
+                ? `₹${sec.transportRate}/KM`
+                : (sec.transportKm && sec.transportKm > 0 && sec.transportBase > 0 ? `₹${Number((sec.transportBase / sec.transportKm).toFixed(2))}/KM` : "");
+              return serviceRow(label, sec.transportDescription || label, rateLabel, sec.transportBase, `s${sIdx}`, "OT_TRANSPORT001N", qtyLabel);
+            })()}
           </>
         )}
         {sIdx < sections.length - 1 && (

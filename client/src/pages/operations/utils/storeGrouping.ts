@@ -46,6 +46,21 @@ export const buildStoreGrouping = (
       };
     }
     storeGrouping[sid].itemSls.push(item.sl);
+    if (item.lineType === "transport") {
+      const isKm = String(item.unit || "").toLowerCase() === "km" || item.calculationType === "per_km";
+      if (isKm) {
+        storeGrouping[sid].transportType = "outstation";
+        storeGrouping[sid].transportKm = Number(item.quantity) || 0;
+        storeGrouping[sid].transportRate = Number(item.rate) || 0;
+      }
+      const amtVal = (item as any).totalPrice != null ? (item as any).totalPrice : item.amount;
+      if (amtVal != null) {
+        storeGrouping[sid].transportAmount = Number(amtVal) || 0;
+      }
+      if (item.description) {
+        storeGrouping[sid].transportDescription = item.description;
+      }
+    }
   });
 
   return storeGrouping;

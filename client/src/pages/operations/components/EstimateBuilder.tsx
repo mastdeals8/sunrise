@@ -3105,7 +3105,13 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                     );
                   }
                   if (column.id === "product") {
-                    if (service) return renderTextInput(item, rowIndex, column, "description", item.description || "", { placeholder: "Product details" });
+                    if (service) {
+                      const isTransport = (item.lineType || "").toLowerCase() === "transport";
+                      return renderTextInput(item, rowIndex, column, "description", item.description || "", {
+                        placeholder: isTransport ? "Outstation Transportation — Pune to Destination" : "Product details",
+                        title: isTransport ? "Route / Service Description (editable)" : undefined,
+                      });
+                    }
                     const editing = isEditingCell(rowIndex, column.id);
                     return (
                       <td key={column.id} className={cellClassName(rowIndex, column)} style={cellStyle(column)}>

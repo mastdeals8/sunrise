@@ -584,7 +584,8 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
       const sid = String(row.storeId || "");
       const storeBase = sid ? materialBaseByStore[sid] : undefined;
       const baseForThisRow = storeBase !== undefined ? storeBase : totalMaterialBase;
-      const calc = row.lineType === "transport" && row.unit === "km"
+      const isTransportKm = row.lineType === "transport" && (String(row.unit || "").toLowerCase() === "km" || row.calculationType === "per_km");
+      const calc = isTransportKm
         ? calculateEstimateRowValues(
           "fixed",
           0,
@@ -602,7 +603,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
         );
       return {
         ...row,
-        calculationType: isPercentageRateInput(row.rate) ? "percentage" : "fixed",
+        calculationType: isTransportKm ? "per_km" : (isPercentageRateInput(row.rate) ? "percentage" : (row.calculationType || "fixed")),
         ...calc,
       };
     });
@@ -1432,7 +1433,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
       ? String(sellerProfile.defaultOutstationTransportRate ?? "")
       : String(sellerProfile.defaultLocalTransport ?? estTransport ?? "");
     const rateInput = sp?.rate != null ? String(sp.rate) : fallbackRate;
-    const description = serviceProductLabel({
+    const label = serviceProductLabel({
       productId: sp?.id,
       lineType: "transport",
       itemName: sp?.name,
@@ -1440,14 +1441,23 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
       unit: sp?.unit || (mode === "outstation" ? "km" : "job"),
       rate: parseRateInput(rateInput),
     }, products);
+
+    const store = stores.find(s => String(s.id) === String(storeId))
+      || (estStoreId ? stores.find(s => String(s.id) === String(estStoreId)) : null);
+    const destCity = store?.city?.trim() || store?.location?.trim() || "";
+
+    const defaultRouteDescription = mode === "outstation"
+      ? (destCity ? `Outstation Transportation — Pune to ${destCity}` : "Outstation Transportation — Pune to [Destination City]")
+      : (destCity ? `Local Transportation — ${destCity}` : "Local Transportation");
+
     addServiceItem(
       storeId,
       "transport",
       sp?.materialCode || "OT_TRANSPORT001N",
       sp?.hsnSac || "996511",
-      description,
+      label,
       rateInput,
-      description,
+      defaultRouteDescription,
       mode === "outstation"
         ? { quantity: "0", unit: sp?.unit || "km", calculationType: sp?.calculationType || "per_km" }
         : { quantity: "1", unit: sp?.unit || "job", calculationType: sp?.calculationType || "fixed" },
@@ -2369,7 +2379,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
           materialCode: resolvedMc.materialCode || item.materialCode || "",
           materialCodeId: resolvedMc.materialCodeId ?? item.materialCodeId ?? null,
           materialDescription: resolvedMc.materialDescription || item.materialDescription || "",
-          itemName: normalizedServiceLabel || item.itemName || "",
+          itemName: item.itemName || normalizedServiceLabel || "",
           width: item.width != null ? String(item.width) : "",
           height: item.height != null ? String(item.height) : "",
           quantity: item.quantity != null ? String(item.quantity) : "1",
@@ -2389,7 +2399,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
           storeId,
           storeSortOrder: item.storeSortOrder ?? idx + 1,
           rowSortOrder: item.rowSortOrder ?? (Number(item.sl) || idx + 1),
-          description: normalizedServiceLabel || item.description || "",
+          description: item.description || normalizedServiceLabel || "",
           lineType,
           rateSource: "" as const,
         };
