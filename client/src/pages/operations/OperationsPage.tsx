@@ -756,9 +756,10 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     return () => window.removeEventListener("keydown", onEscape);
   }, [showPoModal, executionDocumentViewer, showDcPreviewModal, showDcModal, selectedEstimate, standaloneDcEditor, focusTab]);
   
-  // Estimates Register filters (search + status filter shown on the Estimates tab)
+  // Estimates Register filters (search + status + workflow filter shown on the Estimates tab)
   const [estimateSearch, setEstimateSearch] = useState("");
   const [estimateStatusFilter, setEstimateStatusFilter] = useState<string>("all");
+  const [estimateWorkflowFilter, setEstimateWorkflowFilter] = useState<string>("all");
 
   // Document Upload Tracker
   const [uploadingDocType, setUploadingDocType] = useState<string | null>(null);
@@ -4058,6 +4059,8 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
             setEstimateSearch,
             estimateStatusFilter,
             setEstimateStatusFilter,
+            estimateWorkflowFilter,
+            setEstimateWorkflowFilter,
             token,
             setEstNumber,
             setShowEstimateForm,

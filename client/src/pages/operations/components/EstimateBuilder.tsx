@@ -949,6 +949,8 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
     setEstimateSearch,
     estimateStatusFilter,
     setEstimateStatusFilter,
+    estimateWorkflowFilter: propWorkflowFilter,
+    setEstimateWorkflowFilter: propSetWorkflowFilter,
     token,
     setEstNumber,
     setShowEstimateForm,
@@ -1051,11 +1053,15 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
     activeCompanyId,
   } = props;
 
-  // Phase 2: register pagination at the render layer. Full lists are still
-  // loaded (the register's per-row Linked-Docs lookups and the workflow logic
-  // need them); only DOM rows are paged, so all filters/search behave exactly
-  // as before while large registers stop rendering thousands of rows.
+  const [localWorkflowFilter, setLocalWorkflowFilter] = React.useState<string>("all");
+  const currentWorkflowFilter = propWorkflowFilter !== undefined ? propWorkflowFilter : localWorkflowFilter;
+  const setWorkflowFilter = propSetWorkflowFilter || setLocalWorkflowFilter;
+  const [pageSize, setPageSize] = React.useState<number>(200);
+
+  // Register pagination at the render layer. Full lists are loaded;
+  // DOM rows are paged, and filtering/search applies across the full dataset.
   const estimateListFiltered = React.useMemo(() => estimates.filter((e: any) => {
+    // 1. Active / Status filter
     if (estimateStatusFilter === "all") {
       if (e.status === "archived" || e.status === "submitted") return false;
     } else if (estimateStatusFilter === "archived") {
@@ -1063,17 +1069,61 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
     } else if (e.status !== estimateStatusFilter) {
       return false;
     }
-    const q = estimateSearch.trim().toLowerCase();
-    if (!q) return true;
+
     const client = clients.find((c: any) => c.id === e.clientId);
-    return (
-      (e.estimateNumber || "").toLowerCase().includes(q)
-      || (e.title || "").toLowerCase().includes(q)
-      || (client?.name || "").toLowerCase().includes(q)
-      || (e.poNumber || "").toLowerCase().includes(q)
-    );
-  }), [estimates, clients, estimateSearch, estimateStatusFilter]);
-  const estListPager = usePagedList(estimateListFiltered, 25);
+
+    // 2. Search query filter
+    const q = estimateSearch.trim().toLowerCase();
+    if (q) {
+      const match = (
+        (e.estimateNumber || "").toLowerCase().includes(q)
+        || (e.title || "").toLowerCase().includes(q)
+        || (client?.name || "").toLowerCase().includes(q)
+        || (client?.clientGroupName || "").toLowerCase().includes(q)
+        || (e.poNumber || "").toLowerCase().includes(q)
+      );
+      if (!match) return false;
+    }
+
+    // 3. Workflow status filter
+    if (currentWorkflowFilter !== "all") {
+      const estInvoices = invoices.filter((i: any) =>
+        i.estimateId === e.id
+        && (i as any).status !== "deleted"
+        && (i as any).status !== "cancelled"
+      );
+      const hasInv = estInvoices.length > 0;
+      const poNum = (e.poNumber || "").trim();
+      const hasPo = Boolean(
+        (poNum !== "" && poNum !== "—" && poNum !== "-")
+        || (e.poFilePath && e.poFilePath.trim())
+        || e.status === "po_received"
+      );
+      const isPoExempt = Boolean(
+        client && (client.name?.toLowerCase() === "cash" || client.clientType === "walk_in")
+      );
+
+      if (currentWorkflowFilter === "invoice_generated") {
+        if (!hasInv) return false;
+      } else if (currentWorkflowFilter === "po_received_inv_pending") {
+        if (!hasPo || hasInv) return false;
+      } else if (currentWorkflowFilter === "po_missing") {
+        // PO Missing: no valid PO recorded, no invoice generated, not exempt, and not rejected/cancelled
+        if (hasPo || hasInv || isPoExempt || e.status === "rejected" || e.status === "cancelled") return false;
+      } else if (currentWorkflowFilter === "po_not_required") {
+        if (!isPoExempt) return false;
+      }
+    }
+
+    return true;
+  }), [estimates, clients, invoices, estimateSearch, estimateStatusFilter, currentWorkflowFilter]);
+
+  const estListPager = usePagedList(estimateListFiltered, pageSize);
+
+  // Deterministically reset pagination to page 1 whenever search, active filter, workflow filter, or page size changes
+  React.useEffect(() => {
+    estListPager.setPage(0);
+  }, [estimateSearch, estimateStatusFilter, currentWorkflowFilter, pageSize]);
 
   const allFilteredSelected = estimateListFiltered.length > 0 && estimateListFiltered.every((e: any) => selectedEstimateIds.has(e.id));
   const someFilteredSelected = !allFilteredSelected && estimateListFiltered.some((e: any) => selectedEstimateIds.has(e.id));
@@ -1711,9 +1761,40 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                 </div>
                 <div className="flex items-center gap-2 flex-wrap">
                   <div className="flex items-center gap-1 px-2 py-1 border border-slate-200 rounded bg-white">
-                    <input value={estimateSearch} onChange={e => setEstimateSearch(e.target.value)} placeholder="Search estimate / client / PO" className="bg-transparent outline-none text-xs w-56" />
+                    <input
+                      value={estimateSearch}
+                      onChange={e => {
+                        setEstimateSearch(e.target.value);
+                        estListPager.setPage(0);
+                      }}
+                      placeholder="Search estimate / client / PO"
+                      className="bg-transparent outline-none text-xs w-56"
+                    />
                   </div>
-                  <select value={estimateStatusFilter} onChange={e => setEstimateStatusFilter(e.target.value)} className="px-2 py-1 border border-slate-200 rounded bg-white text-xs">
+                  <select
+                    value={currentWorkflowFilter}
+                    onChange={e => {
+                      setWorkflowFilter(e.target.value);
+                      estListPager.setPage(0);
+                    }}
+                    aria-label="Filter by workflow status"
+                    className="px-2 py-1 border border-slate-200 rounded bg-white text-xs text-slate-700 outline-none cursor-pointer"
+                  >
+                    <option value="all">All estimates</option>
+                    <option value="po_missing">PO missing</option>
+                    <option value="po_received_inv_pending">PO received — invoice pending</option>
+                    <option value="invoice_generated">Invoice generated</option>
+                    <option value="po_not_required">PO not required (Cash / Walk-in)</option>
+                  </select>
+                  <select
+                    value={estimateStatusFilter}
+                    onChange={e => {
+                      setEstimateStatusFilter(e.target.value);
+                      estListPager.setPage(0);
+                    }}
+                    aria-label="Filter by active status"
+                    className="px-2 py-1 border border-slate-200 rounded bg-white text-xs text-slate-700 outline-none cursor-pointer"
+                  >
                     <option value="all">Active Estimates (All)</option>
                     <option value="draft">Draft</option>
                     <option value="sent">Sent</option>
@@ -1841,7 +1922,6 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                         <th className="px-3 py-2">Brand</th>
                         <th className="px-3 py-2">PO No</th>
                         <th className="px-3 py-2">Date</th>
-                        <th className="px-3 py-2">Format</th>
                         <th className="px-3 py-2">Linked Docs</th>
                         <th className="px-3 py-2">Status</th>
                         <th className="px-3 py-2 text-right">Amount</th>
@@ -1897,38 +1977,45 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                                   className="rounded border-slate-300 text-orange-600 focus:ring-orange-500 cursor-pointer w-3.5 h-3.5 align-middle"
                                 />
                               </td>
-	                            <td className="px-3 py-2 font-mono text-orange-600 font-bold whitespace-nowrap">
-                              {/* Estimate Number → opens Estimate Summary preview (not Project) */}
-                              <button
-                                type="button"
-                                onClick={() => handleViewEstimateDetails(e, "estimate")}
-                                title="Open Estimate Summary"
-                                className="hover:underline"
-                              >
-                                {e.estimateNumber}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={(ev) => {
-                                  ev.stopPropagation();
-                                  setRevisionHistoryEstimate(e);
-                                  setShowRevisionHistory(true);
-                                }}
-                                title={`View Revision History (Rev ${e.currentRevisionNumber ?? 0})`}
-                                className="ml-1.5 px-1.5 py-0.2 rounded text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-300 hover:bg-amber-100 transition inline-block align-middle cursor-pointer"
-                              >
-                                Rev {e.currentRevisionNumber ?? 0}
-                              </button>
-                            </td>
+	                            <td className="px-3 py-1.5 whitespace-nowrap">
+                                <button
+                                  type="button"
+                                  onClick={() => handleViewEstimateDetails(e, "estimate")}
+                                  title="Open Estimate Summary"
+                                  className="font-mono text-orange-600 font-bold hover:underline block leading-tight text-left cursor-pointer"
+                                >
+                                  {e.estimateNumber}
+                                </button>
+                                <div className="text-[11px] text-slate-500 font-normal leading-tight mt-0.5">
+                                  <button
+                                    type="button"
+                                    onClick={(ev) => {
+                                      ev.stopPropagation();
+                                      setRevisionHistoryEstimate(e);
+                                      setShowRevisionHistory(true);
+                                    }}
+                                    title={`View Revision History (Rev ${e.currentRevisionNumber ?? 0})`}
+                                    className="hover:text-slate-800 hover:underline cursor-pointer"
+                                  >
+                                    Rev {e.currentRevisionNumber ?? 0}
+                                  </button>
+                                </div>
+                              </td>
 	                            <td className="px-3 py-1.5 max-w-[340px] min-w-[160px]" title={storeSubtitle ? `${e.title} • ${storeSubtitle}` : e.title}>
                                 <div className="font-semibold text-slate-900 truncate leading-tight">{e.title}</div>
                                 {storeSubtitle && (
                                   <div className="text-[11px] text-slate-500 font-normal truncate leading-tight mt-0.5">{storeSubtitle}</div>
                                 )}
                               </td>
-	                            <td className="px-3 py-2 text-slate-700">
-                              <Link href={`/clients/${e.clientId}`} className="hover:text-orange-600 hover:underline">{normalizeDisplayName(client?.name) || `ID: ${e.clientId}`}</Link>
-                            </td>
+	                            <td className="px-3 py-2 text-slate-700 whitespace-nowrap">
+                                <Link
+                                  href={`/clients/${e.clientId}`}
+                                  title={normalizeDisplayName(client?.name) || `ID: ${e.clientId}`}
+                                  className="hover:text-orange-600 hover:underline max-w-[140px] truncate block font-medium"
+                                >
+                                  {client?.clientGroupName?.trim() || normalizeDisplayName(client?.name) || `ID: ${e.clientId}`}
+                                </Link>
+                              </td>
 	                            <td className="px-3 py-2 text-slate-600">{brand?.name || "—"}</td>
 	                            <td className="px-3 py-2 font-mono text-purple-700">
                               {e.poNumber ? (
@@ -1941,11 +2028,6 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                             </td>
 	                            <td className="px-3 py-2 text-slate-500 font-mono text-[10px]">
                               {(e.estimateDate || e.createdAt) ? new Date(e.estimateDate || e.createdAt).toLocaleDateString("en-GB") : "—"}
-                            </td>
-	                            <td className="px-3 py-2">
-                              <span className={`px-1.5 py-0.5 rounded text-[9px] uppercase font-black tracking-wide border ${isAblbl ? "bg-purple-50 text-purple-700 border-purple-100" : "bg-blue-50 text-blue-700 border-blue-100"}`}>
-                                {displayFormatLabel(e.clientFormat)}
-                              </span>
                             </td>
 	                            <td className="px-3 py-2">
                               <div className="flex gap-1 items-center">
@@ -2111,7 +2193,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                       })}
                       {estimates.length === 0 && (
                         <tr>
-                          <td colSpan={12} className="text-center py-16 text-slate-400">
+                          <td colSpan={11} className="text-center py-16 text-slate-400">
                             <FileSpreadsheet className="w-10 h-10 mx-auto mb-3 opacity-20" />
                             <p className="text-sm font-semibold">No estimates yet</p>
                             <p className="text-xs mt-1">Click <strong className="text-orange-600">New Estimate</strong> above to create your first signage estimate.</p>
@@ -2120,7 +2202,15 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                       )}
                     </tbody>
                   </table>
-                  <Pager page={estListPager.page} pageSize={estListPager.pageSize} total={estListPager.total} onPageChange={estListPager.setPage} className="px-3" />
+                  <Pager
+                    page={estListPager.page}
+                    pageSize={estListPager.pageSize}
+                    total={estListPager.total}
+                    onPageChange={estListPager.setPage}
+                    pageSizeOptions={[50, 100, 200]}
+                    onPageSizeChange={setPageSize}
+                    className="px-3"
+                  />
                 </div>
               </div>
             </div>
