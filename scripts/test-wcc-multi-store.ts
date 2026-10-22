@@ -13,6 +13,7 @@ async function runRegressionTest() {
   // Let's create a dedicated test estimate with Store 555 and Store 556 (both have storeCode: null!)
   const testEstNumber = `TEST/EST/${Date.now().toString().slice(-6)}`;
   const [createdEst] = await db.insert(estimates).values({
+    companyId: 1,
     estimateNumber: testEstNumber,
     estimateDate: new Date(),
     clientId: 1,
@@ -50,6 +51,7 @@ async function runRegressionTest() {
     // In our fixed implementation, storeCode is resolved as scopedStore?.storeCode || String(scopedStore?.id)
     const storeACode = storeA.storeCode || String(storeA.id);
     const [wccA] = await db.insert(deliveryChallans).values({
+      companyId: 1,
       estimateId: estId,
       dcNumber: `TEST/DC/A/${Date.now().toString().slice(-6)}`,
       documentType: "wcc",
@@ -73,6 +75,7 @@ async function runRegressionTest() {
     // 3. CREATE WCC FOR STORE B
     const storeBCode = storeB.storeCode || String(storeB.id);
     const [wccB] = await db.insert(deliveryChallans).values({
+      companyId: 1,
       estimateId: estId,
       dcNumber: `TEST/DC/B/${Date.now().toString().slice(-6)}`,
       documentType: "wcc",
@@ -95,6 +98,7 @@ async function runRegressionTest() {
 
     // 4. ADD EXECUTION DOCUMENTS
     const [docA] = await db.insert(executionDocuments).values({
+      companyId: 1,
       estimateId: estId,
       deliveryChallanId: wccAId,
       storeCode: storeACode,
@@ -104,6 +108,7 @@ async function runRegressionTest() {
     }).returning();
 
     const [docB] = await db.insert(executionDocuments).values({
+      companyId: 1,
       estimateId: estId,
       deliveryChallanId: wccBId,
       storeCode: storeBCode,
@@ -182,6 +187,7 @@ async function runRegressionTest() {
     // 10. SINGLE-STORE WORKFLOW TEST
     const singleStoreEstNum = `TEST/SINGLE/${Date.now().toString().slice(-6)}`;
     const [singleEst] = await db.insert(estimates).values({
+      companyId: 1,
       estimateNumber: singleStoreEstNum,
       estimateDate: new Date(),
       clientId: 1,
@@ -196,6 +202,7 @@ async function runRegressionTest() {
     }).returning();
 
     const [singleWcc] = await db.insert(deliveryChallans).values({
+      companyId: 1,
       estimateId: singleEst.id,
       dcNumber: `TEST/SINGLE/DC/${Date.now().toString().slice(-6)}`,
       documentType: "wcc",
