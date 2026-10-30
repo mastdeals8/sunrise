@@ -40,6 +40,7 @@ export interface Store {
   contactPhone: string | null;
   isActive: boolean;
   storeCode?: string | null;
+  sapCode?: string | null;
   city?: string | null;
   state?: string | null;
   stateCode?: string | null;
@@ -141,6 +142,7 @@ export interface EstimateItem {
   igstAmount: number | null;
   totalAmount: number | null;
   storeCode?: string | null;
+  sapCode?: string | null;
   storeId?: number | null;
   lineType?: "product" | "packing" | "installation" | "transport" | "manual" | string | null;
   calculationType?: string | null;
@@ -228,6 +230,7 @@ export interface EstimateItemInput {
   description?: string;
   lineType?: "product" | "packing" | "installation" | "transport";
   storeCode?: string | null;
+  sapCode?: string | null;
   // UI-only — tracks where the rate value came from so the row can render a
   // small "Customer Rate Card / Product Default / Manual Override" pill. Not
   // persisted to the DB. Defaults to "default" until the row is touched.

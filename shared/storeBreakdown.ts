@@ -2,6 +2,7 @@ export interface StoreBreakdownItem {
   storeId: number;
   storeName: string;
   storeCode: string;
+  sapCode?: string;
   itemCount: number;
   subtotal: number;
   cgstAmount: number;
@@ -49,7 +50,8 @@ export function computeStoreBreakdown(
     sid: number,
     sName: string,
     sCode: string,
-    storeItems: any[]
+    storeItems: any[],
+    sSapCode: string = ""
   ): StoreBreakdownItem => {
     const subtotal = storeItems.reduce((acc, it) => acc + (Number(it.totalPrice ?? it.total_price) || 0), 0);
     const cgst = storeItems.reduce((acc, it) => acc + (Number(it.cgstAmount ?? it.cgst_amount) || 0), 0);
@@ -62,6 +64,7 @@ export function computeStoreBreakdown(
       storeId: sid,
       storeName: sName || `Store ${sid}`,
       storeCode: sCode || "",
+      sapCode: sSapCode || undefined,
       itemCount: storeItems.length,
       subtotal: +subtotal.toFixed(2),
       cgstAmount: +cgst.toFixed(2),
@@ -88,8 +91,9 @@ export function computeStoreBreakdown(
       const sMaster = getStoreMaster(sid);
       const sName = g.storeName || sMaster?.name || sMaster?.store_name || `Store ${sid}`;
       const sCode = sMaster?.storeCode || sMaster?.store_code || g.storeCode || "";
+      const sSapCode = sMaster?.sapCode || sMaster?.sap_code || g.sapCode || "";
 
-      result.push(createItemBreakdown(sid, sName, sCode, storeItems));
+      result.push(createItemBreakdown(sid, sName, sCode, storeItems, sSapCode));
     }
   } else {
     // Mode 2: Items have explicit store_id
@@ -110,8 +114,9 @@ export function computeStoreBreakdown(
         const sMaster = getStoreMaster(sid);
         const sName = sMaster?.name || sMaster?.store_name || storeItems[0]?.storeName || storeItems[0]?.store_name || `Store ${sid}`;
         const sCode = sMaster?.storeCode || sMaster?.store_code || storeItems[0]?.storeCode || storeItems[0]?.store_code || "";
+        const sSapCode = sMaster?.sapCode || sMaster?.sap_code || storeItems[0]?.sapCode || storeItems[0]?.sap_code || "";
 
-        result.push(createItemBreakdown(sid, sName, sCode, storeItems));
+        result.push(createItemBreakdown(sid, sName, sCode, storeItems, sSapCode));
       }
     } else if (estimate.storeId || estimate.store_id) {
       // Mode 3: Single store at estimate level (e.g. Wakefit RETAIL_SINGLE_STORE)
@@ -119,8 +124,9 @@ export function computeStoreBreakdown(
       const sMaster = getStoreMaster(sid);
       const sName = sMaster?.name || sMaster?.store_name || estimate.storeName || estimate.store_name || `Store ${sid}`;
       const sCode = sMaster?.storeCode || sMaster?.store_code || estimate.storeCode || estimate.store_code || "";
+      const sSapCode = sMaster?.sapCode || sMaster?.sap_code || estimate.sapCode || estimate.sap_code || "";
 
-      result.push(createItemBreakdown(sid, sName, sCode, items));
+      result.push(createItemBreakdown(sid, sName, sCode, items, sSapCode));
     }
   }
 

@@ -537,7 +537,7 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
   const filteredCopyStores = React.useMemo(() => {
     const q = copyToSearch.trim().toLowerCase();
     return selectableStores.filter((s: any) =>
-      !q || s.name?.toLowerCase().includes(q) || s.storeCode?.toLowerCase().includes(q) || s.city?.toLowerCase().includes(q)
+      !q || s.name?.toLowerCase().includes(q) || s.storeCode?.toLowerCase().includes(q) || s.sapCode?.toLowerCase().includes(q) || s.city?.toLowerCase().includes(q)
     );
   }, [selectableStores, copyToSearch]);
   React.useEffect(() => {
@@ -594,6 +594,7 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
           const authPersonVal = metadata?.authPerson || targetStore?.contactPerson || "";
           const shortageNotesVal = metadata?.shortageNotes || "";
           const storeCodeVal = metadata?.storeCode || targetStore?.storeCode || (targetStore?.id ? String(targetStore.id) : "");
+          const sapCodeVal = metadata?.sapCode || targetStore?.sapCode || "";
           const isCompany1 = !sellerProfile?.companyId || Number(sellerProfile?.companyId) === 1;
           const companyName = sellerProfile.displayName || sellerProfile.tradeName || sellerProfile.name || (isCompany1 ? "Sunrise Media" : "Company Workspace");
           const companyAddress = sellerProfile.address || "";
@@ -736,6 +737,7 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
                       <td className="wcc-cell">
                         <b>STORE NAME -&nbsp;</b>{targetStore?.name || ""}
                         <span className="ml-8"><b>- Store code :</b> {storeCodeVal}</span>
+                        {sapCodeVal ? <span className="ml-8"><b>- SAP Code :</b> {sapCodeVal}</span> : null}
                       </td>
                     </tr>
                     {/* 5. PROJECT / JOB TITEL — spelling preserved per reference */}
@@ -791,6 +793,7 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
                         <table className="w-full border-collapse mt-2 text-[10px]">
                           <tbody>
                             <tr><td className="wcc-cell font-bold w-1/2">STORE CODE</td><td className="wcc-cell">{storeCodeVal}</td></tr>
+                            {sapCodeVal ? <tr><td className="wcc-cell font-bold w-1/2">SAP CODE</td><td className="wcc-cell">{sapCodeVal}</td></tr> : null}
                             <tr><td className="wcc-cell font-bold">STORE NAME</td><td className="wcc-cell">{targetStore?.name || ""}</td></tr>
                             <tr><td className="wcc-cell font-bold">CITY</td><td className="wcc-cell">{targetStore?.city || ""}</td></tr>
                             <tr><td className="wcc-cell font-bold">STATE</td><td className="wcc-cell">{targetStore?.state || ""}</td></tr>
@@ -964,7 +967,7 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
                     </div>
                     <div className="border border-slate-800 p-2.5 space-y-1 bg-white">
                       <span className="text-[7.5px] uppercase block font-black text-slate-400 tracking-wider">Delivery Site / Consignee</span>
-                      <p className="font-extrabold text-slate-800 text-[10px]">{targetStore?.name || "Default Site"} {storeCodeVal ? `(${storeCodeVal})` : ""}</p>
+                      <p className="font-extrabold text-slate-800 text-[10px]">{targetStore?.name || "Default Site"} | {storeCodeVal || "—"}{sapCodeVal ? ` | ${sapCodeVal}` : ""}</p>
                       <p className="text-slate-650 leading-relaxed whitespace-pre-wrap">{targetStore?.address || "N/A"}</p>
                       <div className="pt-1.5 border-t border-slate-200 mt-1.5 font-mono text-[8px] text-slate-500 space-y-0.5">
                         <div><strong>City / Zone:</strong> {targetStore?.city || "N/A"} / {targetStore?.regionZone || "N/A"}</div>
@@ -1153,7 +1156,7 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
                                   const dcCode = String(dc.metadata?.storeCode || (dc as any).storeCode || "").trim().toLowerCase();
                                   return Boolean(targetCode && dcCode && targetCode === dcCode);
                                 });
-                                return <option key={sid} value={sid}>{tStore?.storeCode ? `${tStore.storeCode} — ` : ""}{tStore?.name || `Store ${sid}`}{hasWcc ? " ✓" : ""}</option>;
+                                return <option key={sid} value={sid}>{tStore?.name || `Store ${sid}`} | {tStore?.storeCode || "—"}{tStore?.sapCode ? ` | ${tStore.sapCode}` : ""}{hasWcc ? " ✓" : ""}</option>;
                               })}
                             </select>
                           </div>
@@ -1207,7 +1210,7 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
                                         disabled={isCurrentStore}
                                         className="accent-purple-600 flex-shrink-0"
                                       />
-                                      <span className="truncate">{s.storeCode ? `${s.storeCode} — ` : ""}{s.name}</span>
+                                      <span className="truncate">{s.name} | {s.storeCode || "—"}{s.sapCode ? ` | ${s.sapCode}` : ""}</span>
                                       {activeWccsForEditor.some((dc: any) => {
                                         const metaStoreId = Number(dc.metadata?.storeId || 0);
                                         if (metaStoreId && metaStoreId === s.id) return true;

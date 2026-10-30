@@ -209,8 +209,8 @@ const StoreImportModal: React.FC<Props> = ({ token, clients, brands, stores, onC
           <div className="flex items-center gap-2">
             <button
               onClick={() => {
-                const headers = ["Store Name", "Store Code", "Client", "Brand", "City", "State", "State Code", "Region / Zone", "Contact Person", "Phone", "Address"];
-                const exampleRow = ["Andheri West Store", "LP-MUM-01", "Levi's", "Levi's India", "Mumbai", "Maharashtra", "27", "West", "Rahul Sharma", "9876543210", "Shop 5, Link Road, Andheri West"];
+                const headers = ["Store Name", "Store Code", "SAP Code", "Client", "Brand", "City", "State", "State Code", "Region / Zone", "Contact Person", "Phone", "Address"];
+                const exampleRow = ["Andheri West Store", "LP-MUM-01", "SAP-90021", "Levi's", "Levi's India", "Mumbai", "Maharashtra", "27", "West", "Rahul Sharma", "9876543210", "Shop 5, Link Road, Andheri West"];
                 const csv = [headers, exampleRow].map(r => r.map(v => `"${v}"`).join(",")).join("\n");
                 const blob = new Blob([csv], { type: "text/csv" });
                 const a = document.createElement("a");

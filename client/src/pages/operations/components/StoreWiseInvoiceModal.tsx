@@ -31,6 +31,7 @@ interface GenerationResult {
   storeId: number;
   storeName: string;
   storeCode: string;
+  sapCode?: string;
   status: "pending" | "processing" | "success" | "error" | "existing";
   invoiceNumber?: string;
   invoiceId?: number;
@@ -205,6 +206,7 @@ export const StoreWiseInvoiceModal: React.FC<StoreWiseInvoiceModalProps> = ({
       storeId: sb.storeId,
       storeName: sb.storeName,
       storeCode: sb.storeCode,
+      sapCode: sb.sapCode || "",
       status: "pending",
     }));
     setGenerationResults(initialResults);
@@ -355,6 +357,7 @@ export const StoreWiseInvoiceModal: React.FC<StoreWiseInvoiceModalProps> = ({
                     <tr>
                       <th className="px-3 py-2.5">Store</th>
                       <th className="px-3 py-2.5">Code</th>
+                      <th className="px-3 py-2.5">SAP Code</th>
                       <th className="px-3 py-2.5">Status</th>
                       <th className="px-3 py-2.5">Invoice No.</th>
                       <th className="px-3 py-2.5 text-right">Actions</th>
@@ -365,6 +368,7 @@ export const StoreWiseInvoiceModal: React.FC<StoreWiseInvoiceModalProps> = ({
                       <tr key={res.storeId} className="hover:bg-slate-50/50">
                         <td className="px-3 py-2.5 font-medium text-slate-800">{res.storeName}</td>
                         <td className="px-3 py-2.5 font-mono text-slate-600">{res.storeCode || "—"}</td>
+                        <td className="px-3 py-2.5 font-mono text-slate-600">{res.sapCode || "—"}</td>
                         <td className="px-3 py-2.5">
                           {res.status === "success" && (
                             <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
@@ -474,6 +478,7 @@ export const StoreWiseInvoiceModal: React.FC<StoreWiseInvoiceModalProps> = ({
                       </th>
                       <th className="px-3 py-2">Store Name</th>
                       <th className="px-3 py-2">Code</th>
+                      <th className="px-3 py-2">SAP Code</th>
                       <th className="px-3 py-2 text-center">Items</th>
                       <th className="px-3 py-2 text-right">Subtotal</th>
                       <th className="px-3 py-2 text-right">Taxes</th>
@@ -512,6 +517,9 @@ export const StoreWiseInvoiceModal: React.FC<StoreWiseInvoiceModalProps> = ({
                           </td>
                           <td className="px-3 py-2.5 font-mono text-slate-600">
                             {sb.storeCode || "—"}
+                          </td>
+                          <td className="px-3 py-2.5 font-mono text-slate-600">
+                            {sb.sapCode || "—"}
                           </td>
                           <td className="px-3 py-2.5 text-center font-medium text-slate-600">
                             {sb.itemCount}

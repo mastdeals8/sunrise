@@ -49,6 +49,7 @@ export const importFieldsMap: Record<string, ImportFieldDef[]> = {
   stores: [
     { label: "Store Name", key: "name", required: true, synonyms: ["store_name", "store site name"] },
     { label: "Store Code", key: "storeCode", required: true, synonyms: ["store_code", "code"] },
+    { label: "SAP Code", key: "sapCode", synonyms: ["sap_code", "sap", "sap code"] },
     { label: "Client", key: "clientName", required: true, synonyms: ["client_name", "client name"] },
     { label: "Brand", key: "brandName", required: true, synonyms: ["brand_name", "brand name"] },
     { label: "City", key: "city", synonyms: ["location_city", "location city"] },

@@ -395,6 +395,7 @@ export const stores = pgTable("stores", {
   contactPhone: text("contact_phone"),
   isActive: boolean("is_active").notNull().default(true),
   storeCode: text("store_code"),
+  sapCode: text("sap_code"),
   city: text("city"),
   state: text("state"),
   stateCode: text("state_code"),

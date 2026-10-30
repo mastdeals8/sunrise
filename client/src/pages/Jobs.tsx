@@ -8,7 +8,7 @@ import { displayFormatLabel, isAblblFormat, normalizeDisplayName } from "../../.
 
 interface Client { id: number; name: string; format?: string }
 interface Brand  { id: number; name: string }
-interface Store  { id: number; name: string; clientId: number; brandId: number; storeCode?: string | null; city?: string | null; state?: string | null; }
+interface Store  { id: number; name: string; clientId: number; brandId: number; storeCode?: string | null; sapCode?: string | null; city?: string | null; state?: string | null; }
 interface Estimate {
   id: number; estimateNumber: string; clientId: number; brandId: number; storeId: number;
   title: string; status: string; clientFormat: string; storeGrouping: any | null;
@@ -108,7 +108,7 @@ export default function JobsPage() {
   // storeGrouping (object keyed by storeId). For normal estimates there is
   // just the single linked store.
   const storeRows = (est: Estimate) => {
-    const rows: { storeId: number; storeCode: string; storeName: string; city: string }[] = [];
+    const rows: { storeId: number; storeCode: string; sapCode?: string; storeName: string; city: string }[] = [];
     const isAbfrl = isAblblFormat(est.clientFormat);
     if (isAbfrl && est.storeGrouping && typeof est.storeGrouping === "object") {
       for (const sid of Object.keys(est.storeGrouping)) {
@@ -116,13 +116,14 @@ export default function JobsPage() {
         rows.push({
           storeId: Number(sid),
           storeCode: s?.storeCode || String(sid),
+          sapCode: s?.sapCode || "",
           storeName: s?.name || `Store #${sid}`,
           city: s?.city || "",
         });
       }
     } else {
       const s = stores.find(x => x.id === est.storeId);
-      rows.push({ storeId: est.storeId, storeCode: s?.storeCode || String(est.storeId), storeName: s?.name || "—", city: s?.city || "" });
+      rows.push({ storeId: est.storeId, storeCode: s?.storeCode || String(est.storeId), sapCode: s?.sapCode || "", storeName: s?.name || "—", city: s?.city || "" });
     }
     return rows;
   };
@@ -239,6 +240,7 @@ export default function JobsPage() {
                     <thead>
                       <tr className="bg-slate-50 text-slate-500 uppercase text-[10px] font-bold text-left">
                         <th className="px-2 py-1.5">Store Code</th>
+                        <th className="px-2 py-1.5">SAP Code</th>
                         <th className="px-2 py-1.5">Store Name</th>
                         <th className="px-2 py-1.5">City</th>
                         <th className="px-2 py-1.5">Status</th>
@@ -255,6 +257,7 @@ export default function JobsPage() {
                         return (
                           <tr key={r.storeId}>
                             <td className="px-2 py-1.5 font-mono text-[11px]">{r.storeCode}</td>
+                            <td className="px-2 py-1.5 font-mono text-[11px]">{r.sapCode || "—"}</td>
                             <td className="px-2 py-1.5">{r.storeName}</td>
                             <td className="px-2 py-1.5 text-slate-500">{r.city}</td>
                             <td className="px-2 py-1.5">
@@ -307,7 +310,7 @@ const CompletionReport: React.FC<{
   estimate: Estimate;
   client?: Client;
   brand?: Brand;
-  rows: { storeId: number; storeCode: string; storeName: string; city: string }[];
+  rows: { storeId: number; storeCode: string; sapCode?: string; storeName: string; city: string }[];
   challans: DC[];
   deriveStatus: (storeCode: string) => string;
   onClose: () => void;
@@ -333,7 +336,7 @@ const CompletionReport: React.FC<{
     ...rows.map(r => {
       const st = deriveStatus(r.storeCode);
       const ok = ["completed", "proof_received"].includes(st);
-      return `${ok ? "✅" : "🕓"} ${r.storeCode} — ${r.storeName}${r.city ? ` (${r.city})` : ""} [${st.replace(/_/g, " ")}]`;
+      return `${ok ? "✅" : "🕓"} ${r.storeName} | ${r.storeCode || "—"}${r.sapCode ? ` | ${r.sapCode}` : ""}${r.city ? ` (${r.city})` : ""} [${st.replace(/_/g, " ")}]`;
     }),
   ].join("\n");
 
@@ -396,9 +399,10 @@ const CompletionReport: React.FC<{
                 <div key={r.storeId} className="border border-slate-200 rounded-md p-3 print:break-inside-avoid">
                   <div className="flex items-center justify-between border-b border-slate-100 pb-2 mb-2">
                     <div>
-                      <span className="font-mono font-bold text-sm text-slate-800">{r.storeCode}</span>
-                      <span className="ml-2 text-sm text-slate-700">{r.storeName}</span>
-                      {r.city && <span className="ml-1 text-xs text-slate-400">— {r.city}</span>}
+                      <span className="text-sm font-bold text-slate-800">{r.storeName}</span>
+                      <span className="ml-2 font-mono text-sm text-slate-600">| {r.storeCode || "—"}</span>
+                      {r.sapCode && <span className="ml-2 font-mono text-sm text-slate-600">| {r.sapCode}</span>}
+                      {r.city && <span className="ml-1 text-xs text-slate-400">({r.city})</span>}
                     </div>
                     <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase border ${STATUS_COLOR[st] || STATUS_COLOR.pending}`}>{st.replace(/_/g, " ")}</span>
                   </div>

@@ -107,6 +107,7 @@ const DeliveryChallanPanel: React.FC<DeliveryChallanPanelProps> = ({
         return (d.dcNumber || "").toLowerCase().includes(q)
           || (est?.estimateNumber || "").toLowerCase().includes(q)
           || String(d.metadata?.storeCode || (d as any).storeCode || "").toLowerCase().includes(q)
+          || String(d.metadata?.sapCode || (d as any).sapCode || "").toLowerCase().includes(q)
           || (client?.name || "").toLowerCase().includes(q);
       });
     }
@@ -282,6 +283,7 @@ const DeliveryChallanPanel: React.FC<DeliveryChallanPanelProps> = ({
                 <th className="px-3 py-2">{docLabel}</th>
                 <th className="px-3 py-2">Estimate</th>
                 <th className="px-3 py-2">Store Code</th>
+                <th className="px-3 py-2">SAP Code</th>
                 <th className="px-3 py-2">Store</th>
                 <th className="px-3 py-2">Status</th>
                 <th className="px-3 py-2">Created Date</th>
@@ -310,6 +312,9 @@ const DeliveryChallanPanel: React.FC<DeliveryChallanPanelProps> = ({
                     </td>
                     <td className="px-3 py-1.5 text-slate-700 font-mono font-bold">
                       {d.metadata?.storeCode || (d as any).storeCode || store?.storeCode || "—"}
+                    </td>
+                    <td className="px-3 py-1.5 text-slate-700 font-mono">
+                      {d.metadata?.sapCode || (d as any).sapCode || store?.sapCode || "—"}
                     </td>
                     <td className="px-3 py-1.5 text-slate-700">
                       {d.metadata?.storeName || store?.name || "—"}

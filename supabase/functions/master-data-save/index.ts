@@ -236,6 +236,7 @@ Deno.serve(async (req: Request) => {
           contact_person: body.contactPerson ? normalizeDisplayName(String(body.contactPerson)) : null,
           contact_phone: body.contactPhone || null,
           store_code: body.storeCode || null,
+          sap_code: body.sapCode || body.sap_code || null,
           city: body.city ? normalizeDisplayName(String(body.city)) : null,
           state: body.state ? normalizeDisplayName(String(body.state)) : null,
           state_code: body.stateCode || null,
@@ -263,6 +264,7 @@ Deno.serve(async (req: Request) => {
         if (body.contactPerson !== undefined) updates.contact_person = body.contactPerson ? normalizeDisplayName(String(body.contactPerson)) : null;
         if (body.contactPhone !== undefined) updates.contact_phone = body.contactPhone;
         if (body.storeCode !== undefined) updates.store_code = body.storeCode;
+        if (body.sapCode !== undefined || body.sap_code !== undefined) updates.sap_code = body.sapCode ?? body.sap_code ?? null;
         if (body.city !== undefined) updates.city = body.city ? normalizeDisplayName(String(body.city)) : null;
         if (body.state !== undefined) updates.state = body.state ? normalizeDisplayName(String(body.state)) : null;
         if (body.stateCode !== undefined) updates.state_code = body.stateCode;

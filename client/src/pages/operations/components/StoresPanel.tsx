@@ -22,7 +22,7 @@ function fuzzyIncludes(haystack: string, needle: string): boolean {
 }
 
 type SortDir = "asc" | "desc" | null;
-type SortKey = "name" | "storeCode" | "client" | "brand" | "city" | null;
+type SortKey = "name" | "storeCode" | "sapCode" | "client" | "brand" | "city" | null;
 
 interface StoresPanelProps {
   stores: Store[];
@@ -36,6 +36,8 @@ interface StoresPanelProps {
   setStoreName: (v: string) => void;
   storeCode: string;
   setStoreCode: (v: string) => void;
+  storeSapCode?: string;
+  setStoreSapCode?: (v: string) => void;
   storeClientId: string;
   setStoreClientId: (v: string) => void;
   storeBrandId: string;
@@ -71,6 +73,8 @@ const StoresPanel: React.FC<StoresPanelProps> = ({
   setStoreName,
   storeCode,
   setStoreCode,
+  storeSapCode = "",
+  setStoreSapCode,
   storeClientId,
   setStoreClientId,
   storeBrandId,
@@ -181,7 +185,9 @@ const StoresPanel: React.FC<StoresPanelProps> = ({
     if (!newName) return;
     try {
       await masterDataSave(token, "stores", "POST", null, {
-        ...s, id: undefined, name: normalizeDisplayName(newName), storeCode: s.storeCode ? `${s.storeCode}-COPY` : null,
+        ...s, id: undefined, name: normalizeDisplayName(newName),
+        storeCode: s.storeCode ? `${s.storeCode}-COPY` : null,
+        sapCode: s.sapCode ? `${s.sapCode}-COPY` : null,
       });
       reload && reload();
     } catch (err: any) { alert(err.message || "Duplicate failed"); }
@@ -200,7 +206,7 @@ const StoresPanel: React.FC<StoresPanelProps> = ({
       const storeName = normalizeDisplayName(s.name) || "";
       // Pre-built haystack used by the global search for fuzzy-match.
       const haystack = [
-        storeName, s.storeCode, s.city, s.state, s.regionZone, s.location,
+        storeName, s.storeCode, s.sapCode, s.city, s.state, s.regionZone, s.location,
         s.address, s.contactPerson, s.contactPhone, clientName, brandName,
       ].filter(Boolean).join(" | ");
       return { s, client, brand, clientName, brandName, storeName, haystack };
@@ -220,6 +226,7 @@ const StoresPanel: React.FC<StoresPanelProps> = ({
         const field =
           col === "name" ? storeName :
           col === "storeCode" ? (s.storeCode || "") :
+          col === "sapCode" ? (s.sapCode || "") :
           col === "client" ? clientName :
           col === "brand" ? brandName :
           col === "city" ? (s.city || "") :
@@ -235,12 +242,14 @@ const StoresPanel: React.FC<StoresPanelProps> = ({
       const cmp = (a: typeof list[number], b: typeof list[number]) => {
         const av = sortKey === "name" ? a.storeName
           : sortKey === "storeCode" ? (a.s.storeCode || "")
+          : sortKey === "sapCode" ? (a.s.sapCode || "")
           : sortKey === "client" ? a.clientName
           : sortKey === "brand" ? a.brandName
           : sortKey === "city" ? (a.s.city || "")
           : "";
         const bv = sortKey === "name" ? b.storeName
           : sortKey === "storeCode" ? (b.s.storeCode || "")
+          : sortKey === "sapCode" ? (b.s.sapCode || "")
           : sortKey === "client" ? b.clientName
           : sortKey === "brand" ? b.brandName
           : sortKey === "city" ? (b.s.city || "")
@@ -276,11 +285,11 @@ const StoresPanel: React.FC<StoresPanelProps> = ({
   };
 
   const exportCsv = () => {
-    const headers = ["Store Name", "Store Code", "Client", "Brand", "City", "State", "State Code", "Region / Zone", "Contact Person", "Phone", "Address"];
+    const headers = ["Store Name", "Store Code", "SAP Code", "Client", "Brand", "City", "State", "State Code", "Region / Zone", "Contact Person", "Phone", "Address"];
     const rows = [
       headers.join(","),
       ...visible.map(({ s, client, brand }) => [
-        s.name, s.storeCode || "", client?.name || "", brand?.name || "",
+        s.name, s.storeCode || "", s.sapCode || "", client?.name || "", brand?.name || "",
         s.city || "", s.state || "", s.stateCode || "", s.regionZone || "",
         s.contactPerson || "", s.contactPhone || "", s.address || "",
       ].map(v => `"${String(v).replace(/"/g, '""')}"`).join(",")),
@@ -337,8 +346,11 @@ const StoresPanel: React.FC<StoresPanelProps> = ({
 
       {showStoreForm && (
         <form onSubmit={handleCreateStore} className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 max-w-3xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-4">
-          <Field label="Store / Site Name *"><input required value={storeName} onChange={(e) => setStoreName(e.target.value)} className="input-compact" placeholder="e.g. Louis Philippe Select Citywalk" /></Field>
+          <div className="md:col-span-2">
+            <Field label="Store / Site Name *"><input required value={storeName} onChange={(e) => setStoreName(e.target.value)} className="input-compact" placeholder="e.g. Louis Philippe Select Citywalk" /></Field>
+          </div>
           <Field label="Store Code"><input value={storeCode} onChange={(e) => setStoreCode(e.target.value)} className="input-compact" placeholder="e.g. LP-MUM-01" /></Field>
+          <Field label="SAP Code"><input value={storeSapCode} onChange={(e) => setStoreSapCode && setStoreSapCode(e.target.value)} className="input-compact" placeholder="e.g. SAP-12345" /></Field>
           <Field label="Corporate Client *">
             <select required value={storeClientId} onChange={(e) => { setStoreClientId(e.target.value); setStoreBrandId(""); }} className="input-compact">
               <option value="">Select Corporate Client</option>
@@ -397,6 +409,7 @@ const StoresPanel: React.FC<StoresPanelProps> = ({
               <tr>
                 <SortableTh label="Store / Site" sortKey="name" col="name" current={sortKey} dir={sortDir} onSort={cycleSort} hasFilter={!!colFilters.name} onFilterToggle={() => setOpenFilter(openFilter === "name" ? null : "name")} open={openFilter === "name"} value={colFilters.name || ""} onChange={v => setColFilter("name", v)} />
                 <SortableTh label="Code" sortKey="storeCode" col="storeCode" current={sortKey} dir={sortDir} onSort={cycleSort} hasFilter={!!colFilters.storeCode} onFilterToggle={() => setOpenFilter(openFilter === "storeCode" ? null : "storeCode")} open={openFilter === "storeCode"} value={colFilters.storeCode || ""} onChange={v => setColFilter("storeCode", v)} />
+                <SortableTh label="SAP Code" sortKey="sapCode" col="sapCode" current={sortKey} dir={sortDir} onSort={cycleSort} hasFilter={!!colFilters.sapCode} onFilterToggle={() => setOpenFilter(openFilter === "sapCode" ? null : "sapCode")} open={openFilter === "sapCode"} value={colFilters.sapCode || ""} onChange={v => setColFilter("sapCode", v)} />
                 <SortableTh label="Client" sortKey="client" col="client" current={sortKey} dir={sortDir} onSort={cycleSort} hasFilter={!!colFilters.client} onFilterToggle={() => setOpenFilter(openFilter === "client" ? null : "client")} open={openFilter === "client"} value={colFilters.client || ""} onChange={v => setColFilter("client", v)} />
                 <SortableTh label="Brand" sortKey="brand" col="brand" current={sortKey} dir={sortDir} onSort={cycleSort} hasFilter={!!colFilters.brand} onFilterToggle={() => setOpenFilter(openFilter === "brand" ? null : "brand")} open={openFilter === "brand"} value={colFilters.brand || ""} onChange={v => setColFilter("brand", v)} />
                 <SortableTh label="City" sortKey="city" col="city" current={sortKey} dir={sortDir} onSort={cycleSort} hasFilter={!!colFilters.city} onFilterToggle={() => setOpenFilter(openFilter === "city" ? null : "city")} open={openFilter === "city"} value={colFilters.city || ""} onChange={v => setColFilter("city", v)} />
@@ -413,6 +426,7 @@ const StoresPanel: React.FC<StoresPanelProps> = ({
                       {!s.isActive && <span className="ml-2 px-1 py-0.5 bg-slate-100 text-slate-500 text-[9px] rounded font-normal not-italic">INACTIVE</span>}
                     </td>
                     <td className="px-4 py-2.5 font-mono text-xs">{s.storeCode || "—"}</td>
+                    <td className="px-4 py-2.5 font-mono text-xs">{s.sapCode || "—"}</td>
                     <td className="px-4 py-2.5 text-slate-600 text-xs">{normalizeDisplayName(client?.name) || `ID: ${s.clientId}`}</td>
                     <td className="px-4 py-2.5 text-orange-600 font-semibold text-xs">{normalizeDisplayName(brand?.name) || `ID: ${s.brandId}`}</td>
                     <td className="px-4 py-2.5 text-slate-500 text-xs">{s.city || "—"}</td>
@@ -434,7 +448,7 @@ const StoresPanel: React.FC<StoresPanelProps> = ({
                 );
               })}
               {visible.length === 0 && (
-                <tr><td colSpan={7} className="text-center py-10 text-xs text-slate-400">No stores match your filters.</td></tr>
+                <tr><td colSpan={8} className="text-center py-10 text-xs text-slate-400">No stores match your filters.</td></tr>
               )}
             </tbody>
           </table>
@@ -447,6 +461,7 @@ const StoresPanel: React.FC<StoresPanelProps> = ({
           <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
             <Term k="Name" v={normalizeDisplayName(view.name)} />
             <Term k="Code" v={view.storeCode || "—"} />
+            <Term k="SAP Code" v={view.sapCode || "—"} />
             <Term k="Client" v={normalizeDisplayName(clients.find(c => c.id === view.clientId)?.name) || "—"} />
             <Term k="Brand" v={normalizeDisplayName(brands.find(b => b.id === view.brandId)?.name) || "—"} />
             <Term k="City" v={view.city || "—"} />
@@ -476,8 +491,11 @@ const StoresPanel: React.FC<StoresPanelProps> = ({
         <Modal onClose={() => setEdit(null)}>
           <h3 className="text-sm font-bold text-slate-800 mb-3">Edit Store</h3>
           <div className="grid grid-cols-2 gap-3 text-xs">
-            <Field label="Name *"><input value={edit.name} onChange={e => setEdit({ ...edit, name: e.target.value })} className="input-compact" /></Field>
-            <Field label="Code"><input value={edit.storeCode || ""} onChange={e => setEdit({ ...edit, storeCode: e.target.value })} className="input-compact" /></Field>
+            <div className="col-span-2">
+              <Field label="Name *"><input value={edit.name} onChange={e => setEdit({ ...edit, name: e.target.value })} className="input-compact" /></Field>
+            </div>
+            <Field label="Store Code"><input value={edit.storeCode || ""} onChange={e => setEdit({ ...edit, storeCode: e.target.value })} className="input-compact" placeholder="e.g. LP-MUM-01" /></Field>
+            <Field label="SAP Code"><input value={edit.sapCode || ""} onChange={e => setEdit({ ...edit, sapCode: e.target.value })} className="input-compact" placeholder="e.g. SAP-12345" /></Field>
             <Field label="Client">
               <select
                 value={edit.clientId ? String(edit.clientId) : ""}

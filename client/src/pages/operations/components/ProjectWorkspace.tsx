@@ -35,6 +35,7 @@ interface ExecStoreRow {
   estimateId: number;
   storeId: number | null;
   storeCode: string;
+  sapCode?: string | null;
   storeName: string | null;
   storeCity: string | null;
   storeState: string | null;
@@ -262,7 +263,7 @@ const isInstallationPhoto = (doc: any) =>
 
 const estimateStoreScope = (estimate: Estimate, items: any[], masterStores: Store[], challans: DeliveryChallan[]) => {
   const grouping = (estimate.storeGrouping || {}) as Record<string, any>;
-  const scope = new Map<string, { storeId: number | null; storeCode: string; storeName: string | null; storeCity: string | null; storeState: string | null }>();
+  const scope = new Map<string, { storeId: number | null; storeCode: string; sapCode?: string | null; storeName: string | null; storeCity: string | null; storeState: string | null }>();
   const add = (storeId: number | null, fallback: any = {}) => {
     const master = storeId ? masterStores.find(store => store.id === storeId) : undefined;
     const storeCode = String(master?.storeCode || fallback.storeCode || fallback.store_code || "").trim();
@@ -271,6 +272,7 @@ const estimateStoreScope = (estimate: Estimate, items: any[], masterStores: Stor
     scope.set(key, {
       storeId: master?.id ?? storeId,
       storeCode,
+      sapCode: master?.sapCode || fallback.sapCode || fallback.sap_code || null,
       storeName: master?.name || fallback.storeName || fallback.store_name || null,
       storeCity: master?.city || fallback.storeCity || fallback.store_city || null,
       storeState: master?.state || fallback.storeState || fallback.store_state || null,
@@ -352,6 +354,7 @@ export const projectStoresFromCanonicalRecords = (
       estimateId: estimate.id,
       storeId: scope.storeId,
       storeCode: scope.storeCode,
+      sapCode: scope.sapCode || null,
       storeName: scope.storeName,
       storeCity: scope.storeCity,
       storeState: scope.storeState,
@@ -638,6 +641,7 @@ const StoreDrawer: React.FC<{
               <MapPin className="w-4 h-4 text-orange-500 shrink-0" />
               <span className="font-black text-slate-900">{row.storeName || row.storeCode}</span>
               <Chip label={row.storeCode} cls="bg-slate-100 text-slate-600 border-slate-200" />
+              {row.sapCode && <Chip label={`SAP: ${row.sapCode}`} cls="bg-amber-50 text-amber-800 border-amber-200" />}
               <Chip label={billingStatus.label} cls={billingStatus.cls} />
             </div>
             {(row.storeCity || row.storeState) && (
@@ -1040,6 +1044,7 @@ const PhotosTab: React.FC<{
                   <MapPin className="w-3.5 h-3.5 text-orange-400 shrink-0" />
                   <span className="font-bold text-sm text-slate-800">{store.storeName || store.storeCode}</span>
                   <Chip label={store.storeCode} />
+                  {store.sapCode && <Chip label={`SAP: ${store.sapCode}`} />}
                 </div>
                 <span className={`text-[11px] font-black px-2 py-0.5 rounded ${photos.length > 0 ? "bg-blue-100 text-blue-700" : "bg-slate-100 text-slate-500"}`}>
                   {photos.length} photo{photos.length !== 1 ? "s" : ""}
@@ -1178,6 +1183,7 @@ const WccTab: React.FC<{
                   <MapPin className="w-3 h-3 text-orange-400 shrink-0" />
                   <span>{s.storeName || s.storeCode}</span>
                   <Chip label={s.storeCode} />
+                  {s.sapCode && <Chip label={`SAP: ${s.sapCode}`} />}
                   {(s.wccRecords.length > 0 || s.dcRecords.length > 0) && <span className="ml-auto text-[10px] text-blue-600 font-black">Edit</span>}
                 </button>
                 ))}
@@ -1223,7 +1229,7 @@ const WccTab: React.FC<{
                     <td className="px-3 py-2 text-slate-400 font-mono">{idx + 1}</td>
                     <td className="px-3 py-2">
                       <div className="font-bold text-slate-800 leading-tight">{store.storeName || store.storeCode}</div>
-                      <div className="text-[10px] text-slate-400 font-mono mt-0.5">{store.storeCode}</div>
+                      <div className="text-[10px] text-slate-400 font-mono mt-0.5">{store.storeCode}{store.sapCode ? ` | SAP: ${store.sapCode}` : ""}</div>
                     </td>
                     <td className="px-3 py-2">
                       {hasDcs ? (

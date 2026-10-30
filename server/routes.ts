@@ -5449,6 +5449,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 contactPerson: normalizeDisplayName(item.contactPerson) || existing.contactPerson,
                 contactPhone: item.contactPhone || existing.contactPhone,
                 storeCode: code || existing.storeCode,
+                sapCode: item.sapCode !== undefined ? (String(item.sapCode || "").trim() || null) : existing.sapCode,
                 city: normalizeDisplayName(item.city) || existing.city,
                 state: resolvedStateName || existing.state,
                 stateCode: resolvedStateCode || existing.stateCode,
@@ -5464,6 +5465,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 contactPerson: normalizeDisplayName(item.contactPerson) || null,
                 contactPhone: item.contactPhone || null,
                 storeCode: code,
+                sapCode: item.sapCode ? String(item.sapCode).trim() : null,
                 city: normalizeDisplayName(item.city) || null,
                 state: resolvedStateName || null,
                 stateCode: resolvedStateCode || null,
@@ -7310,6 +7312,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ...(req.body.city !== undefined ? { city: normalizeDisplayName(req.body.city) || null } : {}),
         ...(req.body.state !== undefined ? { state: normalizeDisplayName(req.body.state) || null } : {}),
         ...(req.body.contact !== undefined ? { contact: normalizeDisplayName(req.body.contact) || null } : {}),
+        ...(req.body.sapCode !== undefined ? { sapCode: req.body.sapCode || null } : req.body.sap_code !== undefined ? { sapCode: req.body.sap_code || null } : {}),
       };
       const updated = await db.update(stores).set(updates).where(eq(stores.id, id)).returning();
       if (!updated[0]) return res.status(404).json({ message: "Store not found" });

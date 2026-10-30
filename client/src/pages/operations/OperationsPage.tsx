@@ -331,6 +331,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
   
   // Store Extended Fields
   const [storeCode, setStoreCode] = useState("");
+  const [storeSapCode, setStoreSapCode] = useState("");
   const [storeCity, setStoreCity] = useState("");
   const [storeState, setStoreState] = useState("");
   const [storeStateCode, setStoreStateCode] = useState("");
@@ -853,6 +854,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
         contactPerson: normalizeDisplayName(storeContact) || null,
         contactPhone: storePhone || null,
         storeCode: storeCode || null,
+        sapCode: storeSapCode || null,
         city: normalizeDisplayName(storeCity) || null,
         state: normalizeDisplayName(storeState) || null,
         stateCode: storeStateCode || null,
@@ -870,6 +872,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
       setStoreContact("");
       setStorePhone("");
       setStoreCode("");
+      setStoreSapCode("");
       setStoreCity("");
       setStoreState("");
       setStoreStateCode("");
@@ -4278,6 +4281,8 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
           setStoreName={setStoreName}
           storeCode={storeCode}
           setStoreCode={setStoreCode}
+          storeSapCode={storeSapCode}
+          setStoreSapCode={setStoreSapCode}
           storeClientId={storeClientId}
           setStoreClientId={setStoreClientId}
           storeBrandId={storeBrandId}

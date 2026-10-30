@@ -77,7 +77,12 @@ export function getInvoiceSummaryRows(packet: any, sellerProfile: any, pages?: a
 
   const noOfStoresCount = scopedStores.length;
   const noOfStores = String(noOfStoresCount);
-  const store = noOfStoresCount > 1 ? "Multiple" : noOfStoresCount === 1 ? (storeNamesList[0] || "—") : "—";
+  const singleStore = scopedStores[0];
+  const store = noOfStoresCount > 1
+    ? "Multiple"
+    : noOfStoresCount === 1
+      ? `${singleStore?.storeName || "—"}${singleStore?.storeCode ? ` | ${singleStore.storeCode}` : ""}${singleStore?.sapCode ? ` | ${singleStore.sapCode}` : ""}`
+      : "—";
 
   // 7. Vendor
   const vendor = String(sellerProfile?.displayName || sellerProfile?.tradeName || sellerProfile?.name || sellerProfile?.companyName || "Sunrise Media").trim();

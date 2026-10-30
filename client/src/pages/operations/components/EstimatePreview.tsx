@@ -509,6 +509,7 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
                 return {
                   srNo: index + 1,
                   storeCode: store?.storeCode || storeItems.find(it => it.storeCode)?.storeCode || sidKey,
+                  sapCode: store?.sapCode || storeItems.find(it => it.sapCode)?.sapCode || "",
                   materialItems,
                   serviceItems,
                   packingPercent: !Array.isArray(groupData) && groupData.packingPercent !== undefined ? Number(groupData.packingPercent) : Number(est.packingPercent || 0),
@@ -523,6 +524,7 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
             : [{
                 srNo: 1,
                 storeCode: targetStore?.storeCode || sortedItems.find(it => it.storeCode)?.storeCode || "",
+                sapCode: targetStore?.sapCode || sortedItems.find(it => it.sapCode)?.sapCode || "",
                 materialItems: sortedItems.filter(it => !isServiceItem(it)),
                 serviceItems: sortedItems.filter(isServiceItem),
                 packingPercent: Number(est.packingPercent || 0),
@@ -542,6 +544,7 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
                 vendorCode: est.vendorCode || "",
                 activityName: subject,
                 storeCode: section.storeCode,
+                sapCode: section.sapCode,
                 qty: 1,
                 beforeGst: materialBase,
                 estimateNo: est.estimateNumber || "",
@@ -563,6 +566,7 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
                   ? `${label} — ${item.description}`
                   : label,
                 storeCode: section.storeCode,
+                sapCode: section.sapCode,
                 qty: isKm ? `${Number(item.quantity) || 0} KM` : (Number(item.quantity) || 1),
                 beforeGst: Number(item.totalPrice || 0),
                 estimateNo: est.estimateNumber || "",
@@ -576,6 +580,7 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
                   vendorCode: est.vendorCode || "",
                   activityName: serviceProductLabel({ lineType: "packing", rate: section.packingPercent, calculationType: "percentage" }, products),
                   storeCode: section.storeCode,
+                  sapCode: section.sapCode,
                   qty: 1,
                   beforeGst: amt,
                   estimateNo: est.estimateNumber || "",
@@ -590,6 +595,7 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
                   vendorCode: est.vendorCode || "",
                   activityName: serviceProductLabel({ lineType: "installation", rate: section.implementationPercent, calculationType: "percentage" }, products),
                   storeCode: section.storeCode,
+                  sapCode: section.sapCode,
                   qty: 1,
                   beforeGst: amt,
                   estimateNo: est.estimateNumber || "",
@@ -612,6 +618,7 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
                   ? `${label} — ${section.transportDescription}`
                   : label,
                 storeCode: section.storeCode,
+                sapCode: section.sapCode,
                 qty: (section.transportKm && section.transportKm > 0) ? `${section.transportKm} KM` : 1,
                 beforeGst: section.transportAmount,
                 estimateNo: est.estimateNumber || "",
@@ -631,7 +638,7 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
         const copySummary = async () => {
           if (!selectedEstimate) return;
           const rows = buildSummaryRows(selectedEstimate, selectedEstimateItems || []);
-          const headers = ["Sr No", "Vendor Code", "Element / Product Details", "Store Code", "Qty", "Before GST Net Price", "Estimate No"];
+          const headers = ["Sr No", "Vendor Code", "Element / Product Details", "Store Code", "SAP Code", "Qty", "Before GST Net Price", "Estimate No"];
           const totalBeforeGst = rows.reduce((sum, row) => sum + row.beforeGst, 0);
           const subject = selectedEstimate.subject || selectedEstimate.title || "Estimate Work";
           const estimateNo = selectedEstimate.estimateNumber || "";
@@ -650,6 +657,7 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
               <td style="border:1px solid #000;padding:6px 10px;text-align:center;white-space:nowrap">${escapeHtml(row.vendorCode)}</td>
               <td style="border:1px solid #000;padding:6px 10px;text-align:left">${escapeHtml(row.activityName)}</td>
               <td style="border:1px solid #000;padding:6px 10px;text-align:center;white-space:nowrap">${escapeHtml(row.storeCode)}</td>
+              <td style="border:1px solid #000;padding:6px 10px;text-align:center;white-space:nowrap">${escapeHtml(row.sapCode || "—")}</td>
               <td style="border:1px solid #000;padding:6px 10px;text-align:right;white-space:nowrap">${summaryNumber(row.qty)}</td>
               <td style="border:1px solid #000;padding:6px 10px;text-align:right;white-space:nowrap">₹ ${summaryNumber(row.beforeGst)}</td>
               <td style="border:1px solid #000;padding:6px 10px;text-align:left;white-space:nowrap">${escapeHtml(row.estimateNo)}</td>
@@ -666,6 +674,7 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
         <th style="border:1px solid #000;padding:6px 10px;text-align:center;font-weight:700;white-space:nowrap">Vendor Code</th>
         <th style="border:1px solid #000;padding:6px 10px;text-align:left;font-weight:700">Element / Product Details</th>
         <th style="border:1px solid #000;padding:6px 10px;text-align:center;font-weight:700;white-space:nowrap">Store Code</th>
+        <th style="border:1px solid #000;padding:6px 10px;text-align:center;font-weight:700;white-space:nowrap">SAP Code</th>
         <th style="border:1px solid #000;padding:6px 10px;text-align:right;font-weight:700;white-space:nowrap">Qty</th>
         <th style="border:1px solid #000;padding:6px 10px;text-align:right;font-weight:700;white-space:nowrap">Before GST Net Price</th>
         <th style="border:1px solid #000;padding:6px 10px;text-align:left;font-weight:700;white-space:nowrap">Estimate No</th>
@@ -674,7 +683,7 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
     <tbody>
       ${htmlRows}
       <tr style="font-weight:700;background:#f8fafc">
-        <td colspan="5" style="border:1px solid #000;padding:6px 10px;text-align:right;font-weight:700">Total Before GST</td>
+        <td colspan="6" style="border:1px solid #000;padding:6px 10px;text-align:right;font-weight:700">Total Before GST</td>
         <td style="border:1px solid #000;padding:6px 10px;text-align:right;font-weight:700;white-space:nowrap">₹ ${summaryNumber(totalBeforeGst)}</td>
         <td style="border:1px solid #000;padding:6px 10px;text-align:left;white-space:nowrap">${escapeHtml(estimateNo)}</td>
       </tr>
@@ -685,8 +694,8 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
 
           const tsvTable = [
             headers.join("\t"),
-            ...rows.map(row => [row.srNo, row.vendorCode, row.activityName, row.storeCode, summaryNumber(row.qty), `₹ ${summaryNumber(row.beforeGst)}`, row.estimateNo].join("\t")),
-            ["", "", "", "", "Total Before GST", `₹ ${summaryNumber(totalBeforeGst)}`, estimateNo].join("\t"),
+            ...rows.map(row => [row.srNo, row.vendorCode, row.activityName, row.storeCode, row.sapCode || "—", summaryNumber(row.qty), `₹ ${summaryNumber(row.beforeGst)}`, row.estimateNo].join("\t")),
+            ["", "", "", "", "", "Total Before GST", `₹ ${summaryNumber(totalBeforeGst)}`, estimateNo].join("\t"),
           ].join("\n");
 
           const plainText = `Dear Sir,
@@ -1836,6 +1845,7 @@ Sunrise Media`;
                       <thead className="bg-slate-50 text-[10px] uppercase tracking-wider text-slate-500">
                         <tr>
                           <th className="px-3 py-2 font-black">Store Code</th>
+                          <th className="px-3 py-2 font-black">SAP Code</th>
                           <th className="px-3 py-2 font-black">Store Name</th>
                           <th className="px-3 py-2 font-black text-center">Photos</th>
                           <th className="px-3 py-2 font-black">WCC Status</th>
@@ -1852,6 +1862,7 @@ Sunrise Media`;
                           const stage = deriveStoreExecutionStage(row);
                           const lastActivity = latestActivityForStore(row);
                           const lastUpdated = latestTimestampForStore(row);
+                          const matchingStore = stores.find(s => s.storeCode === row.storeCode || (s.name && row.storeName && s.name.trim().toLowerCase() === row.storeName.trim().toLowerCase()));
                           return (
                           <tr key={row.id} className="align-top hover:bg-orange-50/30 transition">
                             <td className="px-3 py-1.5">
@@ -1859,6 +1870,9 @@ Sunrise Media`;
                               {(row.storeCity || row.storeLocation || row.storeState) && (
                                 <div className="text-[10px] text-slate-400">{[row.storeLocation, row.storeCity, row.storeState].filter(Boolean).join(", ")}</div>
                               )}
+                            </td>
+                            <td className="px-3 py-1.5">
+                              <div className="font-mono text-slate-600">{matchingStore?.sapCode || "—"}</div>
                             </td>
                             <td className="px-3 py-1.5">
                               <div className="font-bold text-slate-700">{row.storeName || "Store"}</div>
@@ -2314,7 +2328,13 @@ Sunrise Media`;
                       <div className="px-4 py-3 bg-slate-950 text-white flex items-start justify-between gap-3">
                         <div>
                           <p className="text-[10px] font-black uppercase tracking-widest text-orange-300">Store Workspace</p>
-                          <h3 className="text-lg font-black">{storeRow.storeCode} | {storeRow.storeName || "Store"}</h3>
+                          {(() => {
+                            const matchingWorkspaceStore = stores.find(s => s.storeCode === storeRow.storeCode || (s.name && storeRow.storeName && s.name.trim().toLowerCase() === storeRow.storeName.trim().toLowerCase()));
+                            const sapDisplay = matchingWorkspaceStore?.sapCode ? ` | ${matchingWorkspaceStore.sapCode}` : "";
+                            return (
+                              <h3 className="text-lg font-black">{storeRow.storeName || "Store"} | {storeRow.storeCode || "—"}{sapDisplay}</h3>
+                            );
+                          })()}
                           <p className="text-xs text-slate-300 mt-1">{[storeRow.storeLocation, storeRow.storeCity, storeRow.storeState].filter(Boolean).join(", ") || selectedEstimate.estimateNumber}</p>
                         </div>
                         <button type="button" onClick={() => setSelectedExecutionStore(null)} className="px-3 py-1.5 text-xs font-black text-slate-200 border border-white/20 hover:bg-white/10 rounded">

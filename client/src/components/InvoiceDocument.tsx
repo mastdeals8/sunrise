@@ -98,6 +98,7 @@ const resolveItemName = (row: any, products: any[]): string => {
 
 interface StoreGroup {
   storeCode: string;
+  sapCode?: string;
   storeName: string;
   items: any[];
 }
@@ -220,6 +221,7 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({
         : storeName;
       groups.push({
         storeCode: code,
+        sapCode: store?.sapCode || "",
         storeName: fullStoreName,
         items: [],
       });
@@ -476,7 +478,7 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({
               {hasStoreHeadings && (
                 <tr data-pdf-row data-pdf-store-heading="true">
                   <td colSpan={COL_COUNT} style={storeHeadingStyle}>
-                    Store: {group.storeName}{group.storeCode && ` \u2014 Store Code: ${group.storeCode}`}
+                    Store: {group.storeName}{group.storeCode && ` \u2014 Store Code: ${group.storeCode}`}{group.sapCode && ` \u2014 SAP Code: ${group.sapCode}`}
                   </td>
                 </tr>
               )}

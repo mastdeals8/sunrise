@@ -56,7 +56,7 @@ interface BillingProfile {
 }
 
 interface Brand { id: number; name: string; clientId: number | null; }
-interface Store { id: number; storeCode: string; storeName: string; clientId: number; city: string | null; state: string | null; }
+interface Store { id: number; storeCode: string; sapCode?: string; storeName: string; name?: string; clientId: number; city: string | null; state: string | null; }
 interface Estimate { id: number; estimateNumber: string; title: string; clientId: number; brandId: number | null; clientFormat: string; status: string; totalAmount: number; createdAt: string; poNumber: string | null; }
 interface Invoice { id: number; invoiceNumber: string; clientId: number | null; estimateId: number | null; totalAmount: number; status: string; date: string; balanceAmount: number; }
 interface Challan { id: number; dcNumber: string; estimateId: number | null; status: string; deliveryDate: string; clientFormat: string; }
@@ -249,8 +249,8 @@ const ClientWorkspace: React.FC = () => {
 
         {tab === "stores" && (
           <CompactTable
-            head={["Code", "Store", "City", "State"]}
-            rows={stores.map(s => [s.storeCode, s.storeName, s.city || "—", s.state || "—"])}
+            head={["Code", "SAP Code", "Store", "City", "State"]}
+            rows={stores.map(s => [s.storeCode || "—", s.sapCode || "—", s.storeName || (s as any).name || "—", s.city || "—", s.state || "—"])}
             emptyText="No stores tied to this client."
           />
         )}

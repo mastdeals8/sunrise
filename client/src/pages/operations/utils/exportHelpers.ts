@@ -361,6 +361,7 @@ export async function exportEstimateToExcel(
   type Section = {
     storeName: string;
     storeCode: string;
+    sapCode?: string;
     storeItems: any[];
     serviceItems: any[];
     packingPercent: number;
@@ -384,6 +385,7 @@ export async function exportEstimateToExcel(
       sections.push({
         storeName: tStore?.name || (!Array.isArray(groupData) && groupData.storeName) || `Store ${sidKey}`,
         storeCode: tStore?.storeCode || "",
+        sapCode: tStore?.sapCode || "",
         storeItems: groupedItems.filter((it: any) => !isServiceItem(it)),
         serviceItems: groupedItems.filter((it: any) => isServiceItem(it)),
         packingPercent: !Array.isArray(groupData) && groupData.packingPercent !== undefined
@@ -409,6 +411,7 @@ export async function exportEstimateToExcel(
     sections.push({
       storeName: targetStore?.name || s(estimate.title || "Site"),
       storeCode: targetStore?.storeCode || "",
+      sapCode: targetStore?.sapCode || "",
       storeItems: sortedItems.filter((it: any) => !isServiceItem(it)),
       serviceItems: sortedItems.filter((it: any) => isServiceItem(it)),
       packingPercent: Number(estimate.packingPercent || 0),
@@ -429,7 +432,7 @@ export async function exportEstimateToExcel(
   sections.forEach((sec, sIdx) => {
     const storeR = addRow((() => {
       const r = blankRow();
-      r[0] = `Store: ${sec.storeName}${sec.storeCode ? `, Store Code: ${sec.storeCode}` : ""}`;
+      r[0] = `Store: ${sec.storeName}${sec.storeCode ? `, Store Code: ${sec.storeCode}` : ""}${sec.sapCode ? `, SAP Code: ${sec.sapCode}` : ""}`;
       return r;
     })());
     pushMerge(storeR, 0, LAST_COL);

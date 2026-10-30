@@ -1540,9 +1540,10 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
     activeCell?.rowIndex === rowIndex && activeCell.columnId === columnId;
 
   const storeDisplay = (store: any) => {
-    const code = store.storeCode ? `${store.storeCode} — ` : "";
+    const code = store.storeCode || "—";
+    const sap = store.sapCode ? ` | ${store.sapCode}` : "";
     const place = [store.city, store.state].filter(Boolean).join(", ");
-    return `${code}${store.name}${place ? ` | ${place}` : ""}`;
+    return `${store.name} | ${code}${sap}${place ? ` (${place})` : ""}`;
   };
 
   const storeDisplayById = (storeId: string) => {
@@ -1681,6 +1682,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
 
   const storeSearchText = (store: any) => [
     store.storeCode,
+    store.sapCode,
     store.name,
     store.city,
     store.state,
@@ -3621,7 +3623,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                                 <option value="">- select store -</option>
                                 {eligibleStores.map(s => (
                                   <option key={s.id} value={s.id}>
-                                    {s.name} {s.storeCode ? `(${s.storeCode})` : ""}
+                                    {s.name} | {s.storeCode || "—"}{s.sapCode ? ` | ${s.sapCode}` : ""}
                                   </option>
                                 ))}
                               </select>
@@ -4008,6 +4010,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                       const nextStoreId = activeStoreIds[activeStoreIds.indexOf(sid) + 1] || "";
                       const storeNameLabel = isNormalEstimateScope ? "Estimate Items" : (store?.name || estStoreOverrides[sid]?.storeName || `#${sid}`);
                       const storeCodeLabel = store?.storeCode || "";
+                      const storeSapCodeLabel = store?.sapCode || "";
                       const storeCityLabel = store?.city || estStoreOverrides[sid]?.storeCity || estStoreOverrides[sid]?.storeLocation || "";
                       return (
                         <div key={`store-${sid}`} className="eb-store-block">
@@ -4110,6 +4113,21 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                                               title={!isNormalEstimateScope && sid ? "Click to change store" : undefined}
                                             >
                                               {storeCodeLabel}
+                                            </span>
+                                          )}
+                                          {storeSapCodeLabel && (
+                                            <span
+                                              className="eb-store-code"
+                                              onClick={e => {
+                                                if (!isNormalEstimateScope && sid) {
+                                                  e.stopPropagation();
+                                                  openStorePickerToChange(sid);
+                                                }
+                                              }}
+                                              style={!isNormalEstimateScope && sid ? { cursor: "pointer" } : undefined}
+                                              title={!isNormalEstimateScope && sid ? "Click to change store" : undefined}
+                                            >
+                                              SAP: {storeSapCodeLabel}
                                             </span>
                                           )}
                                           {storeCityLabel && (

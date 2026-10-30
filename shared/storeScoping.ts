@@ -15,6 +15,7 @@
 export interface ScopedStore {
   storeId: number | null;
   storeCode: string;
+  sapCode?: string;
   storeName: string;
 }
 
@@ -83,6 +84,7 @@ export function getEstimateScopedStores(
     const master = resolveStoreMaster(cleanId, cleanCode);
     const finalId = cleanId || (master?.id ? Number(master.id) : null);
     const finalCode = cleanCode || String(master?.storeCode || (master as any)?.code || "").trim();
+    const finalSapCode = String(master?.sapCode || (master as any)?.sap_code || "").trim();
     const finalName =
       sname ||
       master?.name ||
@@ -95,6 +97,7 @@ export function getEstimateScopedStores(
     stores.push({
       storeId: finalId,
       storeCode: finalCode,
+      sapCode: finalSapCode || undefined,
       storeName: finalName,
     });
   };
@@ -184,11 +187,13 @@ export function getInvoiceScopedStores(
     master = allStores.find((s: any) => String(s.storeCode || (s as any).code || "").trim().toLowerCase() === invStoreCode);
   }
   const finalCode = invStoreCode || String(master?.storeCode || (master as any)?.code || "").trim();
+  const finalSapCode = String(master?.sapCode || (master as any)?.sap_code || "").trim();
   const finalName = master?.name || (master as any)?.storeName || (finalCode ? `Store ${finalCode}` : `Store ${invStoreId}`);
 
   return [{
     storeId: invStoreId || (master?.id ? Number(master.id) : null),
     storeCode: finalCode,
+    sapCode: finalSapCode || undefined,
     storeName: finalName,
   }];
 }

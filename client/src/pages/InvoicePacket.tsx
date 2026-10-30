@@ -56,6 +56,7 @@ interface PacketPage {
   storagePath?: string | null;
   mimeType?: string | null;
   storeCode?: string | null;
+  sapCode?: string | null;
   storeName?: string | null;
   caption?: string | null;
   included: boolean;
@@ -403,7 +404,7 @@ const InvoicePacketPage: React.FC = () => {
           }
 
           // Build storeContexts strictly from activeScopedStores (never from global or phantom stores)
-          const storeContexts: { storeCode: string; storeName: string; storeId: number | null; challans: any[] }[] = activeScopedStores.map(store => {
+          const storeContexts: { storeCode: string; sapCode?: string; storeName: string; storeId: number | null; challans: any[] }[] = activeScopedStores.map(store => {
             const matchingChallans = scopedChallans.filter(dc => {
               const dcCode = storeCodeFor(dc).toLowerCase();
               const dcSid = dc.storeId || dc.metadata?.storeId ? Number(dc.storeId || dc.metadata?.storeId) : null;
@@ -413,6 +414,7 @@ const InvoicePacketPage: React.FC = () => {
             });
             return {
               storeCode: store.storeCode,
+              sapCode: store.sapCode,
               storeName: store.storeName,
               storeId: store.storeId,
               challans: matchingChallans,
@@ -464,12 +466,13 @@ const InvoicePacketPage: React.FC = () => {
               queueFile({
                 id: `exec-${doc.id}`,
                 label: isPhotoType(doc.documentType)
-                  ? `${context.storeName || store?.name || "Store"} — ${storeCode || "—"}`
+                  ? `${context.storeName || store?.name || "Store"} | ${storeCode || "—"}${context.sapCode || store?.sapCode ? ` | ${context.sapCode || store?.sapCode}` : ""}`
                   : `${storeLabel} — ${docTypeLabel(doc.documentType)}`,
                 kind: isPhotoType(doc.documentType) ? "photo" : isSignedType(doc.documentType) ? "wcc" : "store-file",
                 storagePath: doc.storagePath || doc.filePath,
                 mimeType: doc.mimeType,
                 storeCode,
+                sapCode: context.sapCode || store?.sapCode || null,
                 storeName: context.storeName || store?.name || storeLabel,
                 caption: doc.caption || doc.description || doc.notes || null,
               });
@@ -683,8 +686,9 @@ const dataUrlToBytes = (dataUrl: string): Uint8Array => {
             const drawH = img.height * scale;
             const page = pdf.addPage([A4_W, A4_H]);
             if (isPhoto) {
+              const sapSuffix = p.sapCode ? ` | ${p.sapCode}` : "";
               page.drawText(
-                fitText(`${p.storeName || "Store"} — ${p.storeCode || "—"}`, 72),
+                fitText(`${p.storeName || "Store"} | ${p.storeCode || "—"}${sapSuffix}`, 72),
                 { x: MARGIN, y: A4_H - 72, size: 13, color: rgb(0.08, 0.12, 0.18) },
               );
               if (p.caption) page.drawText(fitText(p.caption, 90), { x: MARGIN, y: 52, size: 9, color: rgb(0.35, 0.39, 0.45) });

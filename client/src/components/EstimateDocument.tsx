@@ -181,6 +181,7 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
   type Section = {
     storeName: string;
     storeCode: string;
+    sapCode?: string;
     itemRows: SectionRow[];
     serviceRows: EstimateItem[];
     packingPercent: number;
@@ -271,6 +272,7 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
       sections.push({
         storeName: tStore?.name || (!Array.isArray(groupData) && groupData.storeName) || `Store ${sidKey}`,
         storeCode: tStore?.storeCode || "",
+        sapCode: tStore?.sapCode || "",
         itemRows: materialItems.map((it, idx) => itemToRow(it, idx)),
         serviceRows: serviceItems,
         packingPercent: packPct,
@@ -304,6 +306,7 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
     sections.push({
       storeName: targetStore?.name || est.title || "Site",
       storeCode: targetStore?.storeCode || "",
+      sapCode: targetStore?.sapCode || "",
       itemRows: materialItems.map((it, idx) => itemToRow(it, idx)),
       serviceRows: serviceItems,
       packingPercent: packPct,
@@ -706,7 +709,7 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
                 backgroundColor: "#f1f5f9",
               }}
             >
-              Store: {sec.storeName}{sec.storeCode ? `, Store Code: ${sec.storeCode}` : ""}
+              Store: {sec.storeName}{sec.storeCode ? `, Store Code: ${sec.storeCode}` : ""}{sec.sapCode ? `, SAP Code: ${sec.sapCode}` : ""}
             </td>
           </tr>
         )}
