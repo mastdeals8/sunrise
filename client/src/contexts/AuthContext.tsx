@@ -91,7 +91,11 @@ function supabaseUserToAppUser(sbUser: any): User {
 async function fetchUserProfile(authToken: string | null, sbUser?: any): Promise<User> {
   if (isBoltMode) {
     try {
-      const { data: profile, error } = await supabase.rpc("get_current_user_profile");
+      const rpcPromise = supabase.rpc("get_current_user_profile");
+      const timeoutPromise = new Promise<{ data: any; error: any }>((resolve) =>
+        setTimeout(() => resolve({ data: null, error: new Error("RPC timeout") }), 4000)
+      );
+      const { data: profile, error } = await Promise.race([rpcPromise, timeoutPromise]);
       if (!error && profile && profile.id) {
         return {
           id: profile.id,
@@ -110,11 +114,15 @@ async function fetchUserProfile(authToken: string | null, sbUser?: any): Promise
     // Fallback: query public.users directly
     if (sbUser?.id) {
       try {
-        const { data: u } = await supabase
+        const queryPromise = supabase
           .from("users")
           .select("id, username, name, role, email")
           .eq("auth_user_id", sbUser.id)
           .maybeSingle();
+        const timeoutPromise = new Promise<{ data: any }>((resolve) =>
+          setTimeout(() => resolve({ data: null }), 3000)
+        );
+        const { data: u } = await Promise.race([queryPromise, timeoutPromise]);
         if (u) {
           const isSuper = u.role === "admin" || u.id === 1;
           return {
@@ -143,7 +151,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const loadCompanies = useCallback(async (authToken: string | null, userProfile?: User | null) => {
     try {
-      const comps = await fetchCompanies(authToken);
+      const compsPromise = fetchCompanies(authToken);
+      const timeoutPromise = new Promise<any[]>((resolve) =>
+        setTimeout(() => resolve([]), 4000)
+      );
+      const comps = await Promise.race([compsPromise, timeoutPromise]);
       if (Array.isArray(comps)) {
         setAvailableCompanies(comps);
         const currentId = getActiveCompanyId();
@@ -198,6 +210,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [loadCompanies, token, user]);
 
   useEffect(() => {
+    let isMounted = true;
+
     if (isBoltMode) {
       // ── Bolt mode: restore from Supabase Auth session ────────────────────
       if (!hasSupabaseConfig) {
@@ -205,33 +219,100 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return;
       }
 
-      supabase.auth.getSession().then(async ({ data }) => {
-        const session = data.session as any;
-        if (session?.user && session?.access_token) {
-          setToken(session.access_token);
-          const appUser = await fetchUserProfile(session.access_token, session.user);
-          setUser(appUser);
-          await loadCompanies(session.access_token, appUser);
-        }
-        setLoading(false);
-      });
+      let initialized = false;
 
-      const { data: authListener } = supabase.auth.onAuthStateChange(
-        async (_event: any, session: any) => {
-          if (session?.user && session?.access_token) {
+      const restoreSession = async () => {
+        try {
+          const sessionPromise = supabase.auth.getSession();
+          const timeoutPromise = new Promise<{ data: { session: any }; error: any }>((resolve) =>
+            setTimeout(
+              () => resolve({ data: { session: null }, error: new Error("Session restore timeout") }),
+              5000
+            )
+          );
+
+          const { data, error } = await Promise.race([sessionPromise, timeoutPromise]);
+          if (error) {
+            console.warn("[AuthContext] Session restore notice:", error.message || error);
+          }
+
+          const session = data?.session;
+          if (session?.user && session?.access_token && isMounted) {
             setToken(session.access_token);
             const appUser = await fetchUserProfile(session.access_token, session.user);
-            setUser(appUser);
-            await loadCompanies(session.access_token, appUser);
-          } else {
+            if (isMounted) {
+              setUser(appUser);
+              await loadCompanies(session.access_token, appUser);
+            }
+          } else if (isMounted) {
             setUser(null);
             setToken(null);
             setAvailableCompanies([]);
             setActiveCompany(null);
           }
+        } catch (err) {
+          console.error("[AuthContext] Unexpected error during session restore:", err);
+          if (isMounted) {
+            setUser(null);
+            setToken(null);
+            setAvailableCompanies([]);
+            setActiveCompany(null);
+          }
+        } finally {
+          initialized = true;
+          if (isMounted) {
+            setLoading(false);
+          }
+        }
+      };
+
+      restoreSession();
+
+      const { data: authListener } = supabase.auth.onAuthStateChange(
+        (event: any, session: any) => {
+          if (!isMounted) return;
+
+          if (event === "SIGNED_OUT" || !session) {
+            setUser(null);
+            setToken(null);
+            setAvailableCompanies([]);
+            setActiveCompany(null);
+            if (initialized) setLoading(false);
+            return;
+          }
+
+          if (event === "TOKEN_REFRESHED" || event === "USER_UPDATED") {
+            if (session?.access_token) {
+              setToken(session.access_token);
+            }
+            return;
+          }
+
+          if (event === "SIGNED_IN" && initialized) {
+            if (session?.access_token && session?.user) {
+              setToken(session.access_token);
+              // Avoid blocking auth event queue; load user and companies asynchronously
+              setTimeout(async () => {
+                if (!isMounted) return;
+                try {
+                  const appUser = await fetchUserProfile(session.access_token, session.user);
+                  if (isMounted) {
+                    setUser(appUser);
+                    await loadCompanies(session.access_token, appUser);
+                  }
+                } catch (e) {
+                  console.warn("[AuthContext] Error syncing profile on SIGNED_IN:", e);
+                }
+              }, 0);
+            }
+          }
         }
       );
-      return () => (authListener.subscription as any).unsubscribe();
+
+      return () => {
+        isMounted = false;
+        authListener?.subscription?.unsubscribe();
+      };
     }
 
     // ── Express mode: restore from localStorage / httpOnly cookie ────────
@@ -240,20 +321,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       fetch("/api/auth/user")
         .then((res) => (res.ok ? res.json() : null))
         .then((userData) => {
-          if (userData) {
+          if (userData && isMounted) {
             setUser(userData);
             loadCompanies(null, userData);
           }
         })
         .catch(() => {})
-        .finally(() => setLoading(false));
-      return;
+        .finally(() => {
+          if (isMounted) setLoading(false);
+        });
+      return () => {
+        isMounted = false;
+      };
     }
 
     fetch("/api/auth/user", {
       headers: { Authorization: `Bearer ${storedToken}` },
     })
       .then(async (res) => {
+        if (!isMounted) return;
         if (res.ok) {
           const userData = await res.json();
           setUser(userData);
@@ -270,7 +356,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
       })
       .catch((err) => console.error("Error loading user context:", err))
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (isMounted) setLoading(false);
+      });
+
+    return () => {
+      isMounted = false;
+    };
   }, [loadCompanies]);
 
   const login = async (username: string, password: string): Promise<boolean> => {
