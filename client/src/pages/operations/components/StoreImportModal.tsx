@@ -7,6 +7,9 @@ import { getStateCode, normalizeStateName } from "@/utils/indiaLocations";
 import type { Brand, Client, Store } from "../types";
 import { importFieldsMap } from "../utils/importFieldsMap";
 import { buildPreview, type ImportPreviewSummary } from "../utils/importMatching";
+import { parseSpreadsheetFile } from "../utils/spreadsheetParser";
+import { masterDataSave } from "../../../lib/api";
+import { nameMatchKey, normalizeDisplayName } from "../../../../../shared/textFormat";
 import { isBoltMode } from "../../../lib/supabase";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -125,26 +128,17 @@ const StoreImportModal: React.FC<Props> = ({ token, clients, brands, stores, onC
   const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (isBoltMode) { alert("Store import migration pending. Bulk import is not yet available in Bolt preview mode."); return; }
     setFileName(file.name);
     setIsParsing(true);
     setStats(null);
-    const fd = new FormData();
-    fd.append("file", file);
     try {
-      const res = await fetch("/api/operations/imports/parse-file", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
-        body: fd,
-      });
-      if (!res.ok) { const e = await res.json(); alert(e.message || "Parse failed"); return; }
-      const data = await res.json();
+      const data = await parseSpreadsheetFile(file);
       setHeaders(data.headers);
       setAllRows(data.allRows);
       setPreviewRows(data.previewRows);
       setMappings(autoMap(data.headers));
-    } catch (err) {
-      alert("Error reading file.");
+    } catch (err: any) {
+      alert(err.message || "Error reading file.");
     } finally {
       setIsParsing(false);
       if (fileRef.current) fileRef.current.value = "";
@@ -152,34 +146,186 @@ const StoreImportModal: React.FC<Props> = ({ token, clients, brands, stores, onC
   };
 
   const handleCommit = async () => {
-    if (!allRows.length) return;
-    if (isBoltMode) { alert("Store import migration pending."); return; }
+    if (!mappedRows.length) return;
     setIsCommitting(true);
-    const items = mappedRows;
+    setStats(null);
+
+    let createdCount = 0;
+    let updatedCount = 0;
+    let skippedCount = 0;
+    const errors: Array<{ row: number; message: string }> = [];
+
+    // Track duplicates within the batch
+    const seenCodes = new Map<string, number>();
+    const seenNames = new Map<string, number>();
+
     try {
-      const res = await fetch("/api/operations/imports/stores", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ items }),
-      });
-      if (!res.ok) { const e = await res.json(); alert(e.message || "Import failed"); return; }
-      const s = await res.json();
+      for (let i = 0; i < mappedRows.length; i++) {
+        const row = mappedRows[i];
+        const excelRow = i + 2;
+
+        try {
+          const name = normalizeDisplayName(row.name);
+          const code = String(row.storeCode || "").trim();
+          if (!name && !code) {
+            errors.push({ row: excelRow, message: "Missing store name and store code" });
+            continue;
+          }
+          if (!name) {
+            errors.push({ row: excelRow, message: "Missing store name" });
+            continue;
+          }
+
+          // 1. Resolve client: by ID first, then by nameMatchKey
+          let client: Client | undefined;
+          if (row.clientId) {
+            const cid = Number(row.clientId);
+            if (Number.isFinite(cid) && cid > 0) client = clients.find(c => c.id === cid);
+          }
+          if (!client && row.clientName) {
+            const key = nameMatchKey(row.clientName);
+            client = clients.find(c => nameMatchKey(c.name) === key);
+          }
+          if (!client) {
+            errors.push({ row: excelRow, message: `Could not resolve client "${row.clientName || ""}"` });
+            continue;
+          }
+
+          // 2. Resolve brand: by ID first, then by nameMatchKey under client (or unlinked)
+          let brand: Brand | undefined;
+          if (row.brandId) {
+            const bid = Number(row.brandId);
+            if (Number.isFinite(bid) && bid > 0) brand = brands.find(b => b.id === bid);
+          }
+          if (!brand && row.brandName) {
+            const key = nameMatchKey(row.brandName);
+            brand = brands.find(b =>
+              nameMatchKey(b.name) === key && (b.parentClientId === client!.id || !b.parentClientId)
+            );
+          }
+          if (!brand) {
+            errors.push({ row: excelRow, message: `Could not resolve brand "${row.brandName || ""}" under client "${client.name}"` });
+            continue;
+          }
+
+          // 3. Within-file duplicate check
+          if (code) {
+            const dKey = `${client.id}|${brand.id}|${code.toLowerCase()}`;
+            const prior = seenCodes.get(dKey);
+            if (prior !== undefined) {
+              skippedCount++;
+              errors.push({ row: excelRow, message: `Duplicate store code "${code}" within file (matches row ${prior}); skipped` });
+              continue;
+            }
+            seenCodes.set(dKey, excelRow);
+          }
+          if (name) {
+            const dKey = `${client.id}|${brand.id}|${nameMatchKey(name)}`;
+            const prior = seenNames.get(dKey);
+            if (prior !== undefined) {
+              skippedCount++;
+              errors.push({ row: excelRow, message: `Duplicate store name "${name}" within file (matches row ${prior}); skipped` });
+              continue;
+            }
+            seenNames.set(dKey, excelRow);
+          }
+
+          // 4. Match against existing stores
+          // Priority: 1. storeCode, 2. exact sapCode, 3. name
+          let existing: Store | undefined;
+          if (code) {
+            existing = stores.find(s =>
+              (s.storeCode || "").toLowerCase() === code.toLowerCase() &&
+              s.clientId === client!.id && s.brandId === brand!.id
+            );
+          }
+          if (!existing && row.sapCode) {
+            const sap = String(row.sapCode).trim().toLowerCase();
+            if (sap) {
+              existing = stores.find(s =>
+                (s.sapCode || "").toLowerCase() === sap &&
+                s.clientId === client!.id && s.brandId === brand!.id
+              );
+            }
+          }
+          if (!existing && name) {
+            const key = nameMatchKey(name);
+            existing = stores.find(s =>
+              nameMatchKey(s.name) === key &&
+              s.clientId === client!.id && s.brandId === brand!.id
+            );
+          }
+
+          // Clean values
+          const cleanSapCode = row.sapCode && String(row.sapCode).trim() ? String(row.sapCode).trim() : null;
+          const cleanCity = normalizeDisplayName(row.city) || null;
+          const cleanState = normalizeDisplayName(row.state) || null;
+          const cleanStateCode = row.stateCode ? String(row.stateCode).trim() : null;
+          const cleanRegionZone = row.regionZone ? String(row.regionZone).trim() : null;
+          const cleanContactPerson = normalizeDisplayName(row.contactPerson) || null;
+          const cleanContactPhone = row.contactPhone ? String(row.contactPhone).trim() : null;
+          const cleanAddress = row.address ? String(row.address).trim() : null;
+
+          if (existing) {
+            // UPDATE: preserve existing SAP Code if CSV row has empty SAP Code!
+            const patchPayload: Record<string, any> = {
+              name: name || existing.name,
+              clientId: client.id,
+              brandId: brand.id,
+              storeCode: code || existing.storeCode,
+              sapCode: cleanSapCode !== null ? cleanSapCode : existing.sapCode,
+              city: cleanCity || existing.city,
+              state: cleanState || existing.state,
+              stateCode: cleanStateCode || existing.stateCode,
+              regionZone: cleanRegionZone || existing.regionZone,
+              contactPerson: cleanContactPerson || existing.contactPerson,
+              contactPhone: cleanContactPhone || existing.contactPhone,
+              address: cleanAddress || existing.address,
+              isActive: true,
+            };
+            await masterDataSave(token, "stores", "PATCH", existing.id, patchPayload);
+            updatedCount++;
+          } else {
+            // CREATE: ensure blank SAP Code is null (not "null")
+            const createPayload: Record<string, any> = {
+              name,
+              clientId: client.id,
+              brandId: brand.id,
+              storeCode: code || null,
+              sapCode: cleanSapCode,
+              city: cleanCity,
+              state: cleanState,
+              stateCode: cleanStateCode,
+              regionZone: cleanRegionZone,
+              contactPerson: cleanContactPerson,
+              contactPhone: cleanContactPhone,
+              address: cleanAddress,
+              isActive: true,
+            };
+            await masterDataSave(token, "stores", "POST", null, createPayload);
+            createdCount++;
+          }
+        } catch (rowErr: any) {
+          errors.push({ row: excelRow, message: rowErr.message || "Failed to process row" });
+        }
+      }
+
       setStats({
-        total: s.total ?? items.length,
-        created: s.created ?? s.imported ?? 0,
-        updated: s.updated ?? 0,
-        skippedRows: s.skippedRows ?? 0,
-        errors: s.errors ?? [],
+        total: mappedRows.length,
+        created: createdCount,
+        updated: updatedCount,
+        skippedRows: skippedCount,
+        errors,
       });
+
       onImported();
-      // Keep modal open to show results; user can close manually
       setHeaders([]);
       setAllRows([]);
       setPreviewRows([]);
       setMappings({});
       setFileName("");
-    } catch (err) {
-      alert("Import failed unexpectedly.");
+    } catch (err: any) {
+      alert(err.message || "Import failed unexpectedly.");
     } finally {
       setIsCommitting(false);
     }

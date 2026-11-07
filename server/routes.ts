@@ -5420,13 +5420,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
               seenName.set(dKey, excelRow);
             }
 
-            // Match priority: store code + client/brand, else name + client/brand
+            // Match priority: store code + client/brand, else exact sap_code + client/brand, else name + client/brand
             let existing = null as null | typeof existingStores[number];
             if (code) {
               existing = existingStores.find(s =>
                 (s.storeCode || "").toLowerCase() === code.toLowerCase() &&
                 s.clientId === client!.id && s.brandId === brand!.id
               ) || null;
+            }
+            if (!existing && item.sapCode) {
+              const sap = String(item.sapCode).trim().toLowerCase();
+              if (sap) {
+                existing = existingStores.find(s =>
+                  (s.sapCode || "").toLowerCase() === sap &&
+                  s.clientId === client!.id && s.brandId === brand!.id
+                ) || null;
+              }
             }
             if (!existing && name) {
               const key = nameMatchKey(name);
@@ -5441,6 +5450,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             const resolvedStateName = inStateName || resolveStateName(inStateCode, "");
 
             if (existing) {
+              const cleanSap = item.sapCode && String(item.sapCode).trim() ? String(item.sapCode).trim() : null;
               await db.update(stores).set({
                 name: name || existing.name,
                 clientId: client.id,
@@ -5449,7 +5459,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 contactPerson: normalizeDisplayName(item.contactPerson) || existing.contactPerson,
                 contactPhone: item.contactPhone || existing.contactPhone,
                 storeCode: code || existing.storeCode,
-                sapCode: item.sapCode !== undefined ? (String(item.sapCode || "").trim() || null) : existing.sapCode,
+                sapCode: cleanSap !== null ? cleanSap : existing.sapCode,
                 city: normalizeDisplayName(item.city) || existing.city,
                 state: resolvedStateName || existing.state,
                 stateCode: resolvedStateCode || existing.stateCode,

@@ -52,6 +52,7 @@ import { useEstimateBuilder } from "./hooks/useEstimateBuilder";
 import { useInvoiceWorkflow } from "./hooks/useInvoiceWorkflow";
 import { useWccDcEditor } from "./hooks/useWccDcEditor";
 import { importFieldsMap } from "./utils/importFieldsMap";
+import { parseSpreadsheetFile } from "./utils/spreadsheetParser";
 import { displayFormatLabel, isAblblFormat, normalizeDisplayName, normalizeFormatMode, normalizeGstinPan } from "../../../../shared/textFormat";
 import { getEstimateFormatProfile, isRetailSingleStoreFormat, isMultiStoreFormat, normalizeFormatProfileCode } from "../../../../shared/estimateProfiles";
 import { DuplicateEstimateStoresModal } from "./components/DuplicateEstimateStoresModal";
@@ -968,56 +969,41 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
   const handleImportFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || e.target.files.length === 0) return;
     const file = e.target.files[0];
-    if (isBoltMode) { alert("Import migration pending. Bulk import is not yet available in Bolt preview mode."); return; }
     setImpFileName(file.name);
     setImpIsParsing(true);
     setImpStats(null);
 
-    const formData = new FormData();
-    formData.append("file", file);
-
     try {
-      const res = await fetch("/api/operations/imports/parse-file", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
-        body: formData
+      const data = await parseSpreadsheetFile(file);
+      setImpHeaders(data.headers);
+      setImpPreviewRows(data.previewRows);
+      setImpAllRows(data.allRows);
+      
+      // Auto-match mappings based on synonyms
+      const initialMappings: Record<string, string> = {};
+      const destFields = importFieldsMap[impType] || [];
+      
+      destFields.forEach(f => {
+        const synonymList = [
+          f.key.toLowerCase(),
+          f.label.toLowerCase(),
+          f.key.replace(/([A-Z])/g, "_$1").toLowerCase(), // snake_case
+          f.label.replace(/\s+/g, "_").toLowerCase(),
+          f.label.replace(/\s+/g, "").toLowerCase()
+        ];
+        const normalizedSynonyms = [...synonymList, ...(f.synonyms || [])].map(normalizeImportHeader);
+        const matchedHeader = data.headers.find((h: string) =>
+          normalizedSynonyms.includes(normalizeImportHeader(h))
+        );
+        if (matchedHeader) {
+          initialMappings[f.key] = matchedHeader;
+        }
       });
-
-      if (res.ok) {
-        const data = await res.json();
-        setImpHeaders(data.headers);
-        setImpPreviewRows(data.previewRows);
-        setImpAllRows(data.allRows);
-        
-        // Auto-match mappings based on synonyms
-        const initialMappings: Record<string, string> = {};
-        const destFields = importFieldsMap[impType] || [];
-        
-        destFields.forEach(f => {
-          const synonymList = [
-            f.key.toLowerCase(),
-            f.label.toLowerCase(),
-            f.key.replace(/([A-Z])/g, "_$1").toLowerCase(), // snake_case
-            f.label.replace(/\s+/g, "_").toLowerCase(),
-            f.label.replace(/\s+/g, "").toLowerCase()
-          ];
-          const normalizedSynonyms = [...synonymList, ...(f.synonyms || [])].map(normalizeImportHeader);
-          const matchedHeader = data.headers.find((h: string) =>
-            normalizedSynonyms.includes(normalizeImportHeader(h))
-          );
-          if (matchedHeader) {
-            initialMappings[f.key] = matchedHeader;
-          }
-        });
-        setImpMappings(initialMappings);
-        showSuccess(`Excel/CSV file parsed! Found ${data.headers.length} headers and ${data.allRows.length} rows.`);
-      } else {
-        const errData = await res.json();
-        alert(`Parsing failed: ${errData.message || "Unknown error"}`);
-      }
-    } catch (err) {
+      setImpMappings(initialMappings);
+      showSuccess(`File parsed successfully! Found ${data.headers.length} headers and ${data.allRows.length} rows.`);
+    } catch (err: any) {
       console.error("Failed to parse import file:", err);
-      alert("Error parsing uploaded spreadsheet!");
+      alert(err.message || "Error parsing uploaded spreadsheet!");
     } finally {
       setImpIsParsing(false);
     }

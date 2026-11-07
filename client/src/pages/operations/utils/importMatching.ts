@@ -320,7 +320,7 @@ export function previewStores(
     }
 
     if (r.outcome !== "duplicate") {
-      // Match priority: store_code + client/brand, else name + client/brand
+      // Match priority: store_code + client/brand, then exact sap_code + client/brand, else name + client/brand
       let match: Store | undefined;
       if (code) {
         match = ctx.stores.find(s =>
@@ -328,6 +328,16 @@ export function previewStores(
           s.clientId === client!.id && s.brandId === brand!.id
         );
         if (match) r.matchedField = "Store Code";
+      }
+      if (!match && row.sapCode) {
+        const sap = String(row.sapCode).trim().toLowerCase();
+        if (sap) {
+          match = ctx.stores.find(s =>
+            (s.sapCode || "").toLowerCase() === sap &&
+            s.clientId === client!.id && s.brandId === brand!.id
+          );
+          if (match) r.matchedField = "SAP Code";
+        }
       }
       if (!match && name) {
         const key = nameMatchKey(name);
