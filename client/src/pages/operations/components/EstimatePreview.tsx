@@ -7,6 +7,7 @@ import { isServiceEstimateItem, serviceProductLabel } from "../../../../../share
 import { formatCurrency } from "../utils/formatters";
 import { orderedEstimateItems, orderedStoreKeysFromItems } from "../utils/estimateOrdering";
 import { exportEstimateToExcel } from "../utils/exportHelpers";
+import { reconcileEstimateSummary } from "../utils/estimateReconciliation";
 import { estimateItemsToInvoiceLines } from "../utils/invoiceConversion";
 import type { Brand, Client, Estimate, EstimateItem, Product, Store } from "../types";
 import EstimateDocument from "../../../components/EstimateDocument";
@@ -484,152 +485,8 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
 	        }, []);
 
         const buildSummaryRows = (est: Estimate, items: EstimateItem[]) => {
-          const targetStore = stores.find(s => s.id === est.storeId);
-          const sortedItems = orderedEstimateItems(items);
-          const storeGrouping = (est.storeGrouping as Record<string, any>) || {};
-          let storeKeys = orderedStoreKeysFromItems(sortedItems, storeGrouping);
-          if (storeKeys.length === 0) {
-            const distinctStoreIds = Array.from(new Set(sortedItems.map(it => it.storeId).filter(Boolean).map(String)));
-            if (distinctStoreIds.length > 1) {
-              storeKeys = distinctStoreIds;
-            }
-          }
-          const subject = est.subject || est.title || "Estimate Work";
-          const sectionDefs = storeKeys.length > 0
-            ? storeKeys.map((sidKey, index) => {
-                const groupData = storeGrouping[sidKey] || [];
-                const itemSls = Array.isArray(groupData) ? groupData : (groupData.itemSls || []);
-                const storeItems = sortedItems.filter(it => 
-                  (itemSls.length > 0 && itemSls.includes(it.sl || 0)) ||
-                  String(it.storeId) === String(sidKey)
-                );
-                const materialItems = storeItems.filter(it => !isServiceItem(it));
-                const serviceItems = storeItems.filter(isServiceItem);
-                const store = stores.find(s => s.id === Number(sidKey));
-                return {
-                  srNo: index + 1,
-                  storeCode: store?.storeCode || storeItems.find(it => it.storeCode)?.storeCode || sidKey,
-                  sapCode: store?.sapCode || storeItems.find(it => it.sapCode)?.sapCode || "",
-                  materialItems,
-                  serviceItems,
-                  packingPercent: !Array.isArray(groupData) && groupData.packingPercent !== undefined ? Number(groupData.packingPercent) : Number(est.packingPercent || 0),
-                  implementationPercent: !Array.isArray(groupData) && groupData.implementationPercent !== undefined ? Number(groupData.implementationPercent) : Number(est.implementationPercent || 0),
-                  transportAmount: !Array.isArray(groupData) && groupData.transportAmount !== undefined ? Number(groupData.transportAmount) : 0,
-                  transportDescription: !Array.isArray(groupData) && groupData.transportDescription ? String(groupData.transportDescription) : "",
-                  transportKm: !Array.isArray(groupData) && groupData.transportKm !== undefined ? Number(groupData.transportKm) : 0,
-                  transportRate: !Array.isArray(groupData) && groupData.transportRate !== undefined ? Number(groupData.transportRate) : 0,
-                  transportType: !Array.isArray(groupData) && groupData.transportType ? (groupData.transportType as "local" | "outstation") : undefined,
-                };
-              }).filter(section => section.materialItems.length > 0 || section.serviceItems.length > 0)
-            : [{
-                srNo: 1,
-                storeCode: targetStore?.storeCode || sortedItems.find(it => it.storeCode)?.storeCode || "",
-                sapCode: targetStore?.sapCode || sortedItems.find(it => it.sapCode)?.sapCode || "",
-                materialItems: sortedItems.filter(it => !isServiceItem(it)),
-                serviceItems: sortedItems.filter(isServiceItem),
-                packingPercent: Number(est.packingPercent || 0),
-                implementationPercent: Number(est.implementationPercent || 0),
-                transportAmount: Number(est.transportAmount || 0),
-                transportDescription: "",
-                transportKm: 0,
-                transportRate: 0,
-                transportType: undefined as "local" | "outstation" | undefined,
-              }];
-
-          const allRows: any[] = [];
-          sectionDefs.forEach(section => {
-            const materialBase = section.materialItems.reduce((sum, item) => sum + Number(item.totalPrice || 0), 0);
-            if (materialBase > 0) {
-              allRows.push({
-                vendorCode: est.vendorCode || "",
-                activityName: subject,
-                storeCode: section.storeCode,
-                sapCode: section.sapCode,
-                qty: 1,
-                beforeGst: materialBase,
-                estimateNo: est.estimateNumber || "",
-              });
-            }
-
-            const hasPacking = section.serviceItems.some(it => (it.lineType || "").toLowerCase() === "packing");
-            const hasInstallation = section.serviceItems.some(it => (it.lineType || "").toLowerCase() === "installation");
-            const hasTransport = section.serviceItems.some(it => (it.lineType || "").toLowerCase() === "transport");
-
-            section.serviceItems.forEach(item => {
-              const isTransport = (item.lineType || "").toLowerCase() === "transport"
-                || String(item.unit || "").toLowerCase() === "km";
-              const label = serviceProductLabel(item, products);
-              const isKm = isTransport && String(item.unit || "").toLowerCase() === "km";
-              allRows.push({
-                vendorCode: est.vendorCode || "",
-                activityName: (isTransport && item.description && item.description !== label)
-                  ? `${label} — ${item.description}`
-                  : label,
-                storeCode: section.storeCode,
-                sapCode: section.sapCode,
-                qty: isKm ? `${Number(item.quantity) || 0} KM` : (Number(item.quantity) || 1),
-                beforeGst: Number(item.totalPrice || 0),
-                estimateNo: est.estimateNumber || "",
-              });
-            });
-
-            if (!hasPacking && section.packingPercent > 0) {
-              const amt = materialBase * (section.packingPercent / 100);
-              if (amt > 0) {
-                allRows.push({
-                  vendorCode: est.vendorCode || "",
-                  activityName: serviceProductLabel({ lineType: "packing", rate: section.packingPercent, calculationType: "percentage" }, products),
-                  storeCode: section.storeCode,
-                  sapCode: section.sapCode,
-                  qty: 1,
-                  beforeGst: amt,
-                  estimateNo: est.estimateNumber || "",
-                });
-              }
-            }
-
-            if (!hasInstallation && section.implementationPercent > 0) {
-              const amt = materialBase * (section.implementationPercent / 100);
-              if (amt > 0) {
-                allRows.push({
-                  vendorCode: est.vendorCode || "",
-                  activityName: serviceProductLabel({ lineType: "installation", rate: section.implementationPercent, calculationType: "percentage" }, products),
-                  storeCode: section.storeCode,
-                  sapCode: section.sapCode,
-                  qty: 1,
-                  beforeGst: amt,
-                  estimateNo: est.estimateNumber || "",
-                });
-              }
-            }
-
-            if (!hasTransport && section.transportAmount > 0) {
-              const isKm = (section.transportKm && section.transportKm > 0) || section.transportType === "outstation";
-              const label = serviceProductLabel({
-                lineType: "transport",
-                itemName: section.transportDescription,
-                calculationType: isKm ? "per_km" : "fixed",
-                unit: isKm ? "km" : "job",
-                rate: section.transportRate,
-              }, products);
-              allRows.push({
-                vendorCode: est.vendorCode || "",
-                activityName: (section.transportDescription && section.transportDescription !== label)
-                  ? `${label} — ${section.transportDescription}`
-                  : label,
-                storeCode: section.storeCode,
-                sapCode: section.sapCode,
-                qty: (section.transportKm && section.transportKm > 0) ? `${section.transportKm} KM` : 1,
-                beforeGst: section.transportAmount,
-                estimateNo: est.estimateNumber || "",
-              });
-            }
-          });
-
-          return allRows.map((r, idx) => ({
-            ...r,
-            srNo: idx + 1,
-          }));
+          const rec = reconcileEstimateSummary(est, items, stores, products, sellerProfile);
+          return rec.summaryRows;
         };
 
         const summaryNumber = (n: any) =>
@@ -637,9 +494,26 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
 
         const copySummary = async () => {
           if (!selectedEstimate) return;
-          const rows = buildSummaryRows(selectedEstimate, selectedEstimateItems || []);
+          const rec = reconcileEstimateSummary(
+            selectedEstimate,
+            selectedEstimateItems || [],
+            stores,
+            products,
+            sellerProfile
+          );
+
+          if (!rec.reconciled) {
+            const errorMsg = `Financial reconciliation mismatch: ${rec.errors.join("; ")}`;
+            console.error("[copySummary]", errorMsg, rec);
+            alert(`Cannot copy summary:\n${errorMsg}`);
+            setCopyStatus("Totals mismatch!");
+            window.setTimeout(() => setCopyStatus(""), 3500);
+            return;
+          }
+
+          const rows = rec.summaryRows;
           const headers = ["Sr No", "Vendor Code", "Element / Product Details", "Store Code", "SAP Code", "Qty", "Before GST Net Price", "Estimate No"];
-          const totalBeforeGst = rows.reduce((sum, row) => sum + row.beforeGst, 0);
+          const totalBeforeGst = rec.totals.totalBeforeGst;
           const subject = selectedEstimate.subject || selectedEstimate.title || "Estimate Work";
           const estimateNo = selectedEstimate.estimateNumber || "";
 
@@ -662,6 +536,23 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
               <td style="border:1px solid #000;padding:6px 10px;text-align:right;white-space:nowrap">₹ ${summaryNumber(row.beforeGst)}</td>
               <td style="border:1px solid #000;padding:6px 10px;text-align:left;white-space:nowrap">${escapeHtml(row.estimateNo)}</td>
             </tr>`).join("");
+
+          const htmlTaxRows = rec.isIgst ? `
+      <tr style="font-weight:700;background:#f8fafc">
+        <td colspan="6" style="border:1px solid #000;padding:6px 10px;text-align:right;font-weight:700">Add : IGST 18%</td>
+        <td style="border:1px solid #000;padding:6px 10px;text-align:right;font-weight:700;white-space:nowrap">₹ ${summaryNumber(rec.totals.igst)}</td>
+        <td style="border:1px solid #000;padding:6px 10px"></td>
+      </tr>` : `
+      <tr style="font-weight:700;background:#f8fafc">
+        <td colspan="6" style="border:1px solid #000;padding:6px 10px;text-align:right;font-weight:700">Add : CGST 9%</td>
+        <td style="border:1px solid #000;padding:6px 10px;text-align:right;font-weight:700;white-space:nowrap">₹ ${summaryNumber(rec.totals.cgst)}</td>
+        <td style="border:1px solid #000;padding:6px 10px"></td>
+      </tr>
+      <tr style="font-weight:700;background:#f8fafc">
+        <td colspan="6" style="border:1px solid #000;padding:6px 10px;text-align:right;font-weight:700">Add : SGST 9%</td>
+        <td style="border:1px solid #000;padding:6px 10px;text-align:right;font-weight:700;white-space:nowrap">₹ ${summaryNumber(rec.totals.sgst)}</td>
+        <td style="border:1px solid #000;padding:6px 10px"></td>
+      </tr>`;
 
           const html = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;color:#1f2937">
   <p style="margin:0 0 16px 0">Dear Sir,</p>
@@ -687,15 +578,30 @@ const EstimatePreview: React.FC<EstimatePreviewProps> = ({
         <td style="border:1px solid #000;padding:6px 10px;text-align:right;font-weight:700;white-space:nowrap">₹ ${summaryNumber(totalBeforeGst)}</td>
         <td style="border:1px solid #000;padding:6px 10px;text-align:left;white-space:nowrap">${escapeHtml(estimateNo)}</td>
       </tr>
+      ${htmlTaxRows}
+      <tr style="font-weight:700;background:#fef3c7">
+        <td colspan="6" style="border:1px solid #000;padding:6px 10px;text-align:right;font-weight:800">Grand Total</td>
+        <td style="border:1px solid #000;padding:6px 10px;text-align:right;font-weight:800;white-space:nowrap">₹ ${summaryNumber(rec.totals.grandTotal)}</td>
+        <td style="border:1px solid #000;padding:6px 10px"></td>
+      </tr>
     </tbody>
   </table>
   <p style="margin:16px 0 0 0">Thank you,<br />Kunal Lunkad<br />Sunrise Media</p>
 </div>`;
 
+          const tsvTaxRows = rec.isIgst
+            ? [["", "", "", "", "", "Add : IGST 18%", `₹ ${summaryNumber(rec.totals.igst)}`, ""].join("\t")]
+            : [
+                ["", "", "", "", "", "Add : CGST 9%", `₹ ${summaryNumber(rec.totals.cgst)}`, ""].join("\t"),
+                ["", "", "", "", "", "Add : SGST 9%", `₹ ${summaryNumber(rec.totals.sgst)}`, ""].join("\t"),
+              ];
+
           const tsvTable = [
             headers.join("\t"),
             ...rows.map(row => [row.srNo, row.vendorCode, row.activityName, row.storeCode, row.sapCode || "—", summaryNumber(row.qty), `₹ ${summaryNumber(row.beforeGst)}`, row.estimateNo].join("\t")),
             ["", "", "", "", "", "Total Before GST", `₹ ${summaryNumber(totalBeforeGst)}`, estimateNo].join("\t"),
+            ...tsvTaxRows,
+            ["", "", "", "", "", "Grand Total", `₹ ${summaryNumber(rec.totals.grandTotal)}`, ""].join("\t"),
           ].join("\n");
 
           const plainText = `Dear Sir,

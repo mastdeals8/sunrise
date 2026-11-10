@@ -1080,6 +1080,12 @@ td.eb-cell, th.eb-cell {
   min-width: max-content;
   margin-bottom: 2px;
 }
+.eb-store-highlight {
+  outline: 3px solid #f59e0b !important;
+  outline-offset: 3px;
+  box-shadow: 0 0 16px rgba(245, 158, 11, 0.45) !important;
+  transition: all 0.25s ease-in-out;
+}
 .eb-store-header {
   position: sticky;
   top: 0 !important;

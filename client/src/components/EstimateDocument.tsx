@@ -233,6 +233,7 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
     total: Number(item.totalAmount) || 0,
   });
 
+  const hasAnySavedServices = sortedItems.some(isServiceItem);
   const sections: Section[] = [];
   if (hasStoreGrouping) {
     orderedStoreKeysFromItems(sortedItems, est.storeGrouping as Record<string, any>).forEach((sidKey) => {
@@ -268,7 +269,7 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
       const materialSgst = materialItems.reduce((s, it) => s + Number(it.sgstAmount || 0), 0);
       const materialCgst = materialItems.reduce((s, it) => s + Number(it.cgstAmount || 0), 0);
       const materialIgst = materialItems.reduce((s, it) => s + Number(it.igstAmount || 0), 0);
-      const hasSavedServices = serviceItems.length > 0;
+      const hasSavedServices = hasAnySavedServices || serviceItems.length > 0;
       sections.push({
         storeName: tStore?.name || (!Array.isArray(groupData) && groupData.storeName) || `Store ${sidKey}`,
         storeCode: tStore?.storeCode || "",
@@ -302,7 +303,7 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
     const packPct = Number(est.packingPercent || 0);
     const implPct = Number(est.implementationPercent || 0);
     const transAmt = Number(est.transportAmount || 0);
-    const hasSavedServices = serviceItems.length > 0;
+    const hasSavedServices = hasAnySavedServices || serviceItems.length > 0;
     sections.push({
       storeName: targetStore?.name || est.title || "Site",
       storeCode: targetStore?.storeCode || "",
@@ -333,7 +334,7 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
   let grandIgst = 0;
   sections.forEach(sec => {
     const savedServiceBase = sec.serviceRows.reduce((s, it) => s + Number(it.totalPrice || 0), 0);
-    const syntheticServiceBase = sec.serviceRows.length > 0 ? 0 : sec.packingBase + sec.implBase + sec.transportBase;
+    const syntheticServiceBase = (hasAnySavedServices || sec.serviceRows.length > 0) ? 0 : sec.packingBase + sec.implBase + sec.transportBase;
     grandBeforeTax += sec.materialBase + savedServiceBase + syntheticServiceBase;
     if (isIgst) {
       grandIgst += sec.materialIgst

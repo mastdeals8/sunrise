@@ -16,6 +16,7 @@ import { exportEstimateToExcel } from "../utils/exportHelpers";
 import StoreWiseInvoiceModal from "./StoreWiseInvoiceModal";
 import { BulkEstimatePdfRunner } from "./BulkEstimatePdfRunner";
 import { EstimateRevisionsModal } from "./EstimateRevisionsModal";
+import { validateAbfrlEstimateCharges, type AbfrlChargeValidationResult } from "../utils/abfrlValidation";
 
 // ─── Create Product Drawer ───────────────────────────────────────────────────
 // Renders as a fixed right-side panel (pointer-events passthrough backdrop so
@@ -918,6 +919,66 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
   const [showRevisionHistory, setShowRevisionHistory] = React.useState<boolean>(false);
   const headerCheckboxRef = React.useRef<HTMLInputElement>(null);
 
+  const [showMissingChargesModal, setShowMissingChargesModal] = React.useState(false);
+  const [missingChargesValidationResult, setMissingChargesValidationResult] = React.useState<AbfrlChargeValidationResult | null>(null);
+  const bypassValidationRef = React.useRef(false);
+  const pendingSaveOptionsRef = React.useRef<{ e?: React.FormEvent; options?: { stayInEditor?: boolean; isAutoSave?: boolean } } | null>(null);
+
+  const handleNavigateToStore = (sid: string) => {
+    setShowMissingChargesModal(false);
+    if (sid) {
+      setCollapsedStoreIds(prev => prev.filter(id => id !== sid));
+    }
+    window.setTimeout(() => {
+      const el = document.getElementById(`store-block-${sid}`) || document.querySelector(`[data-store-id="${sid}"]`);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        el.classList.add("eb-store-highlight");
+        window.setTimeout(() => el.classList.remove("eb-store-highlight"), 3000);
+      }
+    }, 150);
+  };
+
+  const handleIgnoreAndSave = () => {
+    bypassValidationRef.current = true;
+    setShowMissingChargesModal(false);
+    const pending = pendingSaveOptionsRef.current;
+    handleCreateEstimate(pending?.e, pending?.options);
+  };
+
+  const triggerSaveWithValidation = (
+    e?: React.FormEvent,
+    options?: { stayInEditor?: boolean; isAutoSave?: boolean }
+  ) => {
+    if (e && typeof e.preventDefault === "function") {
+      e.preventDefault();
+    }
+    if (options?.isAutoSave) {
+      return handleCreateEstimate(e, options);
+    }
+    if (bypassValidationRef.current) {
+      bypassValidationRef.current = false;
+      return handleCreateEstimate(e, options);
+    }
+    if (!isAblblFormat(estFormat)) {
+      return handleCreateEstimate(e, options);
+    }
+    const valResult = validateAbfrlEstimateCharges({
+      items: estItems,
+      stores,
+      storeOverrides: estStoreOverrides,
+      defaultStoreId: estStoreId,
+      format: estFormat,
+    });
+    if (valResult.valid) {
+      return handleCreateEstimate(e, options);
+    }
+    pendingSaveOptionsRef.current = { e, options };
+    setMissingChargesValidationResult(valResult);
+    setShowMissingChargesModal(true);
+    return false;
+  };
+
   React.useEffect(() => {
     if (!openInvoiceMenu && !openMoreMenu) return;
 
@@ -1335,13 +1396,13 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
         e.stopPropagation();
         if (!isSaving) {
           console.log("[save] Cmd+S / Ctrl+S captured — saving estimate in editor");
-          handleCreateEstimate(undefined, { stayInEditor: true });
+          triggerSaveWithValidation(undefined, { stayInEditor: true });
         }
       }
     };
     window.addEventListener("keydown", handleGlobalKeyDown, { capture: true });
     return () => window.removeEventListener("keydown", handleGlobalKeyDown, { capture: true });
-  }, [showEstimateForm, isSaving, handleCreateEstimate]);
+  }, [showEstimateForm, isSaving, triggerSaveWithValidation]);
 
   const applyGridMutation = React.useCallback((mutator: (rows: any[]) => any[], trackHistory = true) => {
     setEstItems((prev: any[]) => {
@@ -2218,7 +2279,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
             </div>
           ) : (
             // EXCEL-LIKE ESTIMATE BUILDER SHEET FORM
-            <form onSubmit={handleCreateEstimate} className="eb-spreadsheet-workspace">
+            <form onSubmit={triggerSaveWithValidation} className="eb-spreadsheet-workspace">
               <div className="eb-sheet-titlebar">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
@@ -2945,7 +3006,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                   }
                   if ((event.ctrlKey || event.metaKey) && !event.shiftKey && key === "s") {
                     event.preventDefault();
-                    handleCreateEstimate({ preventDefault: () => {} } as React.FormEvent);
+                    triggerSaveWithValidation({ preventDefault: () => {} } as React.FormEvent);
                     return;
                   }
                   // When focus is inside an editable input/textarea, let browser handle C/V/X/A
@@ -3087,7 +3148,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                   if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === "s") {
                     event.preventDefault();
                     if (editing) { commit?.(); stopEditCell(); }
-                    handleCreateEstimate({ preventDefault: () => {} } as React.FormEvent);
+                    triggerSaveWithValidation({ preventDefault: () => {} } as React.FormEvent);
                     return;
                   }
 
@@ -4013,7 +4074,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                       const storeSapCodeLabel = store?.sapCode || "";
                       const storeCityLabel = store?.city || estStoreOverrides[sid]?.storeCity || estStoreOverrides[sid]?.storeLocation || "";
                       return (
-                        <div key={`store-${sid}`} className="eb-store-block">
+                        <div key={`store-${sid}`} id={`store-block-${sid}`} data-store-id={sid} className="eb-store-block">
                           <table className="eb-grid">
                             <thead>
                               <tr>
@@ -4475,7 +4536,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                     e.preventDefault();
                     if (isSaving) return;
                     console.log(`[save] secondary button click (stay in editor)`, { editingEstimateId, isSaving });
-                    handleCreateEstimate(undefined, { stayInEditor: true });
+                    triggerSaveWithValidation(undefined, { stayInEditor: true });
                   }}
                 >
                   {isSaving ? "Saving..." : "Save"}
@@ -4493,6 +4554,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                       return;
                     }
                     console.log(`[save] primary button click (save & close)`, { editingEstimateId, isSaving });
+                    triggerSaveWithValidation(e);
                   }}
                 >
                   {isSaving ? "Saving..." : (editingEstimateId ? "Update Estimate" : "Save Draft Estimate")}
@@ -4925,6 +4987,120 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
               products={products}
               brands={brands}
             />
+          )}
+
+          {/* ABFRL Pre-Save Charge Validation Warning Modal */}
+          {showMissingChargesModal && missingChargesValidationResult && createPortal(
+            <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+              <div
+                className="bg-white rounded-xl shadow-2xl border border-slate-200 max-w-3xl w-full p-6 space-y-4 animate-in fade-in zoom-in-95 duration-150"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex items-start gap-3 border-b border-slate-100 pb-4">
+                  <div className="w-10 h-10 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center flex-shrink-0">
+                    <AlertTriangle className="w-5 h-5 text-amber-600" />
+                  </div>
+                  <div className="flex-1">
+                    <h3 className="text-base font-bold text-slate-900 leading-tight">
+                      Please review missing charges before saving this estimate.
+                    </h3>
+                    <p className="text-xs text-slate-500 mt-1">
+                      The following retail stores are missing standard charge categories (Packing, Installation, Local or Outstation Transportation). You can navigate to fix them, or ignore and save as-is.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowMissingChargesModal(false)}
+                    className="text-slate-400 hover:text-slate-600 p-1 rounded-md"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                <div className="max-h-80 overflow-y-auto border border-slate-200 rounded-lg">
+                  <table className="w-full text-left text-xs border-collapse">
+                    <thead>
+                      <tr className="bg-slate-50 border-b border-slate-200 text-slate-700 font-bold">
+                        <th className="p-2.5">Store</th>
+                        <th className="p-2.5">Store Code</th>
+                        <th className="p-2.5">Missing charges</th>
+                        <th className="p-2.5 text-right">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {missingChargesValidationResult.missingStores.map((ms) => (
+                        <tr key={`missing-${ms.storeId}`} className="hover:bg-slate-50/70 transition">
+                          <td className="p-2.5 font-semibold text-slate-800">
+                            {ms.storeName}
+                          </td>
+                          <td className="p-2.5 text-slate-600 font-mono">
+                            {ms.storeCode || "—"}
+                            {ms.sapCode && (
+                              <span className="ml-1.5 px-1.5 py-0.5 text-[10px] bg-blue-50 text-blue-700 border border-blue-200 rounded font-bold">
+                                SAP: {ms.sapCode}
+                              </span>
+                            )}
+                          </td>
+                          <td className="p-2.5">
+                            <div className="flex flex-wrap gap-1">
+                              {ms.missingCharges.map((ch, i) => (
+                                <span
+                                  key={i}
+                                  className="px-2 py-0.5 bg-amber-50 text-amber-800 border border-amber-200 rounded text-[11px] font-semibold"
+                                >
+                                  {ch}
+                                </span>
+                              ))}
+                            </div>
+                          </td>
+                          <td className="p-2.5 text-right">
+                            <button
+                              type="button"
+                              onClick={() => handleNavigateToStore(ms.storeId)}
+                              className="px-2.5 py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-bold rounded border border-blue-200 transition"
+                            >
+                              Fix Store →
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="flex justify-between items-center pt-3 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => setShowMissingChargesModal(false)}
+                    className="px-3 py-1.5 text-xs text-slate-600 hover:text-slate-800 font-semibold"
+                  >
+                    Cancel
+                  </button>
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleIgnoreAndSave}
+                      className="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded border border-slate-300 transition"
+                      title="Proceed with saving the estimate immediately without adding charges"
+                    >
+                      IGNORE & SAVE
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const first = missingChargesValidationResult.missingStores[0];
+                        if (first) handleNavigateToStore(first.storeId);
+                      }}
+                      className="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded shadow-sm transition"
+                    >
+                      FIX MISSING CHARGES
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>,
+            document.body
           )}
         </div>
   );

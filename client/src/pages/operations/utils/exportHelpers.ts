@@ -372,6 +372,7 @@ export async function exportEstimateToExcel(
     transportRate?: number;
     transportType?: "local" | "outstation";
   };
+  const hasAnySavedServices = sortedItems.some(isServiceItem);
   const sections: Section[] = [];
   const storeKeys = orderedStoreKeysFromItems(sortedItems, storeGrouping);
 
@@ -498,7 +499,7 @@ export async function exportEstimateToExcel(
       styleRange(tmcR, amtCol, LAST_COL, S_YELLOW_NUM);
     }
 
-    const hasSavedServices = sec.serviceItems.length > 0;
+    const hasSavedServices = hasAnySavedServices || sec.serviceItems.length > 0;
     const packAmt = hasSavedServices
       ? sec.serviceItems.filter(it => it.lineType === "packing").reduce((sum, it) => sum + Number(it.totalPrice || 0), 0)
       : materialBase * (sec.packingPercent / 100);
@@ -595,7 +596,7 @@ export async function exportEstimateToExcel(
     if (sIdx < sections.length - 1) addRow(blankRow());
 
     const savedServiceBase = sec.serviceItems.reduce((sum, it) => sum + Number(it.totalPrice || 0), 0);
-    const syntheticServiceBase = hasSavedServices ? 0 : packAmt + implAmt + transAmt;
+    const syntheticServiceBase = (hasAnySavedServices || hasSavedServices) ? 0 : packAmt + implAmt + transAmt;
     grandBeforeTax += materialBase + savedServiceBase + syntheticServiceBase;
     if (isIgst) {
       grandIgst += materialIgst
