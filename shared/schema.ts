@@ -1,4 +1,4 @@
-import { pgTable, text, serial, integer, boolean, timestamp, real, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, integer, boolean, timestamp, real, jsonb, numeric } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -1058,9 +1058,9 @@ export const masterProjects = pgTable("master_projects", {
   startDate: timestamp("start_date").notNull().defaultNow(),
   targetCompletionDate: timestamp("target_completion_date"),
   actualCompletionDate: timestamp("actual_completion_date"),
-  targetBudget: real("target_budget").default(0),
-  budgetRevenue: real("budget_revenue").default(0),
-  budgetCost: real("budget_cost").default(0),
+  targetBudget: numeric("target_budget", { precision: 14, scale: 2 }).default("0.00"),
+  budgetRevenue: numeric("budget_revenue", { precision: 14, scale: 2 }).default("0.00"),
+  budgetCost: numeric("budget_cost", { precision: 14, scale: 2 }).default("0.00"),
   notes: text("notes"),
   createdBy: integer("created_by").references(() => users.id),
   createdAt: timestamp("created_at").defaultNow(),
@@ -1072,8 +1072,11 @@ export const projectEstimates = pgTable("project_estimates", {
   companyId: integer("company_id").notNull().default(1),
   projectId: integer("project_id").references(() => masterProjects.id, { onDelete: "cascade" }).notNull(),
   estimateId: integer("estimate_id").references(() => estimates.id).notNull(),
+  status: text("status").notNull().default("active"), // active, archived, unlinked
   linkedAt: timestamp("linked_at").defaultNow(),
   linkedBy: integer("linked_by").references(() => users.id),
+  unlinkedAt: timestamp("unlinked_at"),
+  unlinkedBy: integer("unlinked_by").references(() => users.id),
   notes: text("notes"),
 });
 
@@ -1090,13 +1093,13 @@ export const projectCostAllocations = pgTable("project_cost_allocations", {
   sourceLineId: integer("source_line_id"),
   costCategory: text("cost_category").notNull(), // materials, printing, fabrication, installation, transport, hardware, supervision, misc
   description: text("description").default(""),
-  baseAmount: real("base_amount").notNull(),
-  gstRate: real("gst_rate").default(0),
-  gstAmount: real("gst_amount").default(0),
-  totalAmount: real("total_amount").notNull(),
+  baseAmount: numeric("base_amount", { precision: 14, scale: 2 }).notNull(),
+  gstRate: numeric("gst_rate", { precision: 5, scale: 2 }).default("0.00"),
+  gstAmount: numeric("gst_amount", { precision: 14, scale: 2 }).default("0.00"),
+  totalAmount: numeric("total_amount", { precision: 14, scale: 2 }).notNull(),
   isRecoverableGst: boolean("is_recoverable_gst").notNull().default(true),
-  ineligibleGstAmount: real("ineligible_gst_amount").default(0),
-  recognisedCost: real("recognised_cost").notNull(),
+  ineligibleGstAmount: numeric("ineligible_gst_amount", { precision: 14, scale: 2 }).default("0.00"),
+  recognisedCost: numeric("recognised_cost", { precision: 14, scale: 2 }).notNull(),
   status: text("status").notNull().default("active"), // active, reversed
   allocationNotes: text("allocation_notes"),
   createdBy: integer("created_by").references(() => users.id),
@@ -1117,19 +1120,41 @@ export const contractorWorkOrders = pgTable("contractor_work_orders", {
   contractorGstin: text("contractor_gstin"),
   scopeOfWork: text("scope_of_work").notNull(),
   workCategory: text("work_category").notNull(), // fabrication, installation, transport, civil, other
-  committedAmount: real("committed_amount").notNull(),
-  billedAmount: real("billed_amount").default(0),
-  status: text("status").notNull().default("issued"), // draft, issued, partially_billed, fully_billed, cancelled
+  committedAmount: numeric("committed_amount", { precision: 14, scale: 2 }).notNull(),
+  billedAmount: numeric("billed_amount", { precision: 14, scale: 2 }).default("0.00"),
+  approvedVariationAmount: numeric("approved_variation_amount", { precision: 14, scale: 2 }).default("0.00"),
+  status: text("status").notNull().default("issued"), // draft, issued, in_progress, partially_billed, fully_billed, completed, cancelled
   issueDate: timestamp("issue_date").notNull().defaultNow(),
   expectedCompletion: timestamp("expected_completion"),
   createdBy: integer("created_by").references(() => users.id),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
-export const insertMasterProjectSchema = createInsertSchema(masterProjects).omit({ id: true, createdAt: true, updatedAt: true });
+const numericAmountSchema = z.union([z.number(), z.string()]).transform(v => String(Number(v || 0).toFixed(2)));
+const optionalNumericAmountSchema = z.union([z.number(), z.string()]).transform(v => String(Number(v || 0).toFixed(2))).optional();
+
+export const insertMasterProjectSchema = createInsertSchema(masterProjects, {
+  targetBudget: optionalNumericAmountSchema,
+  budgetRevenue: optionalNumericAmountSchema,
+  budgetCost: optionalNumericAmountSchema,
+}).omit({ id: true, createdAt: true, updatedAt: true });
+
 export const insertProjectEstimateSchema = createInsertSchema(projectEstimates).omit({ id: true, linkedAt: true });
-export const insertProjectCostAllocationSchema = createInsertSchema(projectCostAllocations).omit({ id: true, createdAt: true });
-export const insertContractorWorkOrderSchema = createInsertSchema(contractorWorkOrders).omit({ id: true, createdAt: true });
+
+export const insertProjectCostAllocationSchema = createInsertSchema(projectCostAllocations, {
+  baseAmount: numericAmountSchema,
+  gstRate: optionalNumericAmountSchema,
+  gstAmount: optionalNumericAmountSchema,
+  totalAmount: numericAmountSchema,
+  ineligibleGstAmount: optionalNumericAmountSchema,
+  recognisedCost: optionalNumericAmountSchema,
+}).omit({ id: true, createdAt: true });
+
+export const insertContractorWorkOrderSchema = createInsertSchema(contractorWorkOrders, {
+  committedAmount: numericAmountSchema,
+  billedAmount: optionalNumericAmountSchema,
+  approvedVariationAmount: optionalNumericAmountSchema,
+}).omit({ id: true, createdAt: true });
 
 export type MasterProject = typeof masterProjects.$inferSelect;
 export type InsertMasterProject = z.infer<typeof insertMasterProjectSchema>;

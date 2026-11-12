@@ -22,7 +22,13 @@ async function runAccountingIntegrationTests() {
       "utf-8"
     );
     await client.query(migrationSql);
-    console.log("  ✓ Migration 0015 applied in isolated transaction.");
+
+    const migration0016Sql = fs.readFileSync(
+      path.join(process.cwd(), "migrations", "0016_project_costing_hardening.sql"),
+      "utf-8"
+    );
+    await client.query(migration0016Sql);
+    console.log("  ✓ Migrations 0015 & 0016 applied in isolated transaction.");
 
     // Retrieve real test fixtures (pick estimates without pre-existing invoices to ensure clean revenue reconciliation)
     const realEsts = await client.query(`
@@ -35,6 +41,9 @@ async function runAccountingIntegrationTests() {
     const est1 = realEsts.rows[0].id;
     const est2 = realEsts.rows[1].id;
     const testClientId = realEsts.rows[0].client_id;
+
+    // Harmonize client_id to satisfy cross-client ownership guard
+    await client.query(`UPDATE estimates SET client_id = ${testClientId} WHERE id IN (${est1}, ${est2});`);
 
     // Create Master Project
     const projRes = await client.query(`
@@ -73,6 +82,12 @@ async function runAccountingIntegrationTests() {
       },
     };
 
+    await client.query(`
+      INSERT INTO petty_cash_expenses (id, company_id, category, amount, description, status, expense_date, added_by)
+      VALUES (${pendingExpense.id}, 1, 'transport', 3500.00, 'Local taxi for store site audit', 'pending', NOW(), 1)
+      ON CONFLICT (id) DO UPDATE SET status = 'pending', amount = 3500.00;
+    `);
+
     await syncPettyCashExpenseAllocation(pendingExpense, 1, txDb);
     const allocCheck1 = await client.query(`
       SELECT * FROM project_cost_allocations 
@@ -86,6 +101,9 @@ async function runAccountingIntegrationTests() {
       ...pendingExpense,
       status: "approved",
     };
+    await client.query(`
+      UPDATE petty_cash_expenses SET status = 'approved' WHERE id = ${approvedExpense.id};
+    `);
     await syncPettyCashExpenseAllocation(approvedExpense, 1, txDb);
     const allocCheck2 = await client.query(`
       SELECT * FROM project_cost_allocations 
@@ -102,6 +120,9 @@ async function runAccountingIntegrationTests() {
       amount: 4200.00,
       description: "Local taxi and material transport for store audit",
     };
+    await client.query(`
+      UPDATE petty_cash_expenses SET amount = 4200.00, description = 'Local taxi and material transport for store site audit' WHERE id = ${editedExpense.id};
+    `);
     await syncPettyCashExpenseAllocation(editedExpense, 1, txDb);
     const allocCheck3 = await client.query(`
       SELECT * FROM project_cost_allocations 
@@ -125,6 +146,11 @@ async function runAccountingIntegrationTests() {
         // No storeCode provided -> shared overhead
       },
     };
+    await client.query(`
+      INSERT INTO petty_cash_expenses (id, company_id, category, amount, description, status, expense_date, added_by)
+      VALUES (${overheadExpense.id}, 1, 'office_supplies', 1500.00, 'Rollout documentation folders & stationery', 'approved', NOW(), 1)
+      ON CONFLICT (id) DO UPDATE SET status = 'approved', amount = 1500.00;
+    `);
     await syncPettyCashExpenseAllocation(overheadExpense, 1, txDb);
     const allocCheck4 = await client.query(`
       SELECT * FROM project_cost_allocations 
@@ -138,6 +164,9 @@ async function runAccountingIntegrationTests() {
       ...editedExpense,
       status: "rejected",
     };
+    await client.query(`
+      UPDATE petty_cash_expenses SET status = 'rejected' WHERE id = ${rejectedExpense.id};
+    `);
     await syncPettyCashExpenseAllocation(rejectedExpense, 1, txDb);
     const allocCheck5 = await client.query(`
       SELECT * FROM project_cost_allocations 

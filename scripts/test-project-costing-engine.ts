@@ -15,12 +15,18 @@ async function runTestSuite() {
     console.log("[Setup] Started atomic test transaction (will ROLLBACK on completion).");
 
     // 1. DDL Migration Verification
-    console.log("\n[Test 1] Executing migration 0015_master_project_costing.sql inside test transaction...");
+    console.log("\n[Test 1] Executing migration 0015 & 0016 inside test transaction...");
     const migrationSql = fs.readFileSync(
       path.join(process.cwd(), "migrations", "0015_master_project_costing.sql"),
       "utf-8"
     );
     await client.query(migrationSql);
+
+    const migration0016Sql = fs.readFileSync(
+      path.join(process.cwd(), "migrations", "0016_project_costing_hardening.sql"),
+      "utf-8"
+    );
+    await client.query(migration0016Sql);
     console.log("  ✓ Migration SQL executed successfully. All 4 tables, unique constraints, and indexes created.");
 
     // Verify table existence in information_schema
@@ -47,6 +53,9 @@ async function runTestSuite() {
     const est2 = realEsts.rows[1].id;
     const est3 = realEsts.rows[2].id;
     const testClientId = realEsts.rows[0].client_id;
+
+    // Harmonize client_id across test fixtures to satisfy cross-client ownership guard
+    await client.query(`UPDATE estimates SET client_id = ${testClientId} WHERE id IN (${est1}, ${est2}, ${est3});`);
 
     // Create a mock master project for this client
     const projRes = await client.query(`
@@ -129,7 +138,14 @@ async function runTestSuite() {
     // Store A: ₹40,000 base + ₹7,200 GST (Materials)
     // Store B: ₹35,000 base + ₹6,300 GST (Materials)
     // Project Overhead: ₹25,000 base + ₹4,500 GST (Shared Logistics)
-    const mockInvId = 99999;
+    const invRes = await client.query(`
+      INSERT INTO invoices (
+        company_id, client_id, invoice_number, party_name, type, status, amount, tax_amount, total_amount, date, due_date
+      ) VALUES (
+        1, ${testClientId}, 'PI-SUPPLIER-8821', 'Apex Supplies', 'purchase', 'approved', 100000.00, 18000.00, 118000.00, NOW(), NOW()
+      ) RETURNING id;
+    `);
+    const mockInvId = invRes.rows[0].id;
     const allocStoreA = await client.query(`
       INSERT INTO project_cost_allocations (
         company_id, project_id, estimate_id, store_code, source_type, source_id,
@@ -212,13 +228,22 @@ async function runTestSuite() {
 
     // Case 2: Ineligible GST (Section 17(5) blocked credit, food/beverage, or unregistered vendor)
     // Base: 5,000, GST: 900 -> Recognised Cost = 5,900 (GST is expensed as project cost)
+    const pcExpRes = await client.query(`
+      INSERT INTO petty_cash_expenses (
+        company_id, amount, status, category, expense_date, added_by
+      ) VALUES (
+        1, 5900.00, 'approved', 'food', NOW(), 1
+      ) RETURNING id;
+    `);
+    const mockPcId = pcExpRes.rows[0].id;
+
     const ineligCase = await client.query(`
       INSERT INTO project_cost_allocations (
-        company_id, project_id, store_code, source_type, cost_category,
+        company_id, project_id, store_code, source_type, source_id, source_reference, cost_category,
         base_amount, gst_amount, total_amount, is_recoverable_gst, ineligible_gst_amount,
         recognised_cost, status
       ) VALUES (
-        1, ${projectId}, 'PUN-WF-001', 'petty_cash', 'other',
+        1, ${projectId}, 'PUN-WF-001', 'petty_cash', ${mockPcId}, 'PC-${mockPcId}', 'other',
         5000.00, 900.00, 5900.00, false, 900.00,
         5900.00, 'active'
       ) RETURNING recognised_cost;

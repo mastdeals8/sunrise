@@ -83,7 +83,12 @@ export function registerMasterProjectCostingRoutes(app: Express) {
             })
             .from(projectEstimates)
             .innerJoin(estimates, eq(projectEstimates.estimateId, estimates.id))
-            .where(eq(projectEstimates.projectId, p.id));
+            .where(
+              and(
+                eq(projectEstimates.projectId, p.id),
+                eq(projectEstimates.status, "active")
+              )
+            );
 
           const estimateIds = linkedEsts.map((e) => e.estimateId);
 
@@ -227,6 +232,7 @@ export function registerMasterProjectCostingRoutes(app: Express) {
                 and(
                   eq(projectEstimates.estimateId, Number(eid)),
                   eq(projectEstimates.companyId, companyId),
+                  eq(projectEstimates.status, "active"),
                   ne(masterProjects.status, "archived")
                 )
               )
@@ -238,12 +244,38 @@ export function registerMasterProjectCostingRoutes(app: Express) {
               );
             }
 
-            await tx.insert(projectEstimates).values({
-              companyId,
-              projectId: proj.id,
-              estimateId: Number(eid),
-              linkedBy: req.user?.id || null,
-            });
+            const [existingLink] = await tx
+              .select()
+              .from(projectEstimates)
+              .where(
+                and(
+                  eq(projectEstimates.projectId, proj.id),
+                  eq(projectEstimates.estimateId, Number(eid)),
+                  eq(projectEstimates.companyId, companyId)
+                )
+              )
+              .limit(1);
+
+            if (existingLink) {
+              await tx
+                .update(projectEstimates)
+                .set({
+                  status: "active",
+                  linkedAt: new Date(),
+                  linkedBy: req.user?.id || null,
+                  unlinkedAt: null,
+                  unlinkedBy: null,
+                })
+                .where(eq(projectEstimates.id, existingLink.id));
+            } else {
+              await tx.insert(projectEstimates).values({
+                companyId,
+                projectId: proj.id,
+                estimateId: Number(eid),
+                status: "active",
+                linkedBy: req.user?.id || null,
+              });
+            }
           }
         }
 
@@ -314,7 +346,12 @@ export function registerMasterProjectCostingRoutes(app: Express) {
         .from(projectEstimates)
         .innerJoin(estimates, eq(projectEstimates.estimateId, estimates.id))
         .leftJoin(brands, eq(estimates.brandId, brands.id))
-        .where(eq(projectEstimates.projectId, id))
+        .where(
+          and(
+            eq(projectEstimates.projectId, id),
+            eq(projectEstimates.status, "active")
+          )
+        )
         .orderBy(estimates.id);
 
       // Collect stores for each estimate
@@ -400,6 +437,7 @@ export function registerMasterProjectCostingRoutes(app: Express) {
                 and(
                   eq(projectEstimates.estimateId, eid),
                   eq(projectEstimates.companyId, companyId),
+                  eq(projectEstimates.status, "active"),
                   ne(projectEstimates.projectId, id),
                   ne(masterProjects.status, "archived")
                 )
@@ -413,29 +451,55 @@ export function registerMasterProjectCostingRoutes(app: Express) {
             }
           }
 
-          // Unlink removed estimates (this does NOT delete the estimates!)
+          // Soft-unlink removed estimates (preserves historical audit record)
           await tx
-            .delete(projectEstimates)
+            .update(projectEstimates)
+            .set({
+              status: "unlinked",
+              unlinkedAt: new Date(),
+              unlinkedBy: req.user?.id || null,
+            })
             .where(
               and(
                 eq(projectEstimates.projectId, id),
+                eq(projectEstimates.status, "active"),
                 newIds.length > 0 ? sql`${projectEstimates.estimateId} NOT IN (${sql.join(newIds, sql`, `)})` : sql`TRUE`
               )
             );
 
-          // Insert newly added estimates
+          // Insert or reactivate newly added estimates
           for (const eid of newIds) {
             const [existingLink] = await tx
               .select()
               .from(projectEstimates)
-              .where(and(eq(projectEstimates.projectId, id), eq(projectEstimates.estimateId, eid)))
+              .where(
+                and(
+                  eq(projectEstimates.projectId, id),
+                  eq(projectEstimates.estimateId, eid),
+                  eq(projectEstimates.companyId, companyId)
+                )
+              )
               .limit(1);
 
-            if (!existingLink) {
+            if (existingLink) {
+              if (existingLink.status !== "active") {
+                await tx
+                  .update(projectEstimates)
+                  .set({
+                    status: "active",
+                    linkedAt: new Date(),
+                    linkedBy: req.user?.id || null,
+                    unlinkedAt: null,
+                    unlinkedBy: null,
+                  })
+                  .where(eq(projectEstimates.id, existingLink.id));
+              }
+            } else {
               await tx.insert(projectEstimates).values({
                 companyId,
                 projectId: id,
                 estimateId: eid,
+                status: "active",
                 linkedBy: req.user?.id || null,
               });
             }
@@ -490,6 +554,7 @@ export function registerMasterProjectCostingRoutes(app: Express) {
         .where(
           and(
             eq(projectEstimates.companyId, companyId),
+            eq(projectEstimates.status, "active"),
             ne(masterProjects.status, "archived"),
             currentProjectId ? ne(projectEstimates.projectId, currentProjectId) : sql`TRUE`
           )
@@ -576,7 +641,12 @@ export function registerMasterProjectCostingRoutes(app: Express) {
         })
         .from(projectEstimates)
         .innerJoin(estimates, eq(projectEstimates.estimateId, estimates.id))
-        .where(eq(projectEstimates.projectId, id));
+        .where(
+          and(
+            eq(projectEstimates.projectId, id),
+            eq(projectEstimates.status, "active")
+          )
+        );
 
       const estimateIds = linkedEsts.map((e) => e.estimateId);
 
@@ -1024,7 +1094,7 @@ export function registerMasterProjectCostingRoutes(app: Express) {
             .insert(projectCostAllocations)
             .values({
               ...parsed.data,
-              recognisedCost,
+              recognisedCost: String(recognisedCost.toFixed(2)),
             })
             .returning();
 
@@ -1189,8 +1259,26 @@ export async function syncPettyCashExpenseAllocation(
       .limit(1);
 
     const amount = Number(expense.amount || 0);
+    const formattedAmount = amount.toFixed(2);
     const storeCode = ext.storeCode ? String(ext.storeCode).trim().toUpperCase() : null;
-    const estimateId = ext.estimateId ? Number(ext.estimateId) : null;
+    let estimateId: number | null = null;
+    if (ext.estimateId) {
+      const eid = Number(ext.estimateId);
+      const [link] = await executor
+        .select({ id: projectEstimates.id })
+        .from(projectEstimates)
+        .where(
+          and(
+            eq(projectEstimates.projectId, projectId),
+            eq(projectEstimates.estimateId, eid),
+            eq(projectEstimates.status, "active")
+          )
+        )
+        .limit(1);
+      if (link) {
+        estimateId = eid;
+      }
+    }
     const desc = expense.description || `Petty cash: ${expense.category || "General"}`;
 
     if (existing[0]) {
@@ -1200,9 +1288,9 @@ export async function syncPettyCashExpenseAllocation(
           projectId,
           estimateId,
           storeCode,
-          baseAmount: amount,
-          totalAmount: amount,
-          recognisedCost: amount,
+          baseAmount: formattedAmount,
+          totalAmount: formattedAmount,
+          recognisedCost: formattedAmount,
           costCategory: "petty_cash",
           description: desc,
           status: "active",
@@ -1222,13 +1310,13 @@ export async function syncPettyCashExpenseAllocation(
         sourceReference: `PC-${expense.id}`,
         costCategory: "petty_cash",
         description: desc,
-        baseAmount: amount,
-        gstRate: 0,
-        gstAmount: 0,
-        totalAmount: amount,
+        baseAmount: formattedAmount,
+        gstRate: "0.00",
+        gstAmount: "0.00",
+        totalAmount: formattedAmount,
         isRecoverableGst: false,
-        ineligibleGstAmount: 0,
-        recognisedCost: amount,
+        ineligibleGstAmount: "0.00",
+        recognisedCost: formattedAmount,
         status: "active",
         createdBy: userId || expense.addedBy || null,
       });
