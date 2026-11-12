@@ -3317,3 +3317,209 @@ export async function upsertAppSettings(
     throw new Error(body.message ?? "Settings save failed");
   }
 }
+
+// ─── Master Project Costing & Profitability ───────────────────────────────────
+
+export async function fetchMasterProjects(
+  token: string | null,
+  params: { status?: string; clientId?: number } = {}
+) {
+  if (!isBoltMode) {
+    const query = new URLSearchParams();
+    if (params.status && params.status !== "all") query.set("status", params.status);
+    if (params.clientId) query.set("clientId", String(params.clientId));
+    const url = `/api/operations/master-projects${query.toString() ? `?${query.toString()}` : ""}`;
+    const res = await apiFetch(url, token);
+    return res.ok ? res.json() : [];
+  }
+  const companyId = getActiveCompanyId();
+  return sbSelect("master_projects", (q) => {
+    let builder = q.select("*").eq("company_id", companyId);
+    if (params.status && params.status !== "all") builder = builder.eq("status", params.status);
+    if (params.clientId) builder = builder.eq("client_id", params.clientId);
+    return builder.order("created_at", { ascending: false });
+  });
+}
+
+export async function fetchMasterProjectById(token: string | null, id: number) {
+  if (!isBoltMode) {
+    const res = await apiFetch(`/api/operations/master-projects/${id}`, token);
+    return res.ok ? res.json() : null;
+  }
+  const companyId = getActiveCompanyId();
+  const rows = await sbSelect<any>("master_projects", (q) =>
+    q.select("*").eq("company_id", companyId).eq("id", id).limit(1)
+  );
+  return rows?.[0] || null;
+}
+
+export async function createMasterProject(token: string | null, payload: any) {
+  if (!isBoltMode) {
+    const res = await apiFetch("/api/operations/master-projects", token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.message || "Failed to create master project");
+    }
+    return res.json();
+  }
+  throw new Error("Master project creation requires Express backend mode");
+}
+
+export async function updateMasterProject(token: string | null, id: number, payload: any) {
+  if (!isBoltMode) {
+    const res = await apiFetch(`/api/operations/master-projects/${id}`, token, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.message || "Failed to update master project");
+    }
+    return res.json();
+  }
+  throw new Error("Master project update requires Express backend mode");
+}
+
+export async function fetchAvailableEstimatesForProject(
+  token: string | null,
+  params: { clientId?: number; brandId?: number; search?: string; excludeProjectId?: number } = {}
+) {
+  if (!isBoltMode) {
+    const query = new URLSearchParams();
+    if (params.clientId) query.set("clientId", String(params.clientId));
+    if (params.brandId) query.set("brandId", String(params.brandId));
+    if (params.search) query.set("search", params.search);
+    if (params.excludeProjectId) query.set("excludeProjectId", String(params.excludeProjectId));
+    const url = `/api/operations/estimates/available-for-project${query.toString() ? `?${query.toString()}` : ""}`;
+    const res = await apiFetch(url, token);
+    return res.ok ? res.json() : [];
+  }
+  const companyId = getActiveCompanyId();
+  return sbSelect("estimates", (q) => {
+    let builder = q.select("id, estimate_number, project_name, client_id, brand_id, subtotal, total_amount, purchase_order_number, po_number, status").eq("company_id", companyId);
+    if (params.clientId) builder = builder.eq("client_id", params.clientId);
+    if (params.brandId) builder = builder.eq("brand_id", params.brandId);
+    return builder.order("id", { ascending: false });
+  });
+}
+
+export async function fetchProjectProfitability(token: string | null, projectId: number) {
+  if (!isBoltMode) {
+    const res = await apiFetch(`/api/finance/master-projects/${projectId}/profitability`, token);
+    return res.ok ? res.json() : null;
+  }
+  return null;
+}
+
+export async function fetchProjectCostAllocations(
+  token: string | null,
+  params: { projectId?: number; estimateId?: number; sourceId?: number } = {}
+) {
+  if (!isBoltMode) {
+    const query = new URLSearchParams();
+    if (params.projectId) query.set("projectId", String(params.projectId));
+    if (params.estimateId) query.set("estimateId", String(params.estimateId));
+    if (params.sourceId) query.set("sourceId", String(params.sourceId));
+    const url = `/api/finance/project-cost-allocations${query.toString() ? `?${query.toString()}` : ""}`;
+    const res = await apiFetch(url, token);
+    return res.ok ? res.json() : [];
+  }
+  const companyId = getActiveCompanyId();
+  return sbSelect("project_cost_allocations", (q) => {
+    let builder = q.select("*").eq("company_id", companyId);
+    if (params.projectId) builder = builder.eq("project_id", params.projectId);
+    if (params.estimateId) builder = builder.eq("estimate_id", params.estimateId);
+    if (params.sourceId) builder = builder.eq("source_id", params.sourceId);
+    return builder.order("created_at", { ascending: false });
+  });
+}
+
+export async function createProjectCostAllocations(token: string | null, payload: any | any[]) {
+  if (!isBoltMode) {
+    const res = await apiFetch("/api/finance/project-cost-allocations", token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.message || "Failed to create cost allocation");
+    }
+    return res.json();
+  }
+  throw new Error("Cost allocation requires Express backend mode");
+}
+
+export async function reverseProjectCostAllocation(token: string | null, id: number, reason: string) {
+  if (!isBoltMode) {
+    const res = await apiFetch(`/api/finance/project-cost-allocations/${id}/reverse`, token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.message || "Failed to reverse cost allocation");
+    }
+    return res.json();
+  }
+  throw new Error("Cost allocation reversal requires Express backend mode");
+}
+
+export async function fetchContractorWorkOrders(
+  token: string | null,
+  params: { projectId?: number; status?: string } = {}
+) {
+  if (!isBoltMode) {
+    const query = new URLSearchParams();
+    if (params.projectId) query.set("projectId", String(params.projectId));
+    if (params.status && params.status !== "all") query.set("status", params.status);
+    const url = `/api/operations/contractor-work-orders${query.toString() ? `?${query.toString()}` : ""}`;
+    const res = await apiFetch(url, token);
+    return res.ok ? res.json() : [];
+  }
+  const companyId = getActiveCompanyId();
+  return sbSelect("contractor_work_orders", (q) => {
+    let builder = q.select("*").eq("company_id", companyId);
+    if (params.projectId) builder = builder.eq("project_id", params.projectId);
+    if (params.status && params.status !== "all") builder = builder.eq("status", params.status);
+    return builder.order("created_at", { ascending: false });
+  });
+}
+
+export async function createContractorWorkOrder(token: string | null, payload: any) {
+  if (!isBoltMode) {
+    const res = await apiFetch("/api/operations/contractor-work-orders", token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.message || "Failed to create work order");
+    }
+    return res.json();
+  }
+  throw new Error("Contractor work order creation requires Express backend mode");
+}
+
+export async function updateContractorWorkOrder(token: string | null, id: number, payload: any) {
+  if (!isBoltMode) {
+    const res = await apiFetch(`/api/operations/contractor-work-orders/${id}`, token, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.message || "Failed to update work order");
+    }
+    return res.json();
+  }
+  throw new Error("Contractor work order update requires Express backend mode");
+}

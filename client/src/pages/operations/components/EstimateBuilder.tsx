@@ -16,6 +16,7 @@ import { exportEstimateToExcel } from "../utils/exportHelpers";
 import StoreWiseInvoiceModal from "./StoreWiseInvoiceModal";
 import { BulkEstimatePdfRunner } from "./BulkEstimatePdfRunner";
 import { EstimateRevisionsModal } from "./EstimateRevisionsModal";
+import { CopyToStoresModal } from "./CopyToStoresModal";
 import { validateAbfrlEstimateCharges, type AbfrlChargeValidationResult } from "../utils/abfrlValidation";
 
 // ─── Create Product Drawer ───────────────────────────────────────────────────
@@ -860,6 +861,8 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
   const [gstProfileHighlightIndex, setGstProfileHighlightIndex] = React.useState(0);
   const [storePickerOpen, setStorePickerOpen] = React.useState(false);
   const [replacingStoreId, setReplacingStoreId] = React.useState<string | null>(null);
+  const [copyToSourceStoreId, setCopyToSourceStoreId] = React.useState<string | null>(null);
+  const [isCopyingToStores, setIsCopyingToStores] = React.useState(false);
   const [storeHighlightIndex, setStoreHighlightIndex] = React.useState(0);
 
   React.useEffect(() => {
@@ -1535,6 +1538,80 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
     if (selectedRowIndexes.length === 0) return;
     applyGridMutation(rows => rows.filter((_: any, index: number) => !selectedRowIndexes.includes(index)));
     setSelectedRowIndexes([]);
+  };
+
+  const handleConfirmCopyToStores = (destinationStoreIds: string[]) => {
+    if (!copyToSourceStoreId || destinationStoreIds.length === 0 || isCopyingToStores) return;
+    setIsCopyingToStores(true);
+
+    try {
+      const sourceRows = estItems.filter((row: any) => String(row.storeId || "") === copyToSourceStoreId);
+      if (sourceRows.length === 0) {
+        alert("Source store has no estimate items to copy.");
+        setIsCopyingToStores(false);
+        return;
+      }
+
+      const sourceOverride = estStoreOverrides[copyToSourceStoreId] || {};
+
+      // Revalidate against latest active store IDs in estItems to prevent duplicate sections
+      const currentActive = new Set(estItems.map((r: any) => String(r.storeId || "")).filter(Boolean));
+      const validDestIds = destinationStoreIds.filter(id => id && !currentActive.has(id));
+
+      if (validDestIds.length === 0) {
+        alert("All selected destination stores are already present in this estimate.");
+        setIsCopyingToStores(false);
+        return;
+      }
+
+      // Set overrides for new destination stores (preserving destination store's own identity)
+      setEstStoreOverrides((prev: Record<string, any>) => {
+        const nextOverrides = { ...prev };
+        for (const dsid of validDestIds) {
+          const dStore = stores.find((s: any) => String(s.id) === dsid);
+          nextOverrides[dsid] = {
+            ...sourceOverride,
+            storeName: dStore?.name || `Store ${dsid}`,
+            storeLocation: dStore?.location || dStore?.address || "",
+            storeCity: dStore?.city || "",
+            storeState: dStore?.state || "",
+            storeAddress: dStore?.address || "",
+          };
+        }
+        return nextOverrides;
+      });
+
+      // Clone all source rows into new independent rows for each destination store
+      applyGridMutation((prevRows: any[]) => {
+        const newRows: any[] = [];
+        let nextSl = prevRows.length + 1;
+
+        for (const dsid of validDestIds) {
+          const dStore = stores.find((s: any) => String(s.id) === dsid);
+          for (const sRow of sourceRows) {
+            const cloned = { ...sRow };
+            delete cloned.id;
+            cloned.sl = nextSl++;
+            cloned.storeId = String(dsid);
+            cloned.storeCode = dStore?.storeCode || null;
+            cloned.storeSortOrder = nextSl;
+            cloned.rowSortOrder = nextSl;
+            newRows.push(cloned);
+          }
+        }
+
+        return [...prevRows, ...newRows];
+      });
+
+      const count = validDestIds.length;
+      showSuccess?.(`Successfully copied estimate content to ${count} store${count === 1 ? "" : "s"}.`);
+      setCopyToSourceStoreId(null);
+    } catch (err: any) {
+      console.error("Failed to copy store to destinations:", err);
+      alert("An error occurred while copying store: " + (err?.message || "Unknown error"));
+    } finally {
+      setIsCopyingToStores(false);
+    }
   };
 
   const persistColumnPrefs = React.useCallback((next: { order?: EstimateGridColumnId[]; widths?: Partial<Record<EstimateGridColumnId, number>> }) => {
@@ -2761,6 +2838,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                   // Open store picker immediately for the duplicated section
                   openStorePickerToChange(newSid);
                 };
+
                 const addRowToStoreFromKeyboard = (event: React.KeyboardEvent<HTMLInputElement>, sid: string) => {
                   if (event.key !== "Tab" || event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return;
                   event.preventDefault();
@@ -4222,16 +4300,10 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                                       </button>
                                       <button
                                         type="button"
-                                        onClick={() => {
-                                          const rowIndexes = estItems
-                                            .map((r: any, i: number) => ({ r, i }))
-                                            .filter(({ r }) => String(r.storeId || "") === sid)
-                                            .map(({ i }) => i);
-                                          copyEstimateItemToClipboard(rowIndexes);
-                                        }}
-                                        title="Copy all rows of this store to clipboard (then select another store and Ctrl+V to paste)"
+                                        onClick={() => setCopyToSourceStoreId(sid)}
+                                        title="Copy this store's complete estimate content to multiple stores"
                                       >
-                                        <Copy className="w-3.5 h-3.5" /><span>Copy Store</span>
+                                        <Copy className="w-3.5 h-3.5" /><span>Copy to…</span>
                                       </button>
                                       {eIsRetailSingleStore && sid && (
                                         <button type="button" onClick={() => openStorePickerToChange(sid)} title="Change store for this estimate">
@@ -4673,6 +4745,25 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                     </div>
                   </div>
                 </div>
+              )}
+
+              {/* Copy Store Estimate to Multiple Destinations Modal */}
+              {copyToSourceStoreId && (
+                <CopyToStoresModal
+                  isOpen={Boolean(copyToSourceStoreId)}
+                  onClose={() => setCopyToSourceStoreId(null)}
+                  sourceStoreId={copyToSourceStoreId}
+                  stores={stores}
+                  estItems={estItems}
+                  estStoreOverrides={estStoreOverrides}
+                  clientBillingProfilesList={clientBillingProfilesList}
+                  estBillingProfileId={estBillingProfileId}
+                  clientId={Number(estClientId) || undefined}
+                  brandId={Number(estBrandId) || undefined}
+                  activeStoreIds={activeStoreIds}
+                  onConfirmCopy={handleConfirmCopyToStores}
+                  isCopying={isCopyingToStores}
+                />
               )}
             </form>
           )}

@@ -3,7 +3,7 @@ import { formatCurrency } from "@/utils/format";
 import { useAuth } from "../contexts/AuthContext";
 import { useGlobalDate } from "../contexts/GlobalDateContext";
 import { supabase, isBoltMode } from "../lib/supabase";
-import { fetchUsers, fetchEstimates, fetchDeliveryChallans, getActiveCompanyId } from "../lib/api";
+import { fetchUsers, fetchEstimates, fetchDeliveryChallans, fetchMasterProjects, fetchStores, getActiveCompanyId } from "../lib/api";
 import { 
   Coins, 
   Plus, 
@@ -51,6 +51,8 @@ const PettyCashPage: React.FC = () => {
   const [expenses, setExpenses] = useState<PettyCashExpense[]>([]);
   const [staffList, setStaffList] = useState<Staff[]>([]);
   const [estimatesList, setEstimatesList] = useState<any[]>([]);
+  const [masterProjectsList, setMasterProjectsList] = useState<any[]>([]);
+  const [storesList, setStoresList] = useState<any[]>([]);
   const [dcList, setDcList] = useState<any[]>([]);
   const [selectedProjectFilter, setSelectedProjectFilter] = useState<string>("all");
   const [loading, setLoading] = useState(true);
@@ -63,7 +65,9 @@ const PettyCashPage: React.FC = () => {
   const [description, setDescription] = useState("");
   const [expenseDate, setExpenseDate] = useState("");
   const [paidBy, setPaidBy] = useState<number | undefined>(undefined);
+  const [selectedMasterProjectId, setSelectedMasterProjectId] = useState<number | undefined>(undefined);
   const [selectedEstimateId, setSelectedEstimateId] = useState<number | undefined>(undefined);
+  const [selectedStoreCode, setSelectedStoreCode] = useState<string>("");
   const [selectedDcId, setSelectedDcId] = useState<number | undefined>(undefined);
   
   // OCR states
@@ -76,13 +80,17 @@ const PettyCashPage: React.FC = () => {
       setLoading(true);
       const activeCompanyId = getActiveCompanyId();
 
-      // Load estimates and DCs for job-cost linking
-      const [allEsts, allDCs] = await Promise.all([
+      // Load estimates, master projects, stores and DCs for job-cost linking
+      const [allEsts, allDCs, allProjects, allStores] = await Promise.all([
         fetchEstimates(token).catch(() => []),
         fetchDeliveryChallans(token).catch(() => []),
+        fetchMasterProjects(token).catch(() => []),
+        fetchStores(token).catch(() => []),
       ]);
       setEstimatesList(allEsts || []);
       setDcList(allDCs || []);
+      setMasterProjectsList(allProjects || []);
+      setStoresList(allStores || []);
 
       if (isBoltMode) {
         const { data: rows, error: errRows } = await supabase
@@ -150,13 +158,19 @@ const PettyCashPage: React.FC = () => {
     const activeCompanyId = getActiveCompanyId();
     const est = estimatesList.find(item => item.id === selectedEstimateId);
     const dc = dcList.find(item => item.id === selectedDcId);
+    const proj = masterProjectsList.find(item => item.id === selectedMasterProjectId);
+    const selectedStore = storesList.find(s => s.storeCode === selectedStoreCode);
 
-    const jobData = (selectedEstimateId || selectedDcId) ? {
+    const jobData = (selectedMasterProjectId || selectedEstimateId || selectedDcId || selectedStoreCode) ? {
+      masterProjectId: proj?.id,
+      masterProjectName: proj?.name,
       estimateId: est?.id,
       estimateNumber: est?.estimateNumber || est?.estimate_number,
       projectName: est?.projectName || est?.project_name,
       dcId: dc?.id,
       dcNumber: dc?.dcNumber || dc?.dc_number,
+      storeCode: selectedStoreCode ? selectedStoreCode.trim().toUpperCase() : null,
+      storeName: selectedStore?.storeName || selectedStore?.name || null,
     } : null;
 
     if (isBoltMode) {
@@ -180,7 +194,9 @@ const PettyCashPage: React.FC = () => {
         setDescription("");
         setExpenseDate("");
         setPaidBy(undefined);
+        setSelectedMasterProjectId(undefined);
         setSelectedEstimateId(undefined);
+        setSelectedStoreCode("");
         setSelectedDcId(undefined);
         setOcrSuccess(false);
         setReceiptName("");
@@ -219,7 +235,9 @@ const PettyCashPage: React.FC = () => {
         setDescription("");
         setExpenseDate("");
         setPaidBy(undefined);
+        setSelectedMasterProjectId(undefined);
         setSelectedEstimateId(undefined);
+        setSelectedStoreCode("");
         setSelectedDcId(undefined);
         setOcrSuccess(false);
         setReceiptName("");
@@ -435,6 +453,23 @@ const PettyCashPage: React.FC = () => {
             </div>
             <div>
               <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                Master Project (Rollout Costing)
+              </label>
+              <select
+                value={selectedMasterProjectId || ""}
+                onChange={(e) => setSelectedMasterProjectId(e.target.value ? Number(e.target.value) : undefined)}
+                className="w-full px-4 py-2 bg-white border border-slate-200 rounded-lg text-slate-800 text-sm focus:outline-none focus:border-orange-500"
+              >
+                <option value="">(None / Standalone Expense)</option>
+                {masterProjectsList.map((proj) => (
+                  <option key={proj.id} value={proj.id}>
+                    {proj.projectCode ? `[${proj.projectCode}] ` : ""}{proj.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
                 Link to Project / Estimate (Job Costing)
               </label>
               <select
@@ -446,6 +481,23 @@ const PettyCashPage: React.FC = () => {
                 {estimatesList.map((est) => (
                   <option key={est.id} value={est.id}>
                     {est.estimateNumber || est.estimate_number || `Est #${est.id}`} - {est.projectName || est.project_name || "Project"} ({est.clientName || est.client_name || ""})
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                Target Store (Optional)
+              </label>
+              <select
+                value={selectedStoreCode}
+                onChange={(e) => setSelectedStoreCode(e.target.value)}
+                className="w-full px-4 py-2 bg-white border border-slate-200 rounded-lg text-slate-800 text-sm focus:outline-none focus:border-orange-500"
+              >
+                <option value="">(Project-wide Overhead / No specific store)</option>
+                {storesList.map((st) => (
+                  <option key={st.id || st.storeCode} value={st.storeCode}>
+                    {st.storeCode} - {st.storeName || st.city || "Store"}
                   </option>
                 ))}
               </select>
@@ -571,12 +623,24 @@ const PettyCashPage: React.FC = () => {
                     </td>
                     <td className="px-6 py-4 font-semibold text-slate-900 capitalize whitespace-nowrap">{expense.category.replace("_", " ")}</td>
                     <td className="px-6 py-4 whitespace-nowrap text-xs">
-                      {expense.extractedData?.estimateNumber || expense.extractedData?.projectName ? (
+                      {expense.extractedData?.masterProjectName || expense.extractedData?.estimateNumber || expense.extractedData?.projectName ? (
                         <div className="flex flex-col gap-0.5">
-                          <span className="font-semibold text-amber-800 flex items-center gap-1">
-                            <Briefcase className="w-3 h-3 text-amber-600 inline shrink-0" />
-                            <span className="truncate max-w-[150px]">{expense.extractedData.estimateNumber || "Est"} · {expense.extractedData.projectName || "Job"}</span>
-                          </span>
+                          {expense.extractedData.masterProjectName && (
+                            <span className="font-bold text-orange-700 truncate max-w-[160px]">
+                              {expense.extractedData.masterProjectName}
+                            </span>
+                          )}
+                          {(expense.extractedData.estimateNumber || expense.extractedData.projectName) && (
+                            <span className="font-semibold text-slate-700 flex items-center gap-1">
+                              <Briefcase className="w-3 h-3 text-slate-500 inline shrink-0" />
+                              <span className="truncate max-w-[150px]">{expense.extractedData.estimateNumber || "Est"} · {expense.extractedData.projectName || "Job"}</span>
+                            </span>
+                          )}
+                          {expense.extractedData.storeCode && (
+                            <span className="text-[10px] font-semibold text-slate-600">
+                              Store: {expense.extractedData.storeCode}
+                            </span>
+                          )}
                           {expense.extractedData.dcNumber && (
                             <span className="text-[10px] text-slate-500 flex items-center gap-1">
                               <Truck className="w-2.5 h-2.5 text-slate-400 inline shrink-0" />
@@ -585,7 +649,7 @@ const PettyCashPage: React.FC = () => {
                           )}
                         </div>
                       ) : (
-                        <span className="text-slate-400 text-xs italic">General</span>
+                        <span className="text-slate-400 text-xs italic">General Overhead</span>
                       )}
                     </td>
                     <td className="px-6 py-4 text-slate-700 font-medium whitespace-nowrap">{expense.vendor || "-"}</td>

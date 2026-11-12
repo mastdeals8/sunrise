@@ -1041,3 +1041,101 @@ export type Company = typeof companies.$inferSelect;
 export type InsertCompany = z.infer<typeof insertCompanySchema>;
 export type CompanyUser = typeof companyUsers.$inferSelect;
 export type InsertCompanyUser = z.infer<typeof insertCompanyUserSchema>;
+
+// ==========================================
+// 16. Master Project Costing & Profitability
+// ==========================================
+export const masterProjects = pgTable("master_projects", {
+  id: serial("id").primaryKey(),
+  companyId: integer("company_id").notNull().default(1),
+  clientId: integer("client_id").references(() => clients.id).notNull(),
+  brandId: integer("brand_id").references(() => brands.id),
+  managerId: integer("manager_id").references(() => users.id),
+  projectCode: text("project_code").notNull(),
+  name: text("name").notNull(),
+  description: text("description"),
+  status: text("status").notNull().default("active"), // active, completed, on_hold, archived
+  startDate: timestamp("start_date").notNull().defaultNow(),
+  targetCompletionDate: timestamp("target_completion_date"),
+  actualCompletionDate: timestamp("actual_completion_date"),
+  targetBudget: real("target_budget").default(0),
+  budgetRevenue: real("budget_revenue").default(0),
+  budgetCost: real("budget_cost").default(0),
+  notes: text("notes"),
+  createdBy: integer("created_by").references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const projectEstimates = pgTable("project_estimates", {
+  id: serial("id").primaryKey(),
+  companyId: integer("company_id").notNull().default(1),
+  projectId: integer("project_id").references(() => masterProjects.id, { onDelete: "cascade" }).notNull(),
+  estimateId: integer("estimate_id").references(() => estimates.id).notNull(),
+  linkedAt: timestamp("linked_at").defaultNow(),
+  linkedBy: integer("linked_by").references(() => users.id),
+  notes: text("notes"),
+});
+
+export const projectCostAllocations = pgTable("project_cost_allocations", {
+  id: serial("id").primaryKey(),
+  companyId: integer("company_id").notNull().default(1),
+  projectId: integer("project_id").references(() => masterProjects.id).notNull(),
+  estimateId: integer("estimate_id").references(() => estimates.id),
+  storeId: integer("store_id").references(() => stores.id),
+  storeCode: text("store_code"),
+  sourceType: text("source_type").notNull(), // petty_cash, purchase_invoice, contractor_bill, transport, direct, manual
+  sourceId: integer("source_id"),
+  sourceReference: text("source_reference"),
+  sourceLineId: integer("source_line_id"),
+  costCategory: text("cost_category").notNull(), // materials, printing, fabrication, installation, transport, hardware, supervision, misc
+  description: text("description").default(""),
+  baseAmount: real("base_amount").notNull(),
+  gstRate: real("gst_rate").default(0),
+  gstAmount: real("gst_amount").default(0),
+  totalAmount: real("total_amount").notNull(),
+  isRecoverableGst: boolean("is_recoverable_gst").notNull().default(true),
+  ineligibleGstAmount: real("ineligible_gst_amount").default(0),
+  recognisedCost: real("recognised_cost").notNull(),
+  status: text("status").notNull().default("active"), // active, reversed
+  allocationNotes: text("allocation_notes"),
+  createdBy: integer("created_by").references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow(),
+  reversalReason: text("reversal_reason"),
+  reversedAt: timestamp("reversed_at"),
+  reversedBy: integer("reversed_by").references(() => users.id),
+});
+
+export const contractorWorkOrders = pgTable("contractor_work_orders", {
+  id: serial("id").primaryKey(),
+  companyId: integer("company_id").notNull().default(1),
+  projectId: integer("project_id").references(() => masterProjects.id).notNull(),
+  estimateId: integer("estimate_id").references(() => estimates.id),
+  storeId: integer("store_id").references(() => stores.id),
+  woNumber: text("wo_number").notNull(),
+  contractorName: text("contractor_name").notNull(),
+  contractorGstin: text("contractor_gstin"),
+  scopeOfWork: text("scope_of_work").notNull(),
+  workCategory: text("work_category").notNull(), // fabrication, installation, transport, civil, other
+  committedAmount: real("committed_amount").notNull(),
+  billedAmount: real("billed_amount").default(0),
+  status: text("status").notNull().default("issued"), // draft, issued, partially_billed, fully_billed, cancelled
+  issueDate: timestamp("issue_date").notNull().defaultNow(),
+  expectedCompletion: timestamp("expected_completion"),
+  createdBy: integer("created_by").references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertMasterProjectSchema = createInsertSchema(masterProjects).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertProjectEstimateSchema = createInsertSchema(projectEstimates).omit({ id: true, linkedAt: true });
+export const insertProjectCostAllocationSchema = createInsertSchema(projectCostAllocations).omit({ id: true, createdAt: true });
+export const insertContractorWorkOrderSchema = createInsertSchema(contractorWorkOrders).omit({ id: true, createdAt: true });
+
+export type MasterProject = typeof masterProjects.$inferSelect;
+export type InsertMasterProject = z.infer<typeof insertMasterProjectSchema>;
+export type ProjectEstimate = typeof projectEstimates.$inferSelect;
+export type InsertProjectEstimate = z.infer<typeof insertProjectEstimateSchema>;
+export type ProjectCostAllocation = typeof projectCostAllocations.$inferSelect;
+export type InsertProjectCostAllocation = z.infer<typeof insertProjectCostAllocationSchema>;
+export type ContractorWorkOrder = typeof contractorWorkOrders.$inferSelect;
+export type InsertContractorWorkOrder = z.infer<typeof insertContractorWorkOrderSchema>;

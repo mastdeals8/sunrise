@@ -50,6 +50,7 @@ import { computeStoreBreakdown } from "../shared/storeBreakdown";
 import { estimateItemsToInvoiceLines } from "../shared/invoiceConversion";
 import { whatsappEvolution, normalizeWhatsAppNumber } from "./services/whatsappEvolution";
 import { installerService } from "./services/installerService";
+import { registerMasterProjectCostingRoutes, syncPettyCashExpenseAllocation, cancelInvoiceCostAllocations } from "./masterProjectCostingRoutes";
 
 export async function registerRoutes(app: Express): Promise<Server> {
   if (process.env.BOLT_SAFE_BOOT === "true") {
@@ -2101,6 +2102,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const created = await storage.createPettyCashExpense(parsed.data);
+      if (created.status === "approved") {
+        await syncPettyCashExpenseAllocation(created, req.user.id).catch((e) =>
+          console.warn("[costing] petty cash create sync:", e.message)
+        );
+      }
       res.status(201).json(created);
     } catch (err: any) {
       res.status(500).json({ message: err.message });
@@ -2114,6 +2120,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const updated = await storage.updatePettyCashExpense(id, updates);
       if (!updated) return res.status(404).json({ message: "Expense not found" });
+
+      // Automatically sync project cost allocation (create/update if approved, reverse if rejected/cancelled)
+      await syncPettyCashExpenseAllocation(updated, req.user?.id).catch((e) =>
+        console.warn("[costing] petty cash update sync:", e.message)
+      );
+
       res.json(updated);
     } catch (err: any) {
       res.status(500).json({ message: err.message });
@@ -2124,6 +2136,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const id = parseInt(req.params.id, 10);
       const success = await storage.deletePettyCashExpense(id);
+
+      // Reverse any active cost allocation for deleted expense
+      await syncPettyCashExpenseAllocation({ id, status: "deleted" }, req.user?.id).catch((e) =>
+        console.warn("[costing] petty cash delete sync:", e.message)
+      );
+
       res.json({ success });
     } catch (err: any) {
       res.status(500).json({ message: err.message });
@@ -8246,6 +8264,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         cancelledAt: new Date(),
         cancelledBy: req.user?.id ?? null,
       }).where(eq(invoices.id, id));
+
+      // Reverse any active cost allocations linked to this invoice
+      await cancelInvoiceCostAllocations(id, inv.invoiceNumber, req.user?.id).catch((e) =>
+        console.warn("[costing] cancel invoice alloc:", e.message)
+      );
+
       res.json({ success: true });
     } catch (err: any) {
       res.status(500).json({ message: err.message });
@@ -8907,6 +8931,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (err) res.status(404).json({ message: "Template file not generated yet. Run: node scripts/generate-templates.mjs" });
     });
   });
+
+  registerMasterProjectCostingRoutes(app);
 
   const httpServer = createServer(app);
   return httpServer;

@@ -3,7 +3,8 @@ import { formatCurrency } from "@/utils/format";
 import { useAuth } from "../contexts/AuthContext";
 import { useGlobalDate } from "../contexts/GlobalDateContext";
 import { isBoltMode } from "../lib/supabase";
-import { fetchAccounts, fetchInvoices, fetchPayments, createInvoice, createPayment } from "../lib/api";
+import { fetchAccounts, fetchInvoices, fetchPayments, createInvoice, createPayment, fetchMasterProjects } from "../lib/api";
+import { PurchaseAllocationModal } from "./operations/components/PurchaseAllocationModal";
 import { 
   Wallet, 
   FileText, 
@@ -14,7 +15,8 @@ import {
   Search, 
   AlertCircle,
   CheckCircle,
-  Printer
+  Printer,
+  Split
 } from "lucide-react";
 
 interface ChartOfAccount {
@@ -78,6 +80,11 @@ const FinancePage: React.FC = () => {
   
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
+
+  // Master Project Allocation states
+  const [masterProjectsList, setMasterProjectsList] = useState<any[]>([]);
+  const [isAllocationModalOpen, setIsAllocationModalOpen] = useState(false);
+  const [selectedInvoiceForAllocation, setSelectedInvoiceForAllocation] = useState<Invoice | null>(null);
 
   // Invoice Form states
   const [showInvoiceForm, setShowInvoiceForm] = useState(false);
@@ -143,6 +150,8 @@ const FinancePage: React.FC = () => {
         const rows = await resPay.json();
         setPaymentsList(rows.filter((row: Payment) => globalDate.isInRange(row.date)));
       }
+
+      fetchMasterProjects(token).then(p => setMasterProjectsList(p || [])).catch(() => {});
     } catch (err) {
       console.error("Error loading finance details:", err);
     } finally {
@@ -451,6 +460,7 @@ const FinancePage: React.FC = () => {
                     <th className="px-6 py-4">Status</th>
                     <th className="px-6 py-4 text-right">Tax</th>
                     <th className="px-6 py-4 text-right">Total Amount</th>
+                    <th className="px-6 py-4 text-right">Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200 bg-white">
@@ -474,12 +484,28 @@ const FinancePage: React.FC = () => {
                       </td>
                       <td className="px-6 py-4 text-right text-slate-500">{formatCurrency(inv.taxAmount)}</td>
                       <td className="px-6 py-4 text-right text-slate-900 font-black">{formatCurrency(inv.totalAmount)}</td>
+                      <td className="px-6 py-4 text-right">
+                        {inv.type === "purchase" && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedInvoiceForAllocation(inv);
+                              setIsAllocationModalOpen(true);
+                            }}
+                            className="px-2.5 py-1 text-xs font-bold text-orange-700 bg-orange-50 hover:bg-orange-100 border border-orange-200 rounded transition inline-flex items-center gap-1"
+                            title="Allocate across Master Project stores"
+                          >
+                            <Split className="w-3 h-3" />
+                            Allocate
+                          </button>
+                        )}
+                      </td>
                     </tr>
                   ))}
 
                   {invoicesList.length === 0 && (
                     <tr>
-                      <td colSpan={8} className="text-center py-12 text-slate-400 text-xs">
+                      <td colSpan={9} className="text-center py-12 text-slate-400 text-xs">
                         No corporate invoices tracked
                       </td>
                     </tr>
@@ -737,6 +763,28 @@ const FinancePage: React.FC = () => {
             </div>
           </div>
         </div>
+      )}
+
+      {isAllocationModalOpen && selectedInvoiceForAllocation && (
+        <PurchaseAllocationModal
+          isOpen={isAllocationModalOpen}
+          onClose={() => {
+            setIsAllocationModalOpen(false);
+            setSelectedInvoiceForAllocation(null);
+          }}
+          onSuccess={() => {
+            setMessage("Purchase invoice allocated across project stores successfully");
+            setTimeout(() => setMessage(""), 4000);
+            fetchFinanceData();
+          }}
+          sourceType="purchase_invoice"
+          sourceId={selectedInvoiceForAllocation.id}
+          sourceReference={selectedInvoiceForAllocation.invoiceNumber}
+          supplierName={selectedInvoiceForAllocation.partyName}
+          totalBaseAmount={Number(selectedInvoiceForAllocation.amount) || (Number(selectedInvoiceForAllocation.totalAmount) - Number(selectedInvoiceForAllocation.taxAmount || 0))}
+          totalGstAmount={Number(selectedInvoiceForAllocation.taxAmount || 0)}
+          masterProjects={masterProjectsList}
+        />
       )}
     </div>
   );

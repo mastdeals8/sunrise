@@ -45,6 +45,7 @@ import EstimateBuilder from "./components/EstimateBuilder";
 import EstimatePreview from "./components/EstimatePreview";
 import ProjectWorkspace from "./components/ProjectWorkspace";
 import WccDcEditor from "./components/WccDcEditor";
+import { MasterProjectsPanel } from "./components/MasterProjectsPanel";
 import { useOperationsData, type Invoice } from "./hooks/useOperationsData";
 import { isBoltMode, supabase } from "../../lib/supabase";
 import { createEstimate, updateEstimate, duplicateEstimate, createDeliveryChallan, updateDeliveryChallan, fetchEstimateItems, fetchDeliveryChallansForEstimate, fetchBillingProfiles as apiFetchBillingProfiles, fetchCompanySettings, createInvoice, createPayment, fetchClientLedger, masterDataSave, uploadToStorage, registerExecutionDocument, deleteExecutionDocument, deleteWccPhotoArtifacts, hydrateDeliveryChallanPhotos, normalizeWccPhotos, resolveCustomerRate, apiFetch, getExecutionDocumentSignedUrl, fetchExecutionDocumentVersions, replaceExecutionDocument } from "../../lib/api";
@@ -57,7 +58,7 @@ import { displayFormatLabel, isAblblFormat, normalizeDisplayName, normalizeForma
 import { getEstimateFormatProfile, isRetailSingleStoreFormat, isMultiStoreFormat, normalizeFormatProfileCode } from "../../../../shared/estimateProfiles";
 import { DuplicateEstimateStoresModal } from "./components/DuplicateEstimateStoresModal";
 import { resolveMatchingMaterialCode } from "./utils/materialCodeResolution";
-import { Building2, Tag, MapPin, Package, FileText, Plus, CircleCheck as CheckCircle, Trash, ShoppingBag, Download, Upload, Eye, Check, X, FileSpreadsheet, Image as ImageIcon, FileUp, Printer, ChevronDown, ChevronRight, Scale, CircleAlert as AlertCircle, Clock, Briefcase, Database, Copy, Truck, Receipt, Clipboard, ClipboardPaste, FolderOpen } from "lucide-react";
+import { Building2, Tag, MapPin, Package, FileText, Plus, CircleCheck as CheckCircle, Trash, ShoppingBag, Download, Upload, Eye, Check, X, FileSpreadsheet, Image as ImageIcon, FileUp, Printer, ChevronDown, ChevronRight, Scale, CircleAlert as AlertCircle, Clock, Briefcase, Database, Copy, Truck, Receipt, Clipboard, ClipboardPaste, FolderOpen, Layers } from "lucide-react";
 
 const MATERIAL_CODE_MASTER = [
   { code: "MC-ABF-001", name: "Frontlit Flex Signage (Standard)" },
@@ -146,6 +147,7 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
   const globalDate = useGlobalDate();
   const [, setLocation] = useLocation();
   const [activeTab, setActiveTab] = useState<OpTab>(getInitialTab(focusTab));
+  const [projectsSubTab, setProjectsSubTab] = useState<"master" | "operational">("master");
   const [message, setMessage] = useState("");
   const {
     loading,
@@ -3853,6 +3855,38 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     };
     return (
       <div data-qa="projects-page" className="space-y-4">
+        {/* View Switcher: Master Projects (Costing) vs Operational Estimates */}
+        <div className="flex border-b border-slate-200 bg-white p-1.5 rounded-xl shadow-xs gap-2">
+          <button
+            type="button"
+            onClick={() => setProjectsSubTab("master")}
+            className={`px-4 py-2 text-xs font-bold rounded-lg transition flex items-center gap-2 ${
+              projectsSubTab === "master"
+                ? "bg-orange-50 text-orange-600 border border-orange-200 shadow-2xs"
+                : "text-slate-600 hover:bg-slate-50 border border-transparent"
+            }`}
+          >
+            <Layers className="w-4 h-4 text-orange-500" />
+            Master Projects (Costing & Profitability)
+          </button>
+          <button
+            type="button"
+            onClick={() => setProjectsSubTab("operational")}
+            className={`px-4 py-2 text-xs font-bold rounded-lg transition flex items-center gap-2 ${
+              projectsSubTab === "operational"
+                ? "bg-orange-50 text-orange-600 border border-orange-200 shadow-2xs"
+                : "text-slate-600 hover:bg-slate-50 border border-transparent"
+            }`}
+          >
+            <FileText className="w-4 h-4" />
+            Operational Estimates ({visibleProjects.length})
+          </button>
+        </div>
+
+        {projectsSubTab === "master" ? (
+          <MasterProjectsPanel clients={clients} brands={brands} />
+        ) : (
+          <>
         <div className="bg-white border border-slate-200 rounded-lg p-4 shadow-sm">
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
             <div>
@@ -3929,6 +3963,8 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
             </table>
           </div>
         </div>
+          </>
+        )}
       </div>
     );
   };
