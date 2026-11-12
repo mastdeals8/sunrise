@@ -2618,11 +2618,13 @@ export async function updateInvoice(token: string | null, id: number, payload: R
 
 export async function refreshInvoiceFromEstimate(
   token: string | null,
-  invoiceId: number
+  invoiceId: number,
+  expectedEstimateId?: number
 ): Promise<{ success: boolean; invoice: any; estimate: any; message: string }> {
   if (!isBoltMode) {
     const res = await apiFetch(`/api/finance/invoices/${invoiceId}/refresh-from-estimate`, token, {
       method: "POST",
+      body: JSON.stringify({ expectedEstimateId }),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
@@ -2648,6 +2650,12 @@ export async function refreshInvoiceFromEstimate(
 
   const estId = inv.estimate_id ?? inv.estimateId;
   if (!estId) throw new Error("This invoice does not have a linked estimate.");
+
+  if (expectedEstimateId && Number(estId) !== Number(expectedEstimateId)) {
+    throw new Error(
+      `Estimate mismatch: Invoice ${inv.invoice_number || inv.invoiceNumber} is linked to Estimate #${estId}, not Estimate #${expectedEstimateId}. An invoice can only be updated from its own linked estimate.`
+    );
+  }
 
   const { data: est, error: estErr } = await supabase
     .from("estimates")

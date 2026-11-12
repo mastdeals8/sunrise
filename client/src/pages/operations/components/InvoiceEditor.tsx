@@ -76,8 +76,38 @@ const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ open, invoiceId, estimate
 
   // Load: either an existing invoice OR build a draft from estimate + DC.
   useEffect(() => {
-    if (!open || !token) return;
+    if (!open || !token) {
+      setOrigInvoice(null);
+      setLinkedEstimate(null);
+      setLinkedDc(null);
+      setItems([]);
+      setInvoiceNumber("");
+      setPartyName("");
+      setClientId(null);
+      setPoNumber("");
+      setPoReference("");
+      setRemarks("");
+      setStatus("draft");
+      setSelectedAttachments([]);
+      setAttachments([]);
+      return;
+    }
     setLoading(true);
+    // Explicitly reset prior invoice session data immediately upon opening
+    setOrigInvoice(null);
+    setLinkedEstimate(null);
+    setLinkedDc(null);
+    setItems([]);
+    setInvoiceNumber("");
+    setPartyName("");
+    setClientId(null);
+    setPoNumber("");
+    setPoReference("");
+    setRemarks("");
+    setStatus("draft");
+    setSelectedAttachments([]);
+    setAttachments([]);
+
     (async () => {
       try {
         if (invoiceId) {
@@ -147,34 +177,37 @@ const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ open, invoiceId, estimate
                 });
                 if (r.ok) {
                   const data = await r.json();
-                  setOrigInvoice(data.invoice);
-                  setInvoiceNumber(data.invoice.invoiceNumber);
-                  setDate(data.invoice.date?.slice(0, 10) || new Date().toISOString().slice(0, 10));
-                  setDueDate(data.invoice.dueDate?.slice(0, 10) || new Date().toISOString().slice(0, 10));
-                  setPartyName(data.invoice.partyName || "");
-                  setClientId(data.invoice.clientId ?? null);
-                  setPoNumber(data.invoice.poNumber || "");
-                  setPoReference(data.invoice.poReference || "");
-                  setRemarks(data.invoice.remarks || "");
-                  setStatus(data.invoice.status || "draft");
-                  setLinkedEstimate(data.estimate || null);
-                  setLinkedDc(data.deliveryChallan || null);
-                  const lines = Array.isArray(data.invoice.lineItems) ? data.invoice.lineItems : [];
-                  if (lines.length > 0) {
-                    setItems(lines.map(invoiceLineToEditorLine));
-                  } else if (data.estimateItems && data.estimateItems.length > 0) {
-                    setItems(estimateItemsToInvoiceLines(data.estimateItems));
-                  } else {
-                    setItems([blankRow()]);
+                  if (data?.invoice && Number(data.invoice.estimateId) === Number(estimateId)) {
+                    setOrigInvoice(data.invoice);
+                    setInvoiceNumber(data.invoice.invoiceNumber);
+                    setDate(data.invoice.date?.slice(0, 10) || new Date().toISOString().slice(0, 10));
+                    setDueDate(data.invoice.dueDate?.slice(0, 10) || new Date().toISOString().slice(0, 10));
+                    setPartyName(data.invoice.partyName || "");
+                    setClientId(data.invoice.clientId ?? null);
+                    setPoNumber(data.invoice.poNumber || "");
+                    setPoReference(data.invoice.poReference || "");
+                    setRemarks(data.invoice.remarks || "");
+                    setStatus(data.invoice.status || "draft");
+                    setLinkedEstimate(data.estimate || null);
+                    setLinkedDc(data.deliveryChallan || null);
+                    const lines = Array.isArray(data.invoice.lineItems) ? data.invoice.lineItems : [];
+                    if (lines.length > 0) {
+                      setItems(lines.map(invoiceLineToEditorLine));
+                    } else if (data.estimateItems && data.estimateItems.length > 0) {
+                      setItems(estimateItemsToInvoiceLines(data.estimateItems));
+                    } else {
+                      setItems([blankRow()]);
+                    }
+                    setLoading(false);
+                    return;
                   }
-                  setLoading(false);
-                  return;
                 }
               }
             }
           }
 
-          // Build new invoice from estimate items
+          // Build new invoice draft from estimate items (no existing invoice for this estimate)
+          setOrigInvoice(null);
           if (isBoltMode) {
             const [allEstimates, its, allDcs, docs, nextNum] = await Promise.all([
               fetchEstimates(token),
@@ -275,6 +308,17 @@ const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ open, invoiceId, estimate
   const removeRow = (idx: number) => setItems(prev => prev.filter((_, i) => i !== idx));
   const addRow = () => setItems(prev => [...prev, blankRow()]);
 
+  const currentInvoiceId: number | null = invoiceId
+    ? Number(invoiceId)
+    : (origInvoice && estimateId && Number(origInvoice.estimateId) === Number(estimateId) ? Number(origInvoice.id) : null);
+
+  const currentEstimateId: number | null = linkedEstimate?.id
+    ? Number(linkedEstimate.id)
+    : (estimateId ? Number(estimateId) : (origInvoice?.estimateId ? Number(origInvoice.estimateId) : null));
+
+  const isDraft = (origInvoice?.status || status) === "draft";
+  const canUpdateFromEstimate = Boolean(currentEstimateId && isDraft);
+
   const save = async (mode: "draft" | "approved" | "stay") => {
     if (!token) return;
     const finalNumber = invoiceNumber.trim();
@@ -282,6 +326,7 @@ const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ open, invoiceId, estimate
     if (items.length === 0 || items.every(it => !it.itemName)) { alert("Add at least one line item"); return; }
     setSaving(true);
     try {
+      const targetEstimateId = currentEstimateId || linkedEstimate?.id || estimateId || origInvoice?.estimateId || null;
       const payload: any = {
         invoiceNumber: finalNumber,
         type: "sales",
@@ -292,7 +337,7 @@ const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ open, invoiceId, estimate
         date,
         dueDate,
         status: mode === "stay" ? (origInvoice?.status || status) : mode === "approved" ? "approved" : "draft",
-        estimateId: linkedEstimate?.id || estimateId || null,
+        estimateId: targetEstimateId,
         clientId,
         paidAmount: origInvoice?.paidAmount ?? 0,
         balanceAmount: grandTotal - (origInvoice?.paidAmount ?? 0),
@@ -304,16 +349,15 @@ const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ open, invoiceId, estimate
         packetSettings: { ...(origInvoice?.packetSettings || {}), attachmentIds: selectedAttachments },
       };
       if (isBoltMode) {
-        if (invoiceId || origInvoice?.id) {
-          await updateInvoice(token, Number(invoiceId || origInvoice.id), payload);
+        if (currentInvoiceId) {
+          await updateInvoice(token, Number(currentInvoiceId), payload);
         } else {
           await createInvoice(token, payload);
         }
       } else {
         let r: Response;
-        if (invoiceId || origInvoice?.id) {
-          const id = invoiceId || origInvoice.id;
-          r = await fetch(`/api/finance/invoices/${id}`, {
+        if (currentInvoiceId) {
+          r = await fetch(`/api/finance/invoices/${currentInvoiceId}`, {
             method: "PATCH",
             headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
             body: JSON.stringify(payload),
@@ -338,11 +382,6 @@ const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ open, invoiceId, estimate
     } finally { setSaving(false); }
   };
 
-  const currentInvoiceId = invoiceId || origInvoice?.id;
-  const currentEstimateId = linkedEstimate?.id || origInvoice?.estimateId || estimateId;
-  const isDraft = (origInvoice?.status || status) === "draft";
-  const canUpdateFromEstimate = Boolean(currentInvoiceId && currentEstimateId && isDraft);
-
   const handleUpdateFromEstimate = async () => {
     if (!token) return;
     if (!isDraft) {
@@ -355,10 +394,6 @@ const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ open, invoiceId, estimate
       alert("This invoice does not have a linked estimate.");
       return;
     }
-    if (!currentInvoiceId) {
-      alert("Please save this invoice draft first before updating from the estimate.");
-      return;
-    }
 
     const confirmed = window.confirm(
       "This will replace estimate-derived invoice line items and amounts with the latest estimate. Continue?"
@@ -367,18 +402,54 @@ const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ open, invoiceId, estimate
 
     setUpdatingFromEstimate(true);
     try {
-      const res = await refreshInvoiceFromEstimate(token, Number(currentInvoiceId));
-      if (res && res.invoice) {
-        setOrigInvoice(res.invoice);
-        const lines = Array.isArray(res.invoice.lineItems || res.invoice.line_items)
-          ? (res.invoice.lineItems || res.invoice.line_items)
-          : [];
-        setItems(lines.map(invoiceLineToEditorLine));
-        if (res.estimate) {
-          setLinkedEstimate(res.estimate);
+      if (currentInvoiceId) {
+        const res = await refreshInvoiceFromEstimate(token, Number(currentInvoiceId), Number(currentEstimateId));
+        if (res && res.invoice) {
+          setOrigInvoice(res.invoice);
+          const lines = Array.isArray(res.invoice.lineItems || res.invoice.line_items)
+            ? (res.invoice.lineItems || res.invoice.line_items)
+            : [];
+          setItems(lines.map(invoiceLineToEditorLine));
+          if (res.estimate) {
+            setLinkedEstimate(res.estimate);
+          }
+          onSaved();
+          alert(res.message || "Invoice successfully updated from latest estimate.");
         }
-        onSaved();
-        alert(res.message || "Invoice successfully updated from latest estimate.");
+      } else {
+        // Unsaved new invoice draft: reload items in-place from the linked estimate
+        let refreshedEst: any = null;
+        let refreshedItems: any[] = [];
+        if (isBoltMode) {
+          const [allEstimates, its] = await Promise.all([
+            fetchEstimates(token),
+            fetchEstimateItems(token, Number(currentEstimateId)),
+          ]);
+          refreshedEst = (allEstimates as any[]).find((e: any) => e.id === Number(currentEstimateId));
+          refreshedItems = (its as any[]) || [];
+        } else {
+          const [eRes, iRes] = await Promise.all([
+            fetch(`/api/operations/estimates`, { headers: { Authorization: `Bearer ${token}` } }),
+            fetch(`/api/operations/estimates/${currentEstimateId}/items`, { headers: { Authorization: `Bearer ${token}` } }),
+          ]);
+          if (eRes.ok) {
+            const list = await eRes.json();
+            refreshedEst = list.find((e: any) => e.id === Number(currentEstimateId));
+          }
+          if (iRes.ok) {
+            refreshedItems = await iRes.json();
+          }
+        }
+        if (refreshedEst) {
+          setLinkedEstimate(refreshedEst);
+          setPartyName(refreshedEst.billingLegalNameSnapshot || partyName);
+          setClientId(refreshedEst.clientId ?? clientId);
+          setPoNumber(refreshedEst.poNumber || poNumber);
+        }
+        if (refreshedItems.length > 0) {
+          setItems(estimateItemsToInvoiceLines(refreshedItems));
+        }
+        alert("Invoice draft successfully updated from latest estimate.");
       }
     } catch (err: any) {
       alert(err.message || "Failed to update invoice from estimate");

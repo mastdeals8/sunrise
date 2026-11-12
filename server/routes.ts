@@ -2339,7 +2339,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/finance/invoices/estimate/:estimateId", authenticateToken, async (req: AuthRequest, res: Response) => {
     try {
       const estId = Number(req.params.estimateId);
-      const invoiceList = await db.select().from(invoices).where(eq(invoices.estimateId, estId)).limit(1);
+      if (isNaN(estId) || estId <= 0) {
+        return res.json(null);
+      }
+      const invoiceList = await db.select().from(invoices).where(
+        and(
+          eq(invoices.estimateId, estId),
+          ne(invoices.status, "cancelled")
+        )
+      ).orderBy(desc(invoices.id)).limit(1);
       res.json(invoiceList[0] || null);
     } catch (err: any) {
       res.status(500).json({ message: err.message });
@@ -8095,6 +8103,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Unauthorized company access" });
       }
 
+      // Explicit estimate mismatch guard: If the client specified which estimate it expects, ensure it matches!
+      const expectedEstimateId = req.body?.expectedEstimateId != null ? Number(req.body.expectedEstimateId) : null;
+      if (expectedEstimateId && Number(inv.estimateId) !== expectedEstimateId) {
+        return res.status(400).json({
+          message: `Estimate mismatch: Invoice ${inv.invoiceNumber} is linked to Estimate #${inv.estimateId}, but update was requested for Estimate #${expectedEstimateId}. An invoice can only be updated from its own linked estimate.`
+        });
+      }
+
       // 2. Safety status check: Never allow overwriting Approved, Submitted or Paid invoices
       const currentStatus = String(inv.status || "").toLowerCase().trim();
       if (currentStatus !== "draft") {
@@ -8183,6 +8199,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           totalAmount: newGrandTotal,
           balanceAmount: newBalanceAmount,
           lineItems: lines,
+          estimateId: est.id,
+          partyName: (est.billingLegalNameSnapshot && (!inv.partyName || inv.partyName === "Customer"))
+            ? est.billingLegalNameSnapshot
+            : inv.partyName,
           packetSettings: inv.packetSettings ? {
             ...packetSettings,
             ...(packetSettings.itemCount !== undefined ? { itemCount: lines.length } : {})

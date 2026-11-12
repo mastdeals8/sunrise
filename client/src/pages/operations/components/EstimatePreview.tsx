@@ -1488,7 +1488,7 @@ Sunrise Media`;
                         <span className="block text-[10px] font-black uppercase text-slate-400 mb-1">Invoice</span>
                         <b className={`block text-base capitalize ${generatedInvoice ? "text-blue-700" : "text-slate-500"}`}>{generatedInvoice ? String(generatedInvoice.status || "draft").replace(/_/g, " ") : "Not Generated"}</b>
                         <span className="block text-[10px] text-slate-400 font-semibold">Invoice Status</span>
-                        <button type="button" onClick={() => openInvoiceEditor && openInvoiceEditor(generatedInvoice)} className="mt-2 inline-flex items-center justify-center w-full py-1 border border-blue-200 text-blue-700 text-[10px] font-bold rounded hover:bg-blue-50">
+                        <button type="button" onClick={() => openInvoiceEditor && openInvoiceEditor(generatedInvoice ? { invoiceId: generatedInvoice.id } : { estimateId: selectedEstimate.id })} className="mt-2 inline-flex items-center justify-center w-full py-1 border border-blue-200 text-blue-700 text-[10px] font-bold rounded hover:bg-blue-50">
                           {generatedInvoice ? "View Invoice" : "Generate Invoice"}
                         </button>
                       </div>
