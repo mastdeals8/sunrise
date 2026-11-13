@@ -1245,8 +1245,8 @@ export async function syncPettyCashExpenseAllocation(
     return;
   }
 
-  // If approved, create or update the allocation
-  if (expense.status === "approved") {
+  // If approved or paid, create or maintain the active allocation
+  if (expense.status === "approved" || expense.status === "paid") {
     const existing = await executor
       .select()
       .from(projectCostAllocations)
@@ -1258,8 +1258,14 @@ export async function syncPettyCashExpenseAllocation(
       )
       .limit(1);
 
-    const amount = Number(expense.amount || 0);
-    const formattedAmount = amount.toFixed(2);
+    const totalAmount = Number(expense.amount || 0);
+    const gstRate = ext.gstRate != null ? Number(ext.gstRate) : 0;
+    const gstAmount = ext.gstAmount != null ? Number(ext.gstAmount) : 0;
+    const baseAmount = ext.baseAmount != null ? Number(ext.baseAmount) : +(totalAmount - gstAmount).toFixed(2);
+    const isRecoverableGst = ext.isRecoverableGst === true;
+    const ineligibleGstAmount = isRecoverableGst ? 0 : gstAmount;
+    const recognisedCost = +(baseAmount + ineligibleGstAmount).toFixed(2);
+
     const storeCode = ext.storeCode ? String(ext.storeCode).trim().toUpperCase() : null;
     let estimateId: number | null = null;
     if (ext.estimateId) {
@@ -1279,7 +1285,7 @@ export async function syncPettyCashExpenseAllocation(
         estimateId = eid;
       }
     }
-    const desc = expense.description || `Petty cash: ${expense.category || "General"}`;
+    const desc = expense.description || `Petty cash: ${expense.vendor ? expense.vendor + ' - ' : ''}${expense.category || "General"}`;
 
     if (existing[0]) {
       await executor
@@ -1288,9 +1294,13 @@ export async function syncPettyCashExpenseAllocation(
           projectId,
           estimateId,
           storeCode,
-          baseAmount: formattedAmount,
-          totalAmount: formattedAmount,
-          recognisedCost: formattedAmount,
+          baseAmount: String(baseAmount.toFixed(2)),
+          gstRate: String(gstRate.toFixed(2)),
+          gstAmount: String(gstAmount.toFixed(2)),
+          totalAmount: String(totalAmount.toFixed(2)),
+          isRecoverableGst,
+          ineligibleGstAmount: String(ineligibleGstAmount.toFixed(2)),
+          recognisedCost: String(recognisedCost.toFixed(2)),
           costCategory: "petty_cash",
           description: desc,
           status: "active",
@@ -1310,19 +1320,19 @@ export async function syncPettyCashExpenseAllocation(
         sourceReference: `PC-${expense.id}`,
         costCategory: "petty_cash",
         description: desc,
-        baseAmount: formattedAmount,
-        gstRate: "0.00",
-        gstAmount: "0.00",
-        totalAmount: formattedAmount,
-        isRecoverableGst: false,
-        ineligibleGstAmount: "0.00",
-        recognisedCost: formattedAmount,
+        baseAmount: String(baseAmount.toFixed(2)),
+        gstRate: String(gstRate.toFixed(2)),
+        gstAmount: String(gstAmount.toFixed(2)),
+        totalAmount: String(totalAmount.toFixed(2)),
+        isRecoverableGst,
+        ineligibleGstAmount: String(ineligibleGstAmount.toFixed(2)),
+        recognisedCost: String(recognisedCost.toFixed(2)),
         status: "active",
         createdBy: userId || expense.addedBy || null,
       });
     }
   } else {
-    // If not approved (e.g. pending, rejected, cancelled), reverse active allocation
+    // If not approved or paid (e.g. pending, draft, rejected, cancelled, deleted), reverse active allocation
     await executor
       .update(projectCostAllocations)
       .set({

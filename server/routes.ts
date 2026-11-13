@@ -2,7 +2,7 @@ import { createServer, type Server } from "http";
 import express, { type Express, Request, Response, NextFunction } from "express";
 import { storage, sanitizeUser } from "./storage";
 import { hashPassword, comparePassword, generateToken, authenticateToken, authenticateBrowserRequest, requireRole, setSessionCookie, clearSessionCookie, AuthRequest } from "./auth";
-import { insertUserSchema, insertAttendanceSchema, insertTaskSchema, insertPettyCashExpenseSchema, insertInvoiceSchema, insertPaymentSchema, insertChartOfAccountSchema, insertClientSchema, insertClientBillingProfileSchema, insertBrandSchema, insertStoreSchema, insertProductSchema, insertEstimateSchema, insertEstimateItemSchema, insertStaffAdvanceSchema, insertPayrollSchema, insertDeliveryChallanSchema, clients, brands, stores, products, invoices, payments, botSettings, botUploadInbox, webhookLogs, customerRateCards, customerRateItems, estimates, estimateItems, estimateRevisions, deliveryChallans, executionDocuments, executionStores, fieldAccessLinks, staffAdvances, attendance, projectStoreStatus, users, telegramDeliveries, companyUsers, materialCodes } from "../shared/schema";
+import { insertUserSchema, insertAttendanceSchema, insertTaskSchema, insertPettyCashExpenseSchema, insertInvoiceSchema, insertPaymentSchema, insertChartOfAccountSchema, insertClientSchema, insertClientBillingProfileSchema, insertBrandSchema, insertStoreSchema, insertProductSchema, insertEstimateSchema, insertEstimateItemSchema, insertStaffAdvanceSchema, insertPayrollSchema, insertDeliveryChallanSchema, clients, brands, stores, products, invoices, payments, botSettings, botUploadInbox, webhookLogs, customerRateCards, customerRateItems, estimates, estimateItems, estimateRevisions, deliveryChallans, executionDocuments, executionStores, fieldAccessLinks, staffAdvances, attendance, projectStoreStatus, users, telegramDeliveries, companyUsers, materialCodes, masterProjects, projectEstimates, pettyCashExpenses } from "../shared/schema";
 import { db, pool } from "./db";
 import { inArray, eq, sql, and, ne } from "drizzle-orm";
 import { z } from "zod";
@@ -51,6 +51,7 @@ import { estimateItemsToInvoiceLines } from "../shared/invoiceConversion";
 import { whatsappEvolution, normalizeWhatsAppNumber } from "./services/whatsappEvolution";
 import { installerService } from "./services/installerService";
 import { registerMasterProjectCostingRoutes, syncPettyCashExpenseAllocation, cancelInvoiceCostAllocations } from "./masterProjectCostingRoutes";
+import { performGenuineOcr } from "./ocrService";
 
 export async function registerRoutes(app: Express): Promise<Server> {
   if (process.env.BOLT_SAFE_BOOT === "true") {
@@ -2074,6 +2075,177 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ==========================================
   // 4. Petty Cash & OCR Receipt Processing
   // ==========================================
+  // ==========================================
+  // 4b. Petty Cash & Expense Management (Enhanced)
+  // ==========================================
+
+  // Configure receipts uploads directory
+  const receiptsUploadDir = path.join(UPLOAD_DIR, "receipts");
+  if (!fs.existsSync(receiptsUploadDir)) {
+    fs.mkdirSync(receiptsUploadDir, { recursive: true });
+  }
+
+  const receiptMulter = multer({
+    storage: multer.diskStorage({
+      destination: (_req, _file, cb) => cb(null, receiptsUploadDir),
+      filename: (_req, file, cb) => {
+        const ext = path.extname(file.originalname).toLowerCase() || ".jpg";
+        const safeBase = path.basename(file.originalname, ext).replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 40);
+        cb(null, `${Date.now()}_${safeBase}${ext}`);
+      },
+    }),
+    limits: { fileSize: 15 * 1024 * 1024 },
+  });
+
+  // Genuine OCR Receipt Scanner Endpoint
+  app.post("/api/petty-cash/ocr", authenticateToken, receiptMulter.single("file"), async (req: AuthRequest, res: Response) => {
+    try {
+      if (!req.user) return res.status(401).json({ message: "Unauthorized" });
+
+      let fileBuffer: Buffer | null = null;
+      let fileName = "";
+      let mimeType = "image/jpeg";
+      let filePath = "";
+
+      if (req.file) {
+        fileName = req.file.originalname;
+        mimeType = req.file.mimetype;
+        filePath = `/uploads/receipts/${req.file.filename}`;
+        fileBuffer = fs.readFileSync(req.file.path);
+      } else if (req.body?.base64Data) {
+        const rawBase64 = String(req.body.base64Data);
+        fileName = String(req.body.fileName || `receipt_${Date.now()}.jpg`);
+        mimeType = String(req.body.mimeType || "image/jpeg");
+        const base64Clean = rawBase64.replace(/^data:[^;]+;base64,/, "");
+        fileBuffer = Buffer.from(base64Clean, "base64");
+        const ext = path.extname(fileName).toLowerCase() || ".jpg";
+        const safeName = `${Date.now()}_${path.basename(fileName, ext).replace(/[^a-zA-Z0-9_-]/g, "_")}${ext}`;
+        const diskPath = path.join(receiptsUploadDir, safeName);
+        fs.writeFileSync(diskPath, fileBuffer);
+        filePath = `/uploads/receipts/${safeName}`;
+      } else {
+        return res.status(400).json({ message: "No receipt file or image data provided" });
+      }
+
+      // Perform genuine optical character recognition (Tesseract.js for images, pdf-parse for PDFs)
+      const ocrResult = await performGenuineOcr(fileBuffer, mimeType, fileName);
+
+      res.json({
+        success: ocrResult.success,
+        receiptUrl: filePath,
+        receiptName: fileName,
+        extracted: ocrResult,
+        message: ocrResult.message,
+      });
+    } catch (err: any) {
+      console.error("[Petty Cash OCR Error]:", err);
+      res.status(500).json({
+        success: false,
+        message: `OCR processing error: ${err.message || "Failed to process receipt image"}`,
+      });
+    }
+  });
+
+  // Project Costing Scoped Options for Petty Cash: Returns only linked estimates and stores
+  app.get("/api/petty-cash/project-options/:projectId", authenticateToken, async (req: AuthRequest, res: Response) => {
+    try {
+      const companyId = req.companyId || 1;
+      const projectId = Number(req.params.projectId);
+      if (isNaN(projectId) || projectId <= 0) {
+        return res.status(400).json({ message: "Invalid project ID" });
+      }
+
+      // Verify project exists and belongs to company
+      const [proj] = await db
+        .select({
+          id: masterProjects.id,
+          projectCode: masterProjects.projectCode,
+          name: masterProjects.name,
+          clientId: masterProjects.clientId,
+          clientName: clients.name,
+        })
+        .from(masterProjects)
+        .leftJoin(clients, eq(masterProjects.clientId, clients.id))
+        .where(and(eq(masterProjects.id, projectId), eq(masterProjects.companyId, companyId)))
+        .limit(1);
+
+      if (!proj) {
+        return res.status(404).json({ message: "Master Project not found" });
+      }
+
+      // Linked active estimates
+      const linkedEsts = await db
+        .select({
+          id: estimates.id,
+          estimateNumber: estimates.estimateNumber,
+          title: estimates.title,
+          clientId: estimates.clientId,
+          brandId: estimates.brandId,
+          totalAmount: estimates.totalAmount,
+          brandName: brands.name,
+          clientName: clients.name,
+        })
+        .from(projectEstimates)
+        .innerJoin(estimates, eq(projectEstimates.estimateId, estimates.id))
+        .leftJoin(brands, eq(estimates.brandId, brands.id))
+        .leftJoin(clients, eq(estimates.clientId, clients.id))
+        .where(
+          and(
+            eq(projectEstimates.projectId, projectId),
+            eq(projectEstimates.companyId, companyId),
+            eq(projectEstimates.status, "active")
+          )
+        )
+        .orderBy(estimates.id);
+
+      // Collect stores for each linked estimate
+      const estimatesWithStores = await Promise.all(
+        linkedEsts.map(async (est) => {
+          const storeRows = await db
+            .select({
+              storeId: executionStores.storeId,
+              storeCode: executionStores.storeCode,
+              storeName: executionStores.storeName,
+              storeCity: executionStores.storeCity,
+              storeState: executionStores.storeState,
+            })
+            .from(executionStores)
+            .where(eq(executionStores.estimateId, est.id));
+
+          return {
+            ...est,
+            stores: storeRows,
+          };
+        })
+      );
+
+      // Collect flat list of all stores linked across these estimates
+      const allProjectStores: Array<{ storeCode: string; storeName: string; storeCity: string; estimateId: number }> = [];
+      const seenCodes = new Set<string>();
+      for (const e of estimatesWithStores) {
+        for (const s of e.stores) {
+          if (s.storeCode && !seenCodes.has(s.storeCode)) {
+            seenCodes.add(s.storeCode);
+            allProjectStores.push({
+              storeCode: s.storeCode,
+              storeName: s.storeName || "",
+              storeCity: s.storeCity || "",
+              estimateId: e.id,
+            });
+          }
+        }
+      }
+
+      res.json({
+        project: proj,
+        estimates: estimatesWithStores,
+        stores: allProjectStores,
+      });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message || "Failed to fetch project options" });
+    }
+  });
+
   app.get("/api/petty-cash", authenticateToken, async (req: AuthRequest, res: Response) => {
     try {
       const category = req.query.category as string | undefined;
@@ -2090,6 +2262,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       if (!req.user) return res.status(401).json({ message: "Unauthorized" });
       const targetCompanyId = req.companyId || req.body.companyId || 1;
+
+      // Backend ownership and relationship verification
+      const ext = (req.body.extractedData || {}) as Record<string, any>;
+      const projectId = ext.masterProjectId ? Number(ext.masterProjectId) : null;
+      const estimateId = ext.estimateId ? Number(ext.estimateId) : null;
+
+      if (projectId) {
+        const [proj] = await db
+          .select({ id: masterProjects.id })
+          .from(masterProjects)
+          .where(and(eq(masterProjects.id, projectId), eq(masterProjects.companyId, targetCompanyId)))
+          .limit(1);
+        if (!proj) {
+          return res.status(400).json({ message: `Master Project #${projectId} not found or belongs to another company` });
+        }
+
+        if (estimateId) {
+          const [link] = await db
+            .select({ id: projectEstimates.id })
+            .from(projectEstimates)
+            .where(
+              and(
+                eq(projectEstimates.projectId, projectId),
+                eq(projectEstimates.estimateId, estimateId),
+                eq(projectEstimates.status, "active")
+              )
+            )
+            .limit(1);
+          if (!link) {
+            return res.status(400).json({ message: `Estimate #${estimateId} is not actively linked to Master Project #${projectId}` });
+          }
+        }
+      }
+
       // Drizzle timestamp columns -> z.date() (no coercion). See server/utils/dateFields.ts.
       const parsed = insertPettyCashExpenseSchema.safeParse(
         preprocessDateFields(
@@ -2102,7 +2308,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const created = await storage.createPettyCashExpense(parsed.data);
-      if (created.status === "approved") {
+      if (created.status === "approved" || created.status === "paid") {
         await syncPettyCashExpenseAllocation(created, req.user.id).catch((e) =>
           console.warn("[costing] petty cash create sync:", e.message)
         );
@@ -2116,12 +2322,46 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.put("/api/petty-cash/:id", authenticateToken, requireRole(["admin", "manager", "accounts"]), async (req: AuthRequest, res: Response) => {
     try {
       const id = parseInt(req.params.id, 10);
+      const companyId = req.companyId || 1;
       const updates = preprocessDateFields(req.body, ["expenseDate"]);
+
+      // Validate project/estimate relationships if provided
+      const ext = (updates.extractedData || {}) as Record<string, any>;
+      const projectId = ext.masterProjectId ? Number(ext.masterProjectId) : null;
+      const estimateId = ext.estimateId ? Number(ext.estimateId) : null;
+
+      if (projectId) {
+        const [proj] = await db
+          .select({ id: masterProjects.id })
+          .from(masterProjects)
+          .where(and(eq(masterProjects.id, projectId), eq(masterProjects.companyId, companyId)))
+          .limit(1);
+        if (!proj) {
+          return res.status(400).json({ message: `Master Project #${projectId} not found or belongs to another company` });
+        }
+
+        if (estimateId) {
+          const [link] = await db
+            .select({ id: projectEstimates.id })
+            .from(projectEstimates)
+            .where(
+              and(
+                eq(projectEstimates.projectId, projectId),
+                eq(projectEstimates.estimateId, estimateId),
+                eq(projectEstimates.status, "active")
+              )
+            )
+            .limit(1);
+          if (!link) {
+            return res.status(400).json({ message: `Estimate #${estimateId} is not actively linked to Master Project #${projectId}` });
+          }
+        }
+      }
 
       const updated = await storage.updatePettyCashExpense(id, updates);
       if (!updated) return res.status(404).json({ message: "Expense not found" });
 
-      // Automatically sync project cost allocation (create/update if approved, reverse if rejected/cancelled)
+      // Automatically sync project cost allocation (create/update if approved/paid, reverse if rejected/cancelled)
       await syncPettyCashExpenseAllocation(updated, req.user?.id).catch((e) =>
         console.warn("[costing] petty cash update sync:", e.message)
       );
@@ -2129,6 +2369,61 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(updated);
     } catch (err: any) {
       res.status(500).json({ message: err.message });
+    }
+  });
+
+  // Disburse and record payment for an approved petty cash expense
+  app.post("/api/petty-cash/:id/pay", authenticateToken, requireRole(["admin", "manager", "accounts"]), async (req: AuthRequest, res: Response) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      const companyId = req.companyId || 1;
+      const { paymentMethod, paymentReference, notes } = req.body || {};
+
+      if (!paymentMethod) {
+        return res.status(400).json({ message: "Payment method is required (e.g. Cash, UPI, Bank Transfer, Company Card)" });
+      }
+
+      const [existing] = await db
+        .select()
+        .from(pettyCashExpenses)
+        .where(and(eq(pettyCashExpenses.id, id), eq(pettyCashExpenses.companyId, companyId)))
+        .limit(1);
+
+      if (!existing) {
+        return res.status(404).json({ message: "Petty cash expense not found" });
+      }
+
+      if (existing.status !== "approved" && existing.status !== "paid") {
+        return res.status(400).json({ message: `Cannot disburse payment: Expense is currently "${existing.status}". It must be approved first.` });
+      }
+
+      const currentExt = (existing.extractedData || {}) as Record<string, any>;
+      const updatedExt = {
+        ...currentExt,
+        paymentMethod,
+        paymentReference: paymentReference || null,
+        paidAt: new Date().toISOString(),
+        disbursedBy: req.user?.id || null,
+        paymentNotes: notes || null,
+      };
+
+      const [updated] = await db
+        .update(pettyCashExpenses)
+        .set({
+          status: "paid",
+          extractedData: updatedExt,
+        })
+        .where(eq(pettyCashExpenses.id, id))
+        .returning();
+
+      // Ensure cost allocation stays active and payment metadata is synced
+      await syncPettyCashExpenseAllocation(updated, req.user?.id).catch((e) =>
+        console.warn("[costing] petty cash pay sync:", e.message)
+      );
+
+      res.json(updated);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message || "Failed to record payment" });
     }
   });
 

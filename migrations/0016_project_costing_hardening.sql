@@ -305,7 +305,7 @@ BEGIN
             RAISE EXCEPTION 'Cross-company source violation: Petty cash expense % belongs to company %, not allocation company %', NEW.source_id, v_exp.company_id, NEW.company_id;
         END IF;
 
-        IF v_exp.status != 'approved' AND NEW.status = 'active' THEN
+        IF v_exp.status NOT IN ('approved', 'paid') AND NEW.status = 'active' THEN
             RAISE EXCEPTION 'Cannot activate cost allocation for unapproved petty cash expense #% (status: %)', NEW.source_id, v_exp.status;
         END IF;
     END IF;

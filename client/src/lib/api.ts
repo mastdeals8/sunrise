@@ -3523,3 +3523,103 @@ export async function updateContractorWorkOrder(token: string | null, id: number
   }
   throw new Error("Contractor work order update requires Express backend mode");
 }
+
+/**
+ * Uploads a receipt image/PDF to the genuine OCR engine and returns extracted metadata.
+ */
+export async function scanReceiptOCR(token: string | null, file: File): Promise<{
+  success: boolean;
+  receiptUrl: string;
+  receiptName: string;
+  extracted: {
+    vendor: string | null;
+    receiptNumber: string | null;
+    date: string | null;
+    taxableAmount: number | null;
+    gstAmount: number | null;
+    totalAmount: number | null;
+    category: string;
+    gstin: string | null;
+    message?: string;
+    rawText?: string;
+  };
+  message?: string;
+}> {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const res = await apiFetch("/api/petty-cash/ocr", token, {
+    method: "POST",
+    body: formData,
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.message || "Failed to process receipt via OCR");
+  }
+
+  return res.json();
+}
+
+/**
+ * Fetches estimates and stores strictly scoped to the selected Master Project.
+ */
+export async function fetchProjectCostingOptions(token: string | null, projectId: number): Promise<{
+  project: {
+    id: number;
+    projectCode: string;
+    name: string;
+    clientId: number;
+    clientName: string;
+  };
+  estimates: Array<{
+    id: number;
+    estimateNumber: string;
+    title?: string;
+    clientName?: string;
+    brandName?: string;
+    totalAmount?: number;
+    stores: Array<{
+      storeId?: number;
+      storeCode: string;
+      storeName: string;
+      storeCity?: string;
+      storeState?: string;
+    }>;
+  }>;
+  stores: Array<{
+    storeCode: string;
+    storeName: string;
+    storeCity: string;
+    estimateId: number;
+  }>;
+}> {
+  const res = await apiFetch(`/api/petty-cash/project-options/${projectId}`, token);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.message || "Failed to fetch project costing options");
+  }
+  return res.json();
+}
+
+/**
+ * Disburses payment for an approved petty cash expense and records audit trail.
+ */
+export async function payPettyCashExpense(
+  token: string | null,
+  id: number,
+  payload: { paymentMethod: string; paymentReference?: string; notes?: string }
+): Promise<any> {
+  const res = await apiFetch(`/api/petty-cash/${id}/pay`, token, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.message || "Failed to record payment disbursement");
+  }
+
+  return res.json();
+}
