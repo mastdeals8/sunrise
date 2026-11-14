@@ -223,7 +223,11 @@ export const MasterProjectModal: React.FC<MasterProjectModalProps> = ({
                 >
                   <option value="">All Brands / Unspecified</option>
                   {brands
-                    .filter((b) => !clientId || !b.clientId || b.clientId === clientId)
+                    .filter((b: any) => {
+                      if (!clientId) return true;
+                      const bClientId = b.clientId ?? b.parentClientId ?? b.parent_client_id;
+                      return !bClientId || bClientId === clientId;
+                    })
                     .map((b) => (
                       <option key={b.id} value={b.id}>
                         {b.name}

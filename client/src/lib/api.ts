@@ -3333,11 +3333,51 @@ export async function fetchMasterProjects(
     return res.ok ? res.json() : [];
   }
   const companyId = getActiveCompanyId();
-  return sbSelect("master_projects", (q) => {
+  const rawProjects = await sbSelect<any>("master_projects", (q) => {
     let builder = q.select("*").eq("company_id", companyId);
     if (params.status && params.status !== "all") builder = builder.eq("status", params.status);
     if (params.clientId) builder = builder.eq("client_id", params.clientId);
     return builder.order("created_at", { ascending: false });
+  });
+
+  if (rawProjects.length === 0) return [];
+
+  // In Bolt mode, enrich with client names, linked estimates, store counts, quoted totals
+  const [clients, allLinks, allCosts] = await Promise.all([
+    fetchClients(token).catch(() => []),
+    sbSelect<any>("project_estimates", (q) =>
+      q.select("id, project_id, estimate_id, status").eq("company_id", companyId).eq("status", "active")
+    ).catch(() => []),
+    sbSelect<any>("project_cost_allocations", (q) =>
+      q.select("project_id, recognised_cost, status").eq("company_id", companyId).eq("status", "active")
+    ).catch(() => []),
+  ]);
+
+  const clientMap = new Map((clients || []).map((c: any) => [c.id, c.name]));
+  const linksByProject = new Map<number, any[]>();
+  for (const l of allLinks) {
+    const pId = l.projectId;
+    if (!linksByProject.has(pId)) linksByProject.set(pId, []);
+    linksByProject.get(pId)!.push(l);
+  }
+
+  const costsByProject = new Map<number, number>();
+  for (const c of allCosts) {
+    const pId = c.projectId;
+    costsByProject.set(pId, (costsByProject.get(pId) || 0) + (Number(c.recognisedCost) || 0));
+  }
+
+  return rawProjects.map((p: any) => {
+    const pLinks = linksByProject.get(p.id) || [];
+    const actualCost = costsByProject.get(p.id) || 0;
+    return {
+      ...p,
+      clientName: clientMap.get(p.clientId) || null,
+      linkedEstimates: pLinks,
+      linkedEstimatesCount: pLinks.length,
+      actualCost,
+      quotedTotal: Number(p.budgetRevenue || p.targetBudget || 0),
+    };
   });
 }
 
@@ -3350,7 +3390,22 @@ export async function fetchMasterProjectById(token: string | null, id: number) {
   const rows = await sbSelect<any>("master_projects", (q) =>
     q.select("*").eq("company_id", companyId).eq("id", id).limit(1)
   );
-  return rows?.[0] || null;
+  if (!rows?.[0]) return null;
+  const proj = rows[0];
+
+  const [clients, links] = await Promise.all([
+    fetchClients(token).catch(() => []),
+    sbSelect<any>("project_estimates", (q) =>
+      q.select("id, project_id, estimate_id, status").eq("company_id", companyId).eq("project_id", id).eq("status", "active")
+    ).catch(() => []),
+  ]);
+
+  const clientMap = new Map((clients || []).map((c: any) => [c.id, c.name]));
+  return {
+    ...proj,
+    clientName: clientMap.get(proj.clientId) || null,
+    linkedEstimates: links || [],
+  };
 }
 
 export async function createMasterProject(token: string | null, payload: any) {
@@ -3366,7 +3421,47 @@ export async function createMasterProject(token: string | null, payload: any) {
     }
     return res.json();
   }
-  throw new Error("Master project creation requires Express backend mode");
+
+  const companyId = getActiveCompanyId();
+  const projectCode = (payload.projectCode && payload.projectCode.trim())
+    ? payload.projectCode.trim().toUpperCase()
+    : `MP-${new Date().getFullYear()}-${String(Math.floor(100 + Math.random() * 900))}`;
+
+  const row: Record<string, unknown> = {
+    company_id: companyId,
+    project_code: projectCode,
+    name: (payload.name || "").trim(),
+    client_id: payload.clientId,
+    brand_id: payload.brandId ? Number(payload.brandId) : null,
+    manager_id: payload.managerId ? Number(payload.managerId) : null,
+    target_budget: payload.targetBudget ? Number(payload.targetBudget) : 0,
+    start_date: payload.startDate ? new Date(payload.startDate).toISOString() : new Date().toISOString(),
+    target_completion_date: payload.targetDate ? new Date(payload.targetDate).toISOString() : null,
+    status: payload.status || "active",
+    notes: payload.notes ? payload.notes.trim() : null,
+  };
+
+  const { data: newProj, error } = await supabase.from("master_projects").insert(row).select().single();
+  if (error) {
+    throw new Error(error.message || "Failed to create master project in Supabase");
+  }
+
+  // Link selected estimates
+  if (Array.isArray(payload.estimateIds) && payload.estimateIds.length > 0) {
+    const links = payload.estimateIds.map((eid: number) => ({
+      company_id: companyId,
+      project_id: newProj.id,
+      estimate_id: Number(eid),
+      status: "active",
+      linked_at: new Date().toISOString(),
+    }));
+    const { error: linkErr } = await supabase.from("project_estimates").insert(links);
+    if (linkErr) {
+      console.warn("[api] Failed to link estimates to master project:", linkErr.message);
+    }
+  }
+
+  return toCamel(newProj);
 }
 
 export async function updateMasterProject(token: string | null, id: number, payload: any) {
@@ -3382,29 +3477,172 @@ export async function updateMasterProject(token: string | null, id: number, payl
     }
     return res.json();
   }
-  throw new Error("Master project update requires Express backend mode");
+
+  const companyId = getActiveCompanyId();
+  const row: Record<string, unknown> = {};
+  if (payload.name !== undefined) row.name = (payload.name || "").trim();
+  if (payload.projectCode !== undefined) row.project_code = (payload.projectCode || "").trim().toUpperCase();
+  if (payload.clientId !== undefined) row.client_id = payload.clientId;
+  if (payload.brandId !== undefined) row.brand_id = payload.brandId ? Number(payload.brandId) : null;
+  if (payload.managerId !== undefined) row.manager_id = payload.managerId ? Number(payload.managerId) : null;
+  if (payload.targetBudget !== undefined) row.target_budget = payload.targetBudget ? Number(payload.targetBudget) : 0;
+  if (payload.startDate !== undefined) row.start_date = payload.startDate ? new Date(payload.startDate).toISOString() : null;
+  if (payload.targetDate !== undefined) row.target_completion_date = payload.targetDate ? new Date(payload.targetDate).toISOString() : null;
+  if (payload.status !== undefined) row.status = payload.status;
+  if (payload.notes !== undefined) row.notes = payload.notes ? payload.notes.trim() : null;
+
+  const { data: updated, error } = await supabase
+    .from("master_projects")
+    .update(row)
+    .eq("id", id)
+    .eq("company_id", companyId)
+    .select()
+    .single();
+
+  if (error) {
+    throw new Error(error.message || "Failed to update master project in Supabase");
+  }
+
+  // Sync estimate links if estimateIds array was provided
+  if (Array.isArray(payload.estimateIds)) {
+    const existing = await sbSelect<any>("project_estimates", (q) =>
+      q.select("id, estimate_id, status").eq("project_id", id).eq("company_id", companyId)
+    );
+    const existingMap = new Map((existing || []).map((e: any) => [e.estimateId, e]));
+    const targetSet = new Set(payload.estimateIds.map(Number));
+
+    // Unlink removed estimates
+    for (const ex of existing || []) {
+      if (ex.status === "active" && !targetSet.has(ex.estimateId)) {
+        await supabase.from("project_estimates").update({ status: "unlinked" }).eq("id", ex.id);
+      }
+    }
+
+    // Add or reactivate newly selected estimates
+    for (const eid of payload.estimateIds) {
+      const ex = existingMap.get(Number(eid));
+      if (ex) {
+        if (ex.status !== "active") {
+          await supabase.from("project_estimates").update({ status: "active" }).eq("id", ex.id);
+        }
+      } else {
+        await supabase.from("project_estimates").insert({
+          company_id: companyId,
+          project_id: id,
+          estimate_id: Number(eid),
+          status: "active",
+          linked_at: new Date().toISOString(),
+        });
+      }
+    }
+  }
+
+  return toCamel(updated);
 }
 
 export async function fetchAvailableEstimatesForProject(
   token: string | null,
-  params: { clientId?: number; brandId?: number; search?: string; excludeProjectId?: number } = {}
+  params: { clientId?: number; brandId?: number; search?: string; excludeProjectId?: number; currentProjectId?: number } = {}
 ) {
+  const pId = params.excludeProjectId ?? params.currentProjectId;
+
   if (!isBoltMode) {
     const query = new URLSearchParams();
     if (params.clientId) query.set("clientId", String(params.clientId));
     if (params.brandId) query.set("brandId", String(params.brandId));
     if (params.search) query.set("search", params.search);
-    if (params.excludeProjectId) query.set("excludeProjectId", String(params.excludeProjectId));
+    if (pId) {
+      query.set("excludeProjectId", String(pId));
+      query.set("currentProjectId", String(pId));
+    }
     const url = `/api/operations/estimates/available-for-project${query.toString() ? `?${query.toString()}` : ""}`;
     const res = await apiFetch(url, token);
     return res.ok ? res.json() : [];
   }
+
   const companyId = getActiveCompanyId();
-  return sbSelect("estimates", (q) => {
-    let builder = q.select("id, estimate_number, project_name, client_id, brand_id, subtotal, total_amount, purchase_order_number, po_number, status").eq("company_id", companyId);
+
+  // 1. Fetch estimates with real database column names
+  const estRows = await sbSelect<any>("estimates", (q) => {
+    let builder = q
+      .select("id, estimate_number, title, client_id, brand_id, store_id, subtotal, tax_amount, total_amount, po_number, po_date, estimate_date, created_at, status")
+      .eq("company_id", companyId);
     if (params.clientId) builder = builder.eq("client_id", params.clientId);
     if (params.brandId) builder = builder.eq("brand_id", params.brandId);
     return builder.order("id", { ascending: false });
+  });
+
+  // 2. Query project_estimates to exclude estimates linked to other active master projects
+  const [activeLinks, activeProjects, clients, brands] = await Promise.all([
+    sbSelect<any>("project_estimates", (q) =>
+      q.select("estimate_id, project_id, status").eq("company_id", companyId).eq("status", "active")
+    ).catch(() => []),
+    sbSelect<any>("master_projects", (q) =>
+      q.select("id, status").eq("company_id", companyId).neq("status", "archived")
+    ).catch(() => []),
+    fetchClients(token).catch(() => []),
+    fetchBrands(token).catch(() => []),
+  ]);
+
+  const activeProjectSet = new Set((activeProjects || []).map((p: any) => p.id));
+  const forbiddenEstimateIds = new Set<number>();
+  for (const link of activeLinks || []) {
+    if (activeProjectSet.has(link.projectId)) {
+      if (!pId || link.projectId !== pId) {
+        forbiddenEstimateIds.add(link.estimateId);
+      }
+    }
+  }
+
+  // Filter out estimates linked to other active projects
+  let filtered = (estRows || []).filter((est: any) => !forbiddenEstimateIds.has(est.id));
+
+  // 3. Search filter by estimate_number, title, or po_number
+  if (params.search && params.search.trim()) {
+    const s = params.search.toLowerCase().trim();
+    filtered = filtered.filter((est: any) =>
+      (est.estimateNumber && String(est.estimateNumber).toLowerCase().includes(s)) ||
+      (est.title && String(est.title).toLowerCase().includes(s)) ||
+      (est.poNumber && String(est.poNumber).toLowerCase().includes(s))
+    );
+  }
+
+  const clientMap = new Map((clients || []).map((c: any) => [c.id, c.name]));
+  const brandMap = new Map((brands || []).map((b: any) => [b.id, b.name]));
+
+  // 4. Count stores from estimate_items
+  const estIds = filtered.map((e: any) => e.id);
+  const storeMap = new Map<number, { count: number; codes: string[] }>();
+  if (estIds.length > 0) {
+    try {
+      const itemStores = await sbSelect<any>("estimate_items", (q) =>
+        q.select("estimate_id, store_code, manual_store_name, store_id").in("estimate_id", estIds)
+      );
+      for (const item of itemStores || []) {
+        const eid = item.estimateId;
+        const code = item.storeCode || item.manualStoreName || (item.storeId ? String(item.storeId) : "");
+        if (!storeMap.has(eid)) {
+          storeMap.set(eid, { count: 0, codes: [] });
+        }
+        const entry = storeMap.get(eid)!;
+        if (code && !entry.codes.includes(code)) {
+          entry.codes.push(code);
+          entry.count += 1;
+        }
+      }
+    } catch {}
+  }
+
+  return filtered.map((est: any) => {
+    const sInfo = storeMap.get(est.id);
+    const storeCount = (sInfo && sInfo.count > 0) ? sInfo.count : (est.storeId ? 1 : 0);
+    return {
+      ...est,
+      clientName: clientMap.get(est.clientId) || null,
+      brandName: brandMap.get(est.brandId) || null,
+      storeCount: storeCount || 1,
+      storesSummary: sInfo?.codes?.slice(0, 3).join(", ") || (est.storeId ? "1 store" : null),
+    };
   });
 }
 

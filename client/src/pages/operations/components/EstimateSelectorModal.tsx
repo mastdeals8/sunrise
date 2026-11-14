@@ -47,7 +47,10 @@ export const EstimateSelectorModal: React.FC<EstimateSelectorModalProps> = ({
   // Dynamically filter brands by selected client
   const filteredBrands = useMemo(() => {
     if (!selectedClientId) return brands;
-    return brands.filter((b) => !b.clientId || b.clientId === selectedClientId);
+    return brands.filter((b: any) => {
+      const bClientId = b.clientId ?? b.parentClientId ?? b.parent_client_id;
+      return !bClientId || bClientId === selectedClientId;
+    });
   }, [brands, selectedClientId]);
 
   const loadEstimates = async (cId?: number, bId?: number, q?: string) => {
@@ -255,34 +258,53 @@ export const EstimateSelectorModal: React.FC<EstimateSelectorModalProps> = ({
                       <div>
                         <div className="flex items-center gap-2">
                           <span className="text-xs font-bold text-slate-900">
-                            {est.estimate_number || `Estimate #${est.id}`}
+                            {est.estimateNumber || est.estimate_number || `Estimate #${est.id}`}
                           </span>
-                          {est.project_name && (
+                          {(est.title || est.projectName || est.project_name) && (
                             <span className="text-[11px] font-medium text-slate-600">
-                              • {est.project_name}
+                              • {est.title || est.projectName || est.project_name}
                             </span>
                           )}
                           <span className="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">
                             {est.status || "draft"}
                           </span>
                         </div>
-                        <div className="flex items-center gap-3 text-[11px] text-slate-500 mt-1">
-                          {est.purchase_order_number || est.po_number ? (
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500 mt-1">
+                          {est.clientName && (
+                            <span className="text-slate-700">
+                              Client: <span className="font-semibold text-slate-900">{est.clientName}</span>
+                            </span>
+                          )}
+                          {est.brandName && (
+                            <span className="text-slate-700">
+                              Brand: <span className="font-semibold text-orange-700">{est.brandName}</span>
+                            </span>
+                          )}
+                          {(est.poNumber || est.po_number || est.purchaseOrderNumber) ? (
                             <span className="text-emerald-700 font-medium">
-                              PO: {est.purchase_order_number || est.po_number}
+                              PO: <span className="font-semibold">{est.poNumber || est.po_number || est.purchaseOrderNumber}</span>
                             </span>
                           ) : null}
-                          {est.po_date && <span>PO Date: {est.po_date}</span>}
+                          {(est.estimateDate || est.poDate || est.po_date || est.createdAt || est.created_at) && (
+                            <span>
+                              Date: {new Date(est.estimateDate || est.poDate || est.po_date || est.createdAt || est.created_at).toLocaleDateString("en-GB")}
+                            </span>
+                          )}
+                          {(est.storeCount > 0 || est.storesSummary) && (
+                            <span className="px-1.5 py-0.2 rounded bg-amber-50 text-amber-800 font-bold border border-amber-200">
+                              {est.storeCount || 1} Store{est.storeCount === 1 ? "" : "s"}{est.storesSummary && est.storesSummary !== "1 store" ? ` (${est.storesSummary})` : ""}
+                            </span>
+                          )}
                         </div>
                       </div>
                     </div>
 
-                    <div className="text-right">
+                    <div className="text-right shrink-0">
                       <div className="text-xs font-bold text-slate-900">
-                        {formatCurrency(Number(est.total_amount || est.subtotal || 0))}
+                        {formatCurrency(Number(est.totalAmount || est.total_amount || est.subtotal || 0))}
                       </div>
                       <div className="text-[10px] text-slate-400">
-                        Subtotal: {formatCurrency(Number(est.subtotal || 0))}
+                        Tax Base: {formatCurrency(Number(est.subtotal || 0))}
                       </div>
                     </div>
                   </div>

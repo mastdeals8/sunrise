@@ -525,7 +525,9 @@ export function registerMasterProjectCostingRoutes(app: Express) {
       const clientId = req.query.clientId ? Number(req.query.clientId) : undefined;
       const brandId = req.query.brandId ? Number(req.query.brandId) : undefined;
       const search = (req.query.search as string || "").trim();
-      const currentProjectId = req.query.currentProjectId ? Number(req.query.currentProjectId) : undefined;
+      const currentProjectId = req.query.currentProjectId 
+        ? Number(req.query.currentProjectId) 
+        : (req.query.excludeProjectId ? Number(req.query.excludeProjectId) : undefined);
 
       // Base query: All estimates for company
       const conditions: any[] = [eq(estimates.companyId, companyId)];
@@ -569,8 +571,10 @@ export function registerMasterProjectCostingRoutes(app: Express) {
           title: estimates.title,
           clientId: estimates.clientId,
           brandId: estimates.brandId,
+          storeId: estimates.storeId,
           poNumber: estimates.poNumber,
           poDate: estimates.poDate,
+          estimateDate: estimates.estimateDate,
           subtotal: estimates.subtotal,
           taxAmount: estimates.taxAmount,
           totalAmount: estimates.totalAmount,
@@ -587,7 +591,7 @@ export function registerMasterProjectCostingRoutes(app: Express) {
         .orderBy(desc(estimates.createdAt))
         .limit(150);
 
-      // Collect store codes for each estimate
+      // Collect store codes and count for each estimate
       const enriched = await Promise.all(
         availableEstimates.map(async (est) => {
           const storeRows = await db
@@ -598,10 +602,22 @@ export function registerMasterProjectCostingRoutes(app: Express) {
             .from(executionStores)
             .where(eq(executionStores.estimateId, est.id));
 
+          let storeCount = storeRows.length;
+          if (storeCount === 0) {
+            const [itemStore] = await db
+              .select({ count: sql<number>`count(distinct ${estimateItems.storeCode})` })
+              .from(estimateItems)
+              .where(eq(estimateItems.estimateId, est.id));
+            storeCount = Number(itemStore?.count || 0);
+          }
+          if (storeCount === 0 && est.storeId) {
+            storeCount = 1;
+          }
+
           return {
             ...est,
             stores: storeRows,
-            storeCount: storeRows.length || 1,
+            storeCount: storeCount || 1,
           };
         })
       );
