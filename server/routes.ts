@@ -51,6 +51,7 @@ import { estimateItemsToInvoiceLines } from "../shared/invoiceConversion";
 import { whatsappEvolution, normalizeWhatsAppNumber } from "./services/whatsappEvolution";
 import { installerService } from "./services/installerService";
 import { registerMasterProjectCostingRoutes, syncPettyCashExpenseAllocation, cancelInvoiceCostAllocations } from "./masterProjectCostingRoutes";
+import { registerProcurementRoutes } from "./procurementRoutes";
 import { performGenuineOcr } from "./ocrService";
 
 export async function registerRoutes(app: Express): Promise<Server> {
@@ -9228,6 +9229,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   registerMasterProjectCostingRoutes(app);
+  registerProcurementRoutes(app);
 
   const httpServer = createServer(app);
   return httpServer;

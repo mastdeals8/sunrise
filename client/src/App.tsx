@@ -41,6 +41,11 @@ import CustomerRateCards from "./pages/CustomerRateCards";
 import JobsPage from "./pages/Jobs";
 import ClientWorkspace from "./pages/ClientWorkspace";
 import FieldProjectUpload from "./pages/FieldProjectUpload";
+import ExpensesPage from "./pages/Expenses";
+import PurchasesPage from "./pages/Purchases";
+import ProductCostingPage from "./pages/ProductCosting";
+import ContractorsPage from "./pages/Contractors";
+import ProjectCostingPage from "./pages/ProjectCosting";
 import {
   ClientsRoute,
   BrandsRoute,
@@ -83,11 +88,23 @@ const SECTIONS: NavSection[] = [
     alwaysOpen: true,
     items: [
       { href: "/estimates",          label: "Estimate Register",  match: (l) => l === "/estimates" || l === "/operations" },
-      { href: "/projects",           label: "Projects",           match: (l) => l === "/projects" },
+      { href: "/projects",           label: "Project Costing",    match: (l) => l === "/projects" },
       { href: "/invoices",           label: "Invoices",           match: (l) => l === "/invoices" },
       { href: "/estimate-templates", label: "Estimate Templates", match: (l) => l === "/estimate-templates" },
     ],
     roles: ["admin", "manager", "designer", "accounts", "staff"],
+  },
+  {
+    key: "procurement",
+    label: "PROCUREMENT & COSTS",
+    alwaysOpen: true,
+    items: [
+      { href: "/purchases",       label: "Purchases / Bills",    match: (l) => l === "/purchases" },
+      { href: "/expenses",        label: "Operating Expenses",   match: (l) => l === "/expenses" },
+      { href: "/product-costing", label: "Product Landed Cost",  match: (l) => l === "/product-costing" },
+      { href: "/contractors",     label: "Contractors & Orders", match: (l) => l === "/contractors" },
+    ],
+    roles: ["admin", "manager", "accounts", "production"],
   },
   {
     key: "operations",
@@ -391,6 +408,10 @@ const AppContent: React.FC = () => {
             <Route path="/products" component={ProductsRoute} />
             <Route path="/estimates" component={EstimatesRoute} />
             <Route path="/projects" component={ProjectsRoute} />
+            <Route path="/purchases" component={PurchasesPage} />
+            <Route path="/expenses" component={ExpensesPage} />
+            <Route path="/product-costing" component={ProductCostingPage} />
+            <Route path="/contractors" component={ContractorsPage} />
             <Route path="/delivery-challans" component={DeliveryChallansRoute} />
             <Route path="/invoices" component={InvoicesRoute} />
             <Route path="/import-export" component={ImportExportRoute} />

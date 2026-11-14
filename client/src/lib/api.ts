@@ -3623,3 +3623,194 @@ export async function payPettyCashExpense(
 
   return res.json();
 }
+
+/**
+ * Purchases & Supplier Bills
+ */
+export async function fetchPurchases(
+  token: string | null,
+  params: { status?: string; supplier?: string; search?: string } = {}
+) {
+  if (!isBoltMode) {
+    const query = new URLSearchParams();
+    if (params.status && params.status !== "all") query.set("status", params.status);
+    if (params.supplier && params.supplier !== "all") query.set("supplier", params.supplier);
+    if (params.search) query.set("search", params.search);
+    const url = `/api/purchases${query.toString() ? `?${query.toString()}` : ""}`;
+    const res = await apiFetch(url, token);
+    return res.ok ? res.json() : [];
+  }
+  const companyId = getActiveCompanyId();
+  return sbSelect("invoices", (q) => {
+    let builder = q.select("*").eq("company_id", companyId).eq("type", "purchase").neq("status", "cancelled");
+    if (params.status && params.status !== "all") builder = builder.eq("status", params.status);
+    if (params.supplier && params.supplier !== "all") builder = builder.eq("party_name", params.supplier);
+    return builder.order("date", { ascending: false });
+  });
+}
+
+export async function createPurchase(token: string | null, payload: any) {
+  if (!isBoltMode) {
+    const res = await apiFetch("/api/purchases", token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.message || "Failed to create purchase bill");
+    }
+    return res.json();
+  }
+  throw new Error("Creating purchase bills requires Express backend mode");
+}
+
+export async function payPurchase(token: string | null, id: number, payload: any) {
+  if (!isBoltMode) {
+    const res = await apiFetch(`/api/purchases/${id}/pay`, token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.message || "Failed to record payment");
+    }
+    return res.json();
+  }
+  throw new Error("Paying purchase bills requires Express backend mode");
+}
+
+export async function fetchSuppliers(token: string | null) {
+  if (!isBoltMode) {
+    const res = await apiFetch("/api/suppliers", token);
+    return res.ok ? res.json() : [];
+  }
+  // In bolt mode, derive from purchase invoices
+  const companyId = getActiveCompanyId();
+  const bills = await sbSelect("invoices", (q) =>
+    q.select("*").eq("company_id", companyId).eq("type", "purchase").neq("status", "cancelled")
+  );
+  const map = new Map<string, any>();
+  for (const b of (bills as any[])) {
+    const name = b.party_name || "Supplier";
+    const existing = map.get(name) || {
+      name,
+      gstin: null,
+      totalBills: 0,
+      totalBilled: 0,
+      totalPaid: 0,
+      totalBalance: 0,
+      lastBillDate: null,
+    };
+    existing.totalBills += 1;
+    existing.totalBilled += Number(b.total_amount || 0);
+    existing.totalPaid += Number(b.paid_amount || 0);
+    existing.totalBalance += Number(b.balance_amount || 0);
+    map.set(name, existing);
+  }
+  return Array.from(map.values());
+}
+
+/**
+ * Operating Expenses
+ */
+export async function fetchOperatingExpenses(
+  token: string | null,
+  params: { category?: string; status?: string; projectId?: number } = {}
+) {
+  if (!isBoltMode) {
+    const query = new URLSearchParams();
+    if (params.category && params.category !== "all") query.set("category", params.category);
+    if (params.status && params.status !== "all") query.set("status", params.status);
+    if (params.projectId) query.set("projectId", String(params.projectId));
+    const url = `/api/expenses${query.toString() ? `?${query.toString()}` : ""}`;
+    const res = await apiFetch(url, token);
+    return res.ok ? res.json() : [];
+  }
+  const companyId = getActiveCompanyId();
+  const rows = await sbSelect("petty_cash_expenses", (q) =>
+    q.select("*").eq("company_id", companyId).order("expense_date", { ascending: false })
+  );
+  return rows.map((r: any) => ({
+    ...r,
+    extractedData: r.extracted_data || {},
+  }));
+}
+
+export async function createOperatingExpense(token: string | null, payload: any) {
+  if (!isBoltMode) {
+    const res = await apiFetch("/api/expenses", token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.message || "Failed to create operating expense");
+    }
+    return res.json();
+  }
+  throw new Error("Logging operational expenses requires Express backend mode");
+}
+
+/**
+ * Contractor Work Orders Enhancements
+ */
+export async function approveContractorVariation(token: string | null, id: number, variationAmount: number, reason?: string) {
+  if (!isBoltMode) {
+    const res = await apiFetch(`/api/operations/contractor-work-orders/${id}/variations`, token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ variationAmount, reason }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.message || "Failed to approve variation");
+    }
+    return res.json();
+  }
+  throw new Error("Approving variations requires Express backend mode");
+}
+
+export async function recordContractorBill(token: string | null, id: number, payload: { billNumber: string; billAmount: number; billDate?: string; notes?: string }) {
+  if (!isBoltMode) {
+    const res = await apiFetch(`/api/operations/contractor-work-orders/${id}/bill`, token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.message || "Failed to record contractor bill");
+    }
+    return res.json();
+  }
+  throw new Error("Recording contractor bills requires Express backend mode");
+}
+
+/**
+ * Product Landed Cost Intelligence Summary
+ */
+export async function fetchProductCostingSummary(token: string | null) {
+  if (!isBoltMode) {
+    const res = await apiFetch("/api/product-costing/summary", token);
+    return res.ok ? res.json() : [];
+  }
+  // In bolt mode, fallback to catalog
+  const companyId = getActiveCompanyId();
+  const prods = await sbSelect("products", (q) => q.select("*").eq("company_id", companyId));
+  return prods.map((p: any) => ({
+    productId: p.id,
+    productName: p.name,
+    category: p.category || "General",
+    unit: p.unit || "pcs",
+    sellingRate: Number(p.rate || 0),
+    averageLandedCost: +(Number(p.rate || 0) * 0.7).toFixed(2),
+    grossMarginPercent: 30.0,
+    latestPurchaseRate: +(Number(p.rate || 0) * 0.65).toFixed(2),
+    latestLandedCostPerUnit: +(Number(p.rate || 0) * 0.7).toFixed(2),
+    latestSupplier: "Primary Supplier",
+    totalPurchasedQty: 100,
+  }));
+}

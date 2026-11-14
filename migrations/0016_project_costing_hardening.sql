@@ -11,6 +11,9 @@ ALTER TABLE master_projects
     ALTER COLUMN budget_revenue TYPE NUMERIC(14, 2) USING budget_revenue::NUMERIC(14, 2),
     ALTER COLUMN budget_cost TYPE NUMERIC(14, 2) USING budget_cost::NUMERIC(14, 2);
 
+-- Drop dependent triggers if existing prior to column type altering
+DROP TRIGGER IF EXISTS trg_val_cost_allocation_source ON project_cost_allocations;
+
 -- project_cost_allocations monetary columns
 ALTER TABLE project_cost_allocations
     ALTER COLUMN base_amount TYPE NUMERIC(14, 2) USING base_amount::NUMERIC(14, 2),
@@ -352,10 +355,15 @@ WHERE source_type = 'petty_cash' AND status = 'active';
 -- ============================================================================
 
 -- project_estimates status check
+ALTER TABLE project_estimates DROP CONSTRAINT IF EXISTS chk_pe_status;
 ALTER TABLE project_estimates
     ADD CONSTRAINT chk_pe_status CHECK (status IN ('active', 'archived', 'unlinked'));
 
 -- master_projects checks
+ALTER TABLE master_projects DROP CONSTRAINT IF EXISTS chk_mp_target_budget;
+ALTER TABLE master_projects DROP CONSTRAINT IF EXISTS chk_mp_budget_revenue;
+ALTER TABLE master_projects DROP CONSTRAINT IF EXISTS chk_mp_budget_cost;
+ALTER TABLE master_projects DROP CONSTRAINT IF EXISTS chk_mp_status;
 ALTER TABLE master_projects
     ADD CONSTRAINT chk_mp_target_budget CHECK (target_budget >= 0),
     ADD CONSTRAINT chk_mp_budget_revenue CHECK (budget_revenue >= 0),
@@ -363,6 +371,16 @@ ALTER TABLE master_projects
     ADD CONSTRAINT chk_mp_status CHECK (status IN ('active', 'completed', 'on_hold', 'archived'));
 
 -- project_cost_allocations checks
+ALTER TABLE project_cost_allocations DROP CONSTRAINT IF EXISTS chk_pca_base_amount;
+ALTER TABLE project_cost_allocations DROP CONSTRAINT IF EXISTS chk_pca_gst_rate;
+ALTER TABLE project_cost_allocations DROP CONSTRAINT IF EXISTS chk_pca_gst_amount;
+ALTER TABLE project_cost_allocations DROP CONSTRAINT IF EXISTS chk_pca_total_amount;
+ALTER TABLE project_cost_allocations DROP CONSTRAINT IF EXISTS chk_pca_ineligible_gst;
+ALTER TABLE project_cost_allocations DROP CONSTRAINT IF EXISTS chk_pca_recognised_cost;
+ALTER TABLE project_cost_allocations DROP CONSTRAINT IF EXISTS chk_pca_status;
+ALTER TABLE project_cost_allocations DROP CONSTRAINT IF EXISTS chk_pca_source_type;
+ALTER TABLE project_cost_allocations DROP CONSTRAINT IF EXISTS chk_pca_total_calc;
+ALTER TABLE project_cost_allocations DROP CONSTRAINT IF EXISTS chk_pca_recognised_calc;
 ALTER TABLE project_cost_allocations
     ADD CONSTRAINT chk_pca_base_amount CHECK (base_amount > 0),
     ADD CONSTRAINT chk_pca_gst_rate CHECK (gst_rate >= 0),
@@ -379,6 +397,11 @@ ALTER TABLE project_cost_allocations
     );
 
 -- contractor_work_orders checks
+ALTER TABLE contractor_work_orders DROP CONSTRAINT IF EXISTS chk_cwo_committed_amount;
+ALTER TABLE contractor_work_orders DROP CONSTRAINT IF EXISTS chk_cwo_billed_amount;
+ALTER TABLE contractor_work_orders DROP CONSTRAINT IF EXISTS chk_cwo_variation_amount;
+ALTER TABLE contractor_work_orders DROP CONSTRAINT IF EXISTS chk_cwo_billing_limit;
+ALTER TABLE contractor_work_orders DROP CONSTRAINT IF EXISTS chk_cwo_status;
 ALTER TABLE contractor_work_orders
     ADD CONSTRAINT chk_cwo_committed_amount CHECK (committed_amount >= 0),
     ADD CONSTRAINT chk_cwo_billed_amount CHECK (billed_amount >= 0),
