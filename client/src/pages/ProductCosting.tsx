@@ -33,6 +33,20 @@ export const ProductCostingPage: React.FC = () => {
   const [simIsGstRecoverable, setSimIsGstRecoverable] = useState(true);
   const [simTargetMargin, setSimTargetMargin] = useState("35");
 
+  useEffect(() => {
+    const syncHash = () => {
+      const h = (window.location.hash || "").toLowerCase();
+      if (h === "#calculator" || h === "#freight" || h === "#margins") {
+        setActiveTab("calculator");
+      } else if (h === "#catalog" || !h) {
+        setActiveTab("catalog");
+      }
+    };
+    syncHash();
+    window.addEventListener("hashchange", syncHash);
+    return () => window.removeEventListener("hashchange", syncHash);
+  }, []);
+
   const loadData = async () => {
     try {
       setLoading(true);
@@ -143,7 +157,12 @@ export const ProductCostingPage: React.FC = () => {
       {/* Tabs */}
       <div className="border-b border-slate-200 flex gap-4">
         <button
-          onClick={() => setActiveTab("catalog")}
+          onClick={() => {
+            setActiveTab("catalog");
+            if (window.location.hash !== "#catalog") {
+              window.location.hash = "#catalog";
+            }
+          }}
           className={`pb-2.5 text-xs font-bold transition-all relative ${
             activeTab === "catalog" ? "text-orange-600" : "text-slate-500 hover:text-slate-800"
           }`}
@@ -153,7 +172,12 @@ export const ProductCostingPage: React.FC = () => {
         </button>
 
         <button
-          onClick={() => setActiveTab("calculator")}
+          onClick={() => {
+            setActiveTab("calculator");
+            if (window.location.hash !== "#calculator") {
+              window.location.hash = "#calculator";
+            }
+          }}
           className={`pb-2.5 text-xs font-bold transition-all relative ${
             activeTab === "calculator" ? "text-orange-600" : "text-slate-500 hover:text-slate-800"
           }`}

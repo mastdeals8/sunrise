@@ -157,7 +157,14 @@ async function testLifecycle() {
   } finally {
     client.release();
     await pool.end();
+    process.exit(0);
   }
 }
 
-testLifecycle();
+testLifecycle()
+  .then(() => process.exit(0))
+  .catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+

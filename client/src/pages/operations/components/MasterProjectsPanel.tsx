@@ -35,6 +35,15 @@ export const MasterProjectsPanel: React.FC<MasterProjectsPanelProps> = ({
   const [statusFilter, setStatusFilter] = useState("all");
   const [clientFilter, setClientFilter] = useState<number | undefined>(undefined);
   const [activeProjectId, setActiveProjectId] = useState<number | null>(null);
+  const [currentHash, setCurrentHash] = useState(
+    typeof window !== "undefined" ? window.location.hash.toLowerCase() : ""
+  );
+
+  useEffect(() => {
+    const onHash = () => setCurrentHash(window.location.hash.toLowerCase());
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
 
   // Modal states
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -149,6 +158,30 @@ export const MasterProjectsPanel: React.FC<MasterProjectsPanelProps> = ({
           </div>
         </div>
       </div>
+
+      {currentHash === "#profitability" && (
+        <div className="bg-amber-50/90 border border-amber-200 rounded-xl px-4 py-3 text-xs text-amber-900 flex items-center justify-between shadow-2xs">
+          <p>
+            <strong className="font-bold">Project Profitability:</strong> Select any Master Project below to analyze its complete P&amp;L, Quoted vs Actual Costs, and Gross Margin.
+          </p>
+        </div>
+      )}
+
+      {currentHash === "#stores" && (
+        <div className="bg-blue-50/90 border border-blue-200 rounded-xl px-4 py-3 text-xs text-blue-900 flex items-center justify-between shadow-2xs">
+          <p>
+            <strong className="font-bold">Store-wise Costing:</strong> Select any Master Project below to inspect its Store Profitability Matrix and individual store margins.
+          </p>
+        </div>
+      )}
+
+      {currentHash === "#estimates" && (
+        <div className="bg-purple-50/90 border border-purple-200 rounded-xl px-4 py-3 text-xs text-purple-900 flex items-center justify-between shadow-2xs">
+          <p>
+            <strong className="font-bold">Estimate Cost Analysis:</strong> Select any Master Project below to view linked Estimates, Quoted Values, and Cost Breakdown.
+          </p>
+        </div>
+      )}
 
       {/* Filter and Search Bar */}
       <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs flex flex-wrap items-center justify-between gap-3 text-xs">

@@ -68,6 +68,22 @@ const FinancePage: React.FC = () => {
   const { token } = useAuth();
   const globalDate = useGlobalDate();
   const [activeSubTab, setActiveSubTab] = useState<"invoices" | "ledger" | "payments">("invoices");
+
+  useEffect(() => {
+    const handleHash = () => {
+      const h = (window.location.hash || "").toLowerCase();
+      if (h === "#ledger" || h === "#general-ledger" || h === "#ledgers") {
+        setActiveSubTab("ledger");
+      } else if (h === "#payments" || h === "#receipts" || h === "#vouchers") {
+        setActiveSubTab("payments");
+      } else if (h === "#invoices" || !h) {
+        setActiveSubTab("invoices");
+      }
+    };
+    handleHash();
+    window.addEventListener("hashchange", handleHash);
+    return () => window.removeEventListener("hashchange", handleHash);
+  }, []);
   
   // Data lists
   const [accounts, setAccounts] = useState<ChartOfAccount[]>([]);
@@ -330,19 +346,31 @@ const FinancePage: React.FC = () => {
       {/* Sub Tabs */}
       <div className="flex border-b border-slate-200 overflow-x-auto pb-1 whitespace-nowrap bg-white p-2 rounded-xl shadow-sm">
         <button
-          onClick={() => { setActiveSubTab("invoices"); setMessage(""); }}
+          onClick={() => {
+            setActiveSubTab("invoices");
+            setMessage("");
+            if (window.location.hash !== "#invoices") window.location.hash = "#invoices";
+          }}
           className={`pb-2 px-6 text-sm font-bold border-b-2 transition ${activeSubTab === "invoices" ? "border-orange-500 text-orange-600" : "border-transparent text-slate-500 hover:text-slate-800"}`}
         >
           Invoice Tracker
         </button>
         <button
-          onClick={() => { setActiveSubTab("ledger"); setMessage(""); }}
+          onClick={() => {
+            setActiveSubTab("ledger");
+            setMessage("");
+            if (window.location.hash !== "#ledger") window.location.hash = "#ledger";
+          }}
           className={`pb-2 px-6 text-sm font-bold border-b-2 transition ${activeSubTab === "ledger" ? "border-orange-500 text-orange-600" : "border-transparent text-slate-500 hover:text-slate-800"}`}
         >
           General Ledger Accounts
         </button>
         <button
-          onClick={() => { setActiveSubTab("payments"); setMessage(""); }}
+          onClick={() => {
+            setActiveSubTab("payments");
+            setMessage("");
+            if (window.location.hash !== "#payments") window.location.hash = "#payments";
+          }}
           className={`pb-2 px-6 text-sm font-bold border-b-2 transition ${activeSubTab === "payments" ? "border-orange-500 text-orange-600" : "border-transparent text-slate-500 hover:text-slate-800"}`}
         >
           Vouchers & Receipts

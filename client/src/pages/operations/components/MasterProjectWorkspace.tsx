@@ -58,6 +58,26 @@ export const MasterProjectWorkspace: React.FC<MasterProjectWorkspaceProps> = ({
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  useEffect(() => {
+    const syncHash = () => {
+      const h = (window.location.hash || "").toLowerCase();
+      if (h === "#stores" || h === "#matrix") {
+        setActiveTab("matrix");
+      } else if (h === "#estimates") {
+        setActiveTab("estimates");
+      } else if (h === "#costs") {
+        setActiveTab("costs");
+      } else if (h === "#contractors") {
+        setActiveTab("contractors");
+      } else if (h === "#profitability" || h === "#overview") {
+        setActiveTab("overview");
+      }
+    };
+    syncHash();
+    window.addEventListener("hashchange", syncHash);
+    return () => window.removeEventListener("hashchange", syncHash);
+  }, []);
+
   // Modals
   const [isAllocationModalOpen, setIsAllocationModalOpen] = useState(false);
   const [isEstimateSelectorOpen, setIsEstimateSelectorOpen] = useState(false);
@@ -295,7 +315,10 @@ export const MasterProjectWorkspace: React.FC<MasterProjectWorkspaceProps> = ({
       {/* Tabs navigation */}
       <div className="flex border-b border-slate-200 bg-white px-3 py-1.5 rounded-xl shadow-xs gap-2 overflow-x-auto">
         <button
-          onClick={() => setActiveTab("overview")}
+          onClick={() => {
+            setActiveTab("overview");
+            if (window.location.hash !== "#profitability") window.location.hash = "#profitability";
+          }}
           className={`px-4 py-2 text-xs font-bold border-b-2 transition flex items-center gap-2 ${
             activeTab === "overview"
               ? "border-orange-500 text-orange-600"
@@ -306,7 +329,10 @@ export const MasterProjectWorkspace: React.FC<MasterProjectWorkspaceProps> = ({
           Financial KPIs & Overview
         </button>
         <button
-          onClick={() => setActiveTab("estimates")}
+          onClick={() => {
+            setActiveTab("estimates");
+            if (window.location.hash !== "#estimates") window.location.hash = "#estimates";
+          }}
           className={`px-4 py-2 text-xs font-bold border-b-2 transition flex items-center gap-2 ${
             activeTab === "estimates"
               ? "border-orange-500 text-orange-600"
@@ -317,7 +343,10 @@ export const MasterProjectWorkspace: React.FC<MasterProjectWorkspaceProps> = ({
           Estimates & Stores ({project.linkedEstimates?.length || 0})
         </button>
         <button
-          onClick={() => setActiveTab("costs")}
+          onClick={() => {
+            setActiveTab("costs");
+            if (window.location.hash !== "#costs") window.location.hash = "#costs";
+          }}
           className={`px-4 py-2 text-xs font-bold border-b-2 transition flex items-center gap-2 ${
             activeTab === "costs"
               ? "border-orange-500 text-orange-600"
@@ -328,7 +357,10 @@ export const MasterProjectWorkspace: React.FC<MasterProjectWorkspaceProps> = ({
           Cost Allocations ({costAllocations.length})
         </button>
         <button
-          onClick={() => setActiveTab("contractors")}
+          onClick={() => {
+            setActiveTab("contractors");
+            if (window.location.hash !== "#contractors") window.location.hash = "#contractors";
+          }}
           className={`px-4 py-2 text-xs font-bold border-b-2 transition flex items-center gap-2 ${
             activeTab === "contractors"
               ? "border-orange-500 text-orange-600"
@@ -339,7 +371,10 @@ export const MasterProjectWorkspace: React.FC<MasterProjectWorkspaceProps> = ({
           Contractor Commitments ({workOrders.length})
         </button>
         <button
-          onClick={() => setActiveTab("matrix")}
+          onClick={() => {
+            setActiveTab("matrix");
+            if (window.location.hash !== "#stores") window.location.hash = "#stores";
+          }}
           className={`px-4 py-2 text-xs font-bold border-b-2 transition flex items-center gap-2 ${
             activeTab === "matrix"
               ? "border-orange-500 text-orange-600"

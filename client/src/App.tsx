@@ -12,6 +12,14 @@ import {
   Database,
   Shield,
   ChevronDown,
+  Landmark,
+  TrendingUp,
+  Layers,
+  ShoppingBag,
+  Receipt,
+  Calculator,
+  Wallet,
+  FileSpreadsheet,
 } from "lucide-react";
 
 // Lazy pages
@@ -65,12 +73,22 @@ interface NavItem {
   match?: (loc: string, hash: string) => boolean;
 }
 
+interface NavSubGroup {
+  key: string;
+  label: string;
+  icon?: React.ComponentType<{ className?: string }>;
+  href?: string;
+  items?: NavItem[];
+  match?: (loc: string, hash: string) => boolean;
+}
+
 interface NavSection {
   key: string;
   label: string;         // group heading text (shown in uppercase label)
   icon?: React.ComponentType<{ className?: string }>; // only used for collapsible sections
   href?: string;         // if set: single direct link, no subitems
   items?: NavItem[];
+  subGroups?: NavSubGroup[];
   roles?: string[];
   alwaysOpen?: boolean;  // if true: items always visible, no expand button
 }
@@ -88,23 +106,10 @@ const SECTIONS: NavSection[] = [
     alwaysOpen: true,
     items: [
       { href: "/estimates",          label: "Estimate Register",  match: (l) => l === "/estimates" || l === "/operations" },
-      { href: "/projects",           label: "Project Costing",    match: (l) => l === "/projects" },
       { href: "/invoices",           label: "Invoices",           match: (l) => l === "/invoices" },
       { href: "/estimate-templates", label: "Estimate Templates", match: (l) => l === "/estimate-templates" },
     ],
     roles: ["admin", "manager", "designer", "accounts", "staff"],
-  },
-  {
-    key: "procurement",
-    label: "PROCUREMENT & COSTS",
-    alwaysOpen: true,
-    items: [
-      { href: "/purchases",       label: "Purchases / Bills",    match: (l) => l === "/purchases" },
-      { href: "/expenses",        label: "Operating Expenses",   match: (l) => l === "/expenses" },
-      { href: "/product-costing", label: "Product Landed Cost",  match: (l) => l === "/product-costing" },
-      { href: "/contractors",     label: "Contractors & Orders", match: (l) => l === "/contractors" },
-    ],
-    roles: ["admin", "manager", "accounts", "production"],
   },
   {
     key: "operations",
@@ -118,17 +123,82 @@ const SECTIONS: NavSection[] = [
   },
   {
     key: "finance",
-    label: "FINANCE",
-    alwaysOpen: true,
-    items: [
-      { href: "/client-ledger",      label: "Client Ledger",      match: (l) => l === "/client-ledger" },
-      { href: "/pending-payments",   label: "Pending Payments",   match: (l) => l === "/pending-payments" },
-      { href: "/petty-cash",         label: "Petty Cash",         match: (l) => l === "/petty-cash" },
-      { href: "/finance",            label: "Payment Ledger",     match: (l) => l === "/finance" },
-      { href: "/automation/tally",   label: "Tally Export",       match: (l) => l === "/automation/tally" },
-      { href: "/submitted-invoices", label: "Submitted Invoices", match: (l) => l === "/submitted-invoices" },
-    ],
+    label: "Finance",
+    icon: Landmark,
     roles: ["admin", "manager", "accounts"],
+    subGroups: [
+      {
+        key: "finance-overview",
+        label: "Financial Overview",
+        icon: TrendingUp,
+        href: "/finance",
+        match: (l, h) => l === "/finance" && (!h || h === "" || h === "#"),
+      },
+      {
+        key: "project-costing",
+        label: "Project & Job Costing",
+        icon: Layers,
+        items: [
+          { href: "/projects#master",        label: "Master Projects",        match: (l, h) => l === "/projects" && (!h || h === "#master" || h === "") },
+          { href: "/projects#profitability", label: "Project Profitability",  match: (l, h) => l === "/projects" && h === "#profitability" },
+          { href: "/projects#stores",        label: "Store-wise Costing",     match: (l, h) => l === "/projects" && (h === "#stores" || h === "#matrix") },
+          { href: "/projects#estimates",     label: "Estimate Cost Analysis", match: (l, h) => l === "/projects" && h === "#estimates" },
+        ],
+      },
+      {
+        key: "purchases-payables",
+        label: "Purchases & Payables",
+        icon: ShoppingBag,
+        items: [
+          { href: "/purchases#bills",       label: "Purchase / Supplier Bills", match: (l, h) => l === "/purchases" && (!h || h === "#bills" || h === "") },
+          { href: "/purchases#suppliers",   label: "Supplier Ledger",           match: (l, h) => l === "/purchases" && h === "#suppliers" },
+          { href: "/purchases#payments",    label: "Purchase Payments",         match: (l, h) => l === "/purchases" && h === "#payments" },
+          { href: "/purchases#outstanding", label: "Outstanding Payables",      match: (l, h) => l === "/purchases" && (h === "#outstanding" || h === "#payables") },
+        ],
+      },
+      {
+        key: "expenses",
+        label: "Expenses",
+        icon: Receipt,
+        items: [
+          { href: "/expenses",    label: "Operating Expenses",            match: (l) => l === "/expenses" },
+          { href: "/petty-cash",  label: "Petty Cash",                    match: (l) => l === "/petty-cash" },
+          { href: "/contractors", label: "Contractor Bills & Work Orders", match: (l) => l === "/contractors" },
+        ],
+      },
+      {
+        key: "product-costing",
+        label: "Product Costing",
+        icon: Calculator,
+        items: [
+          { href: "/product-costing#catalog",    label: "Product Landed Cost",            match: (l, h) => l === "/product-costing" && (!h || h === "#catalog" || h === "") },
+          { href: "/product-costing#calculator", label: "Freight & Other Cost Allocation", match: (l, h) => l === "/product-costing" && (h === "#calculator" || h === "#freight") },
+          { href: "/product-costing#margins",    label: "Product Margin Analysis",        match: (l, h) => l === "/product-costing" && h === "#margins" },
+        ],
+      },
+      {
+        key: "receivables",
+        label: "Receivables & Collections",
+        icon: Wallet,
+        items: [
+          { href: "/client-ledger",    label: "Client Ledger",    match: (l) => l === "/client-ledger" },
+          { href: "/pending-payments", label: "Pending Payments", match: (l) => l === "/pending-payments" },
+          { href: "/finance#receipts", label: "Receipt Vouchers", match: (l, h) => l === "/finance" && (h === "#receipts" || h === "#vouchers") },
+          { href: "/finance#payments", label: "Payment Ledger",   match: (l, h) => l === "/finance" && h === "#payments" },
+        ],
+      },
+      {
+        key: "accounting-reports",
+        label: "Accounting & Reports",
+        icon: FileSpreadsheet,
+        items: [
+          { href: "/finance#general-ledger", label: "General Ledger",     match: (l, h) => l === "/finance" && (h === "#general-ledger" || h === "#ledger") },
+          { href: "/finance#ledgers",        label: "Financial Ledgers",  match: (l, h) => l === "/finance" && h === "#ledgers" },
+          { href: "/automation/tally",       label: "Tally Export",       match: (l) => l === "/automation/tally" },
+          { href: "/submitted-invoices",     label: "Submitted Invoices", match: (l) => l === "/submitted-invoices" },
+        ],
+      },
+    ],
   },
   {
     key: "master-data",
@@ -162,35 +232,157 @@ const SECTIONS: NavSection[] = [
   },
 ];
 
-const useHash = () => {
+const useHash = (location?: string) => {
   const [hash, setHash] = React.useState<string>(typeof window !== "undefined" ? window.location.hash : "");
+  React.useEffect(() => {
+    setHash(window.location.hash);
+  }, [location]);
   React.useEffect(() => {
     const onHash = () => setHash(window.location.hash);
     window.addEventListener("hashchange", onHash);
-    return () => window.removeEventListener("hashchange", onHash);
+    window.addEventListener("popstate", onHash);
+    return () => {
+      window.removeEventListener("hashchange", onHash);
+      window.removeEventListener("popstate", onHash);
+    };
   }, []);
   return hash;
 };
 
-// Shared NavItem link — used by both always-open and collapsible sections.
-const NavLink: React.FC<{ item: NavItem; location: string; hash: string; closeMobile: () => void }> = ({
-  item, location, hash, closeMobile,
-}) => {
+// Shared NavItem link — used by always-open, collapsible, and subGroup sections.
+const NavLink: React.FC<{
+  item: NavItem;
+  location: string;
+  hash: string;
+  closeMobile: () => void;
+  isSubItem?: boolean;
+}> = ({ item, location, hash, closeMobile, isSubItem }) => {
   const active = item.match ? item.match(location, hash) : location === item.href;
+
+  const handleClick = () => {
+    closeMobile();
+    if (item.href.includes("#")) {
+      const targetHash = item.href.slice(item.href.indexOf("#"));
+      setTimeout(() => {
+        if (window.location.hash !== targetHash) {
+          window.location.hash = targetHash;
+        }
+        window.dispatchEvent(new Event("hashchange"));
+      }, 0);
+    }
+  };
+
   return (
     <Link
       href={item.href}
-      onClick={closeMobile}
-      className={`relative flex items-center gap-2 px-3 py-1.5 rounded-md text-[12.5px] transition-all duration-150 ${
+      onClick={handleClick}
+      className={`relative flex items-center gap-2 ${
+        isSubItem ? "px-2 py-1.5 text-[12px]" : "px-3 py-1.5 text-[12.5px]"
+      } rounded-md transition-all duration-150 ${
         active
           ? "text-orange-700 font-bold bg-orange-50"
           : "text-slate-500 hover:text-slate-800 hover:bg-slate-100/70"
       }`}
     >
       {active && <span className="absolute left-0 top-1/2 -translate-y-1/2 h-4 w-0.5 rounded-r-full bg-orange-500" />}
-      <span className={`w-1 h-1 rounded-full shrink-0 ml-0.5 ${active ? "bg-orange-500" : "bg-slate-300"}`} />
-      {item.label}
+      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ml-0.5 ${active ? "bg-orange-500" : "bg-slate-300"}`} />
+      <span className="truncate">{item.label}</span>
     </Link>
+  );
+};
+
+const SubGroupSection: React.FC<{
+  subGroup: NavSubGroup;
+  location: string;
+  hash: string;
+  closeMobile: () => void;
+}> = ({ subGroup, location, hash, closeMobile }) => {
+  const SgIcon = subGroup.icon;
+
+  // Direct single link under subGroup (e.g. Financial Overview)
+  if (subGroup.href && !subGroup.items) {
+    const active = subGroup.match ? subGroup.match(location, hash) : location === subGroup.href;
+
+    const handleClick = () => {
+      closeMobile();
+      if (subGroup.href?.includes("#")) {
+        const targetHash = subGroup.href.slice(subGroup.href.indexOf("#"));
+        setTimeout(() => {
+          if (window.location.hash !== targetHash) {
+            window.location.hash = targetHash;
+          }
+          window.dispatchEvent(new Event("hashchange"));
+        }, 0);
+      }
+    };
+
+    return (
+      <Link
+        href={subGroup.href}
+        onClick={handleClick}
+        className={`relative flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg text-[12.5px] font-semibold transition-all duration-150 ${
+          active
+            ? "text-orange-700 font-bold bg-orange-50"
+            : "text-slate-600 hover:text-slate-900 hover:bg-slate-100/70"
+        }`}
+      >
+        <span className="flex items-center gap-2">
+          {SgIcon && <SgIcon className={`w-3.5 h-3.5 shrink-0 ${active ? "text-orange-600" : "text-slate-400 group-hover:text-slate-500"}`} />}
+          {subGroup.label}
+        </span>
+        {active && <span className="absolute left-0 top-1/2 -translate-y-1/2 h-4 w-0.5 rounded-r-full bg-orange-500" />}
+      </Link>
+    );
+  }
+
+  const items = subGroup.items || [];
+  const anyActive = items.some((it) => (it.match ? it.match(location, hash) : (it.href === location || it.href === location + hash)));
+  const [open, setOpen] = React.useState(anyActive);
+
+  React.useEffect(() => {
+    if (anyActive) setOpen(true);
+  }, [anyActive]);
+
+  return (
+    <div className="space-y-0.5">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className={`w-full flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg text-[12px] font-semibold transition-all duration-150 group ${
+          anyActive ? "text-slate-900 font-bold" : "text-slate-600 hover:text-slate-900 hover:bg-slate-100/70"
+        }`}
+      >
+        <span className="flex items-center gap-2 min-w-0">
+          {SgIcon && (
+            <SgIcon
+              className={`w-3.5 h-3.5 shrink-0 transition-colors ${
+                anyActive ? "text-orange-600" : "text-slate-400 group-hover:text-slate-600"
+              }`}
+            />
+          )}
+          <span className="truncate">{subGroup.label}</span>
+        </span>
+        <ChevronDown
+          className={`w-3 h-3 text-slate-300 transition-transform duration-200 shrink-0 ${
+            open ? "rotate-0" : "-rotate-90"
+          }`}
+        />
+      </button>
+      {open && (
+        <div className="ml-3 pl-2.5 border-l border-slate-200/80 my-0.5 space-y-0.5">
+          {items.map((it) => (
+            <NavLink
+              key={it.href}
+              item={it}
+              location={location}
+              hash={hash}
+              closeMobile={closeMobile}
+              isSubItem={true}
+            />
+          ))}
+        </div>
+      )}
+    </div>
   );
 };
 
@@ -203,7 +395,7 @@ const SidebarSection: React.FC<{
   const Icon = section.icon;
 
   // Direct link (Dashboard)
-  if (section.href && !section.items) {
+  if (section.href && !section.items && !section.subGroups) {
     const active = location === section.href;
     return (
       <Link
@@ -219,6 +411,51 @@ const SidebarSection: React.FC<{
         {Icon && <Icon className={`w-4 h-4 shrink-0 ${active ? "text-orange-600" : "text-slate-400 group-hover:text-slate-500"}`} />}
         {section.label}
       </Link>
+    );
+  }
+
+  // Section with subGroups (Finance)
+  if (section.subGroups) {
+    const anyActive = section.subGroups.some((sg) => {
+      if (sg.match && sg.match(location, hash)) return true;
+      if (sg.href && (sg.href === location || sg.href === location + hash)) return true;
+      return sg.items?.some((it) => (it.match ? it.match(location, hash) : (it.href === location || it.href === location + hash)));
+    });
+
+    const [open, setOpen] = React.useState(true); // Finance defaults to open
+    React.useEffect(() => {
+      if (anyActive) setOpen(true);
+    }, [anyActive]);
+
+    return (
+      <div>
+        <button
+          type="button"
+          onClick={() => setOpen(!open)}
+          className={`w-full flex items-center justify-between gap-2 px-3 py-1.5 rounded-lg text-[12.5px] font-semibold transition-all duration-150 group ${
+            anyActive ? "text-slate-900 font-bold" : "text-slate-600 hover:text-slate-900 hover:bg-slate-100/70"
+          }`}
+        >
+          <span className="flex items-center gap-2">
+            {Icon && <Icon className={`w-3.5 h-3.5 shrink-0 ${anyActive ? "text-orange-600" : "text-slate-400 group-hover:text-slate-500"}`} />}
+            {section.label}
+          </span>
+          <ChevronDown className={`w-3 h-3 text-slate-300 transition-transform duration-200 ${open ? "rotate-0" : "-rotate-90"}`} />
+        </button>
+        {open && (
+          <div className="mt-1 space-y-1 pl-1">
+            {section.subGroups.map((sg) => (
+              <SubGroupSection
+                key={sg.key}
+                subGroup={sg}
+                location={location}
+                hash={hash}
+                closeMobile={closeMobile}
+              />
+            ))}
+          </div>
+        )}
+      </div>
     );
   }
 
@@ -247,7 +484,7 @@ const SidebarSection: React.FC<{
       <button
         onClick={() => setOpen(!open)}
         className={`w-full flex items-center justify-between gap-2 px-3 py-1.5 rounded-lg text-[12.5px] font-semibold transition-all duration-150 group ${
-          anyActive ? "text-slate-900" : "text-slate-500 hover:text-slate-800 hover:bg-slate-100/70"
+          anyActive ? "text-slate-900 font-bold" : "text-slate-500 hover:text-slate-800 hover:bg-slate-100/70"
         }`}
       >
         <span className="flex items-center gap-2">
@@ -270,7 +507,7 @@ const SidebarSection: React.FC<{
 const AppContent: React.FC = () => {
   const { user, token, loading, logout } = useAuth();
   const [location] = useLocation();
-  const hash = useHash();
+  const hash = useHash(location);
   const [sidebarOpen, setSidebarOpen] = React.useState(false);
 
   if (loading) {

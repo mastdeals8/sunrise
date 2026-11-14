@@ -64,6 +64,26 @@ export const PurchasesPage: React.FC = () => {
   const [supplierFilter, setSupplierFilter] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
 
+  useEffect(() => {
+    const syncHash = () => {
+      const h = (window.location.hash || "").toLowerCase();
+      if (h === "#suppliers") {
+        setActiveTab("suppliers");
+      } else if (h === "#payments") {
+        setActiveTab("bills");
+        setStatusFilter("paid");
+      } else if (h === "#outstanding" || h === "#payables") {
+        setActiveTab("bills");
+        setStatusFilter("pending");
+      } else if (h === "#bills" || !h) {
+        setActiveTab("bills");
+      }
+    };
+    syncHash();
+    window.addEventListener("hashchange", syncHash);
+    return () => window.removeEventListener("hashchange", syncHash);
+  }, []);
+
   // Create Bill Modal
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [supplierName, setSupplierName] = useState("");
@@ -334,7 +354,12 @@ export const PurchasesPage: React.FC = () => {
       {/* Tabs */}
       <div className="border-b border-slate-200 flex gap-4">
         <button
-          onClick={() => setActiveTab("bills")}
+          onClick={() => {
+            setActiveTab("bills");
+            if (window.location.hash !== "#bills") {
+              window.location.hash = "#bills";
+            }
+          }}
           className={`pb-2.5 text-xs font-bold transition-all relative ${
             activeTab === "bills" ? "text-orange-600" : "text-slate-500 hover:text-slate-800"
           }`}
@@ -344,7 +369,12 @@ export const PurchasesPage: React.FC = () => {
         </button>
 
         <button
-          onClick={() => setActiveTab("suppliers")}
+          onClick={() => {
+            setActiveTab("suppliers");
+            if (window.location.hash !== "#suppliers") {
+              window.location.hash = "#suppliers";
+            }
+          }}
           className={`pb-2.5 text-xs font-bold transition-all relative ${
             activeTab === "suppliers" ? "text-orange-600" : "text-slate-500 hover:text-slate-800"
           }`}
