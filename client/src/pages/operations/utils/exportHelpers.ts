@@ -553,11 +553,14 @@ export async function exportEstimateToExcel(
 
       const rateLabel = service.rateLabel || (isPerKm && Number(item.rate) > 0 ? `₹${item.rate}/KM` : "");
 
+      const element = service.label;
+      const details = item.description || element;
+
       const ri = addRow((() => {
         const r = blankRow();
-        r[1] = service.label; r[2] = service.hsn || "9987";
+        r[1] = element; r[2] = service.hsn || "9987";
         r[3] = item.isStandard === false ? "Non-standard" : "Standard";
-        r[4] = item.description || service.label;
+        r[4] = details;
         if (showMaterialCodeColumn) r[5] = mc;
         if (qtyDisplay !== "") r[qtyCol] = qtyDisplay;
         r[rateCol] = rateLabel; r[amtCol] = r2(base);

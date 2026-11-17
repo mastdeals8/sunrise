@@ -57,8 +57,8 @@ export const buildStoreGrouping = (
       if (amtVal != null) {
         storeGrouping[sid].transportAmount = Number(amtVal) || 0;
       }
-      if (item.description) {
-        storeGrouping[sid].transportDescription = item.description;
+      if (item.description || item.itemName) {
+        storeGrouping[sid].transportDescription = item.description || item.itemName;
       }
     }
   });

@@ -89,6 +89,24 @@ const matchingProduct = (
   return null;
 };
 
+const SYSTEM_SERVICE_BASE_NAMES = new Set([
+  "packing charges",
+  "installation charges",
+  "local transportation",
+  "transportation",
+  "outstation charges",
+  "outstation transportation",
+  "wrong saved name",
+]);
+
+export const isSystemDefaultServiceName = (name: unknown): boolean => {
+  const cleaned = text(name)
+    .toLowerCase()
+    .replace(/\s*\([^)]*(?:%|\/\s*km|per\s+km)[^)]*\)\s*$/i, "")
+    .trim();
+  return !cleaned || SYSTEM_SERVICE_BASE_NAMES.has(cleaned);
+};
+
 const fallbackProductName = (item: ServiceEstimateItemLike) => {
   const savedName = text(item.itemName ?? item.item_name ?? item.description)
     .replace(/\s*\([^)]*(?:%|\/\s*km|per\s+km)[^)]*\)\s*$/i, "")
@@ -115,7 +133,14 @@ export const resolveServiceProduct = (
   products: ServiceProductLike[] = [],
 ): ResolvedServiceProduct => {
   const product = matchingProduct(item, products);
-  const productName = text(product?.name) || fallbackProductName(item);
+  const savedItemName = text(item.itemName ?? item.item_name);
+  const isCustomName = savedItemName !== "" && !isSystemDefaultServiceName(savedItemName);
+
+  // If the user manually edited the element name (e.g. "Courier"), preserve it.
+  // Otherwise, use the standard Product Master service name or fallback.
+  const productName = isCustomName
+    ? savedItemName
+    : (text(product?.name) || fallbackProductName(item));
   const calculationType = calculationTypeOf(product) || calculationTypeOf(item) || "fixed";
   const unit = text(product?.unit) || text(item.unit);
 
@@ -129,17 +154,19 @@ export const resolveServiceProduct = (
     || finiteNumber(item.cgstPercent) + finiteNumber(item.sgstPercent);
   const gstPercent = savedGst || finiteNumber(product?.gstPercent ?? product?.gst_percent);
   const hsn = text(item.hsn) || text(product?.hsnSac ?? product?.hsn_sac);
-  const customerName = displayProductName(productName, calculationType, unit);
+  const customerName = isCustomName
+    ? productName
+    : displayProductName(productName, calculationType, unit);
 
   let label = customerName;
   let rateLabel = "";
   if (calculationType === "percentage") {
     rateLabel = `${displayNumber(rate)}%`;
-    label = rate > 0 ? `${customerName} (${rateLabel})` : customerName;
+    label = rate > 0 && !label.includes("%") ? `${customerName} (${rateLabel})` : customerName;
   } else if (calculationType === "per_km" || key(unit) === "km") {
     const unitLabel = (unit || "km").toUpperCase();
     rateLabel = rate > 0 ? `₹${displayNumber(rate)}/${unitLabel}` : "";
-    label = rateLabel ? `${customerName} (${rateLabel})` : customerName;
+    label = rateLabel && !label.toLowerCase().includes("km") ? `${customerName} (${rateLabel})` : customerName;
   }
 
   return { product, productName, calculationType, unit, rate, gstPercent, hsn, label, rateLabel };

@@ -514,6 +514,7 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
       ? Number(item.igstAmount) || 0
       : (Number(item.sgstAmount) || 0) + (Number(item.cgstAmount) || 0);
     const label = service.label;
+    const details = item.description || (item as any).description || label;
     const matCode = cleanMaterialCode(item.materialCode || (item as any).material_code);
     return (
       <tr className="estimate-service-row-keep" data-pdf-row key={`${sectionKey}-${item.id || item.sl || item.itemName}`}>
@@ -521,7 +522,7 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
         <td style={cellBase}>{label}</td>
         <td style={cellCenter}>9987</td>
         <td style={cellCenter}>Standard</td>
-        <td style={cellBase}>{item.description || label}</td>
+        <td style={cellBase}>{details}</td>
         {showMaterialCodeColumn && (
           <td style={{ ...cellCenter, fontFamily: "monospace", fontSize: "8px" }}>
             {matCode}

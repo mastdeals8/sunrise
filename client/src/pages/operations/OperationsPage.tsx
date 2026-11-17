@@ -1899,12 +1899,15 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
           ? products.find(p => p.id === Number(item.productId))
           : null;
         const selectedStore = stores.find(s => s.id === Number(item.storeId || estStoreId));
+        const isService = isServiceLineType(item.lineType);
         const hasCustomDescription = item.description != null && String(item.description).trim() !== "" && !sameDisplayText(item.description, item.itemName);
-        const productDetails = hasCustomDescription
-          ? String(item.description).trim()
-          : (selectedProduct
-            ? formatProductDetails(selectedProduct, "", item.itemName)
-            : (item.description || ""));
+        const productDetails = isService
+          ? (item.description != null && String(item.description).trim() !== "" ? String(item.description).trim() : (item.itemName || ""))
+          : (hasCustomDescription
+            ? String(item.description).trim()
+            : (selectedProduct
+              ? formatProductDetails(selectedProduct, "", item.itemName)
+              : (item.description || "")));
 
         return {
           productId: item.productId ? Number(item.productId) : null,
@@ -2346,12 +2349,12 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
       const hydratedItems = items.map((item, idx) => {
         // Historical normal estimates are represented by unscoped rows, not
         // an execution/store group. Keep that distinction when editing.
+        const lineType = (item.lineType || item.line_type || "product") as EstimateItemInput["lineType"];
         const storeId = editingAbfrl
-          ? (slToStore.get(Number(item.sl)) || String(est.storeId || ""))
+          ? (slToStore.get(Number(item.sl)) || String(item.storeId || item.store_id || est.storeId || ""))
           : isRetailSingleStore
-            ? String(item.storeId || est.storeId || "")
+            ? String(item.storeId || item.store_id || est.storeId || "")
             : "";
-        const lineType = (item.lineType || "product") as EstimateItemInput["lineType"];
         const rawRate = item.rate != null ? String(item.rate) : "0";
         const repairedRate = lineType === "packing" && parseRateInput(rawRate) === 0
           ? settingsPercentRate(settingsPacking)
@@ -2362,49 +2365,59 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
               : lineType === "transport" && parseRateInput(rawRate) === 0
                 ? settingsLocalTransport
                 : rawRate;
+
+        // Preserve manually edited item name and description if present.
+        const savedItemName = item.itemName ?? item.item_name ?? "";
+        const savedDescription = item.description ?? "";
+
         const normalizedServiceLabel = isServiceLineType(lineType)
           ? serviceProductLabel({ ...item, lineType, rate: parseRateInput(repairedRate) }, products)
           : undefined;
+
+        const effectiveItemName = savedItemName || normalizedServiceLabel || "";
+        const effectiveDescription = savedDescription || (isServiceLineType(lineType) ? effectiveItemName : (normalizedServiceLabel || ""));
+
+        const prodId = item.productId ?? item.product_id;
         const resolvedMc = resolveMatchingMaterialCode(
-          item.productId ? products.find(p => p.id === Number(item.productId)) : null,
+          prodId ? products.find(p => p.id === Number(prodId)) : null,
           materialCodes,
           {
             companyId: est.companyId || activeCompanyId || 1,
             clientId: est.clientId,
             brandId: est.brandId,
-            existingCode: item.materialCode,
-            existingCodeId: item.materialCodeId,
+            existingCode: item.materialCode || item.material_code,
+            existingCodeId: item.materialCodeId ?? item.material_code_id,
           }
         );
         return {
           sl: Number(item.sl) || idx + 1,
-          productId: item.productId ? String(item.productId) : "",
-          isStandard: item.isStandard !== false,
+          productId: prodId ? String(prodId) : "",
+          isStandard: (item.isStandard ?? item.is_standard) !== false,
           hsn: item.hsn || "",
-          materialCode: resolvedMc.materialCode || item.materialCode || "",
-          materialCodeId: resolvedMc.materialCodeId ?? item.materialCodeId ?? null,
-          materialDescription: resolvedMc.materialDescription || item.materialDescription || "",
-          itemName: item.itemName || normalizedServiceLabel || "",
+          materialCode: resolvedMc.materialCode || item.materialCode || item.material_code || "",
+          materialCodeId: resolvedMc.materialCodeId ?? item.materialCodeId ?? item.material_code_id ?? null,
+          materialDescription: resolvedMc.materialDescription || item.materialDescription || item.material_description || "",
+          itemName: effectiveItemName,
           width: item.width != null ? String(item.width) : "",
           height: item.height != null ? String(item.height) : "",
           quantity: item.quantity != null ? String(item.quantity) : "1",
-          unit: item.unit || "sqft",
-          calculationType: item.calculationType || (item.width && item.height ? "sqft" : "fixed"),
+          unit: item.unit || (isServiceLineType(lineType) ? "job" : "sqft"),
+          calculationType: item.calculationType || item.calculation_type || (item.width && item.height ? "sqft" : "fixed"),
           rate: isServiceLineType(lineType)
-            ? formatServiceRateInput(repairedRate, (lineType === "packing" || lineType === "installation") ? "percentage" : item.calculationType)
+            ? formatServiceRateInput(repairedRate, (lineType === "packing" || lineType === "installation") ? "percentage" : (item.calculationType || item.calculation_type))
             : (item.rate != null ? String(item.rate) : "0"),
-          amount: item.totalPrice != null ? String(item.totalPrice) : "0",
-          cgstPercent: item.cgstPercent != null ? String(item.cgstPercent) : "0",
-          cgstAmount: item.cgstAmount != null ? String(item.cgstAmount) : "0",
-          sgstPercent: item.sgstPercent != null ? String(item.sgstPercent) : "0",
-          sgstAmount: item.sgstAmount != null ? String(item.sgstAmount) : "0",
-          igstPercent: item.igstPercent != null ? String(item.igstPercent) : "0",
-          igstAmount: item.igstAmount != null ? String(item.igstAmount) : "0",
-          totalAmount: item.totalAmount != null ? String(item.totalAmount) : "0",
+          amount: (item.totalPrice ?? item.total_price) != null ? String(item.totalPrice ?? item.total_price) : "0",
+          cgstPercent: (item.cgstPercent ?? item.cgst_percent) != null ? String(item.cgstPercent ?? item.cgst_percent) : "0",
+          cgstAmount: (item.cgstAmount ?? item.cgst_amount) != null ? String(item.cgstAmount ?? item.cgst_amount) : "0",
+          sgstPercent: (item.sgstPercent ?? item.sgst_percent) != null ? String(item.sgstPercent ?? item.sgst_percent) : "0",
+          sgstAmount: (item.sgstAmount ?? item.sgst_amount) != null ? String(item.sgstAmount ?? item.sgst_amount) : "0",
+          igstPercent: (item.igstPercent ?? item.igst_percent) != null ? String(item.igstPercent ?? item.igst_percent) : "0",
+          igstAmount: (item.igstAmount ?? item.igst_amount) != null ? String(item.igstAmount ?? item.igst_amount) : "0",
+          totalAmount: (item.totalAmount ?? item.total_amount) != null ? String(item.totalAmount ?? item.total_amount) : "0",
           storeId,
-          storeSortOrder: item.storeSortOrder ?? idx + 1,
-          rowSortOrder: item.rowSortOrder ?? (Number(item.sl) || idx + 1),
-          description: item.description || normalizedServiceLabel || "",
+          storeSortOrder: item.storeSortOrder ?? item.store_sort_order ?? idx + 1,
+          rowSortOrder: item.rowSortOrder ?? item.row_sort_order ?? (Number(item.sl) || idx + 1),
+          description: effectiveDescription,
           lineType,
           rateSource: "" as const,
         };

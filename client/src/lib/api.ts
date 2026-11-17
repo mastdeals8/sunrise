@@ -498,9 +498,10 @@ export async function fetchEstimateItems(token: string | null, estimateId: numbe
     const res = await apiFetch(`/api/operations/estimates/${estimateId}/items`, token);
     return res.ok ? res.json() : [];
   }
-  return sbSelect("estimate_items", (q) =>
+  const rows = await sbSelect("estimate_items", (q) =>
     q.select("*").eq("estimate_id", estimateId).order("id", { ascending: true })
   );
+  return toCamel(rows || []);
 }
 
 export async function fetchEstimateItemsBatch(
@@ -531,8 +532,9 @@ export async function fetchEstimateItemsBatch(
       );
       const grouped: Record<number, any[]> = {};
       for (const id of uniqueIds) grouped[id] = [];
-      for (const row of rows || []) {
-        const eid = row.estimate_id ?? row.estimateId;
+      for (const rawRow of rows || []) {
+        const row = toCamel(rawRow);
+        const eid = row.estimateId;
         if (eid != null) {
           if (!grouped[eid]) grouped[eid] = [];
           grouped[eid].push(row);

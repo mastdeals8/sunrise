@@ -4226,10 +4226,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
           const r = printableRows.length;
           const row = blankRow();
-          row[1] = service.label;
+          const element = service.label;
+          const details = item.description || element;
+          row[1] = element;
           row[2] = service.hsn || "9987";
           row[3] = item.isStandard === false ? "Non-standard" : "Standard";
-          row[4] = item.description || service.label;
+          row[4] = details;
           if (qtyDisplay !== "") row[7] = qtyDisplay;
           row[9] = rateLabel;
           row[10] = r2(base);
@@ -4503,9 +4505,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         srNo: section.srNo,
         vendorCode: estimate.vendorCode || "",
         activityName: isEstimateServiceItem(item)
-          ? ((item.description && item.description !== serviceProductLabel(item, productsList))
-              ? `${serviceProductLabel(item, productsList)} — ${item.description}`
-              : serviceProductLabel(item, productsList))
+          ? (() => {
+              const element = item.itemName || item.item_name || serviceProductLabel(item, productsList);
+              const desc = item.description || "";
+              return desc && desc !== element ? `${element} — ${desc}` : (desc || element);
+            })()
           : (item.itemName || item.description || ""),
         storeCode: section.storeCode,
         qty: (isEstimateServiceItem(item) && ((item.lineType || "").toLowerCase() === "transport" || String(item.unit || "").toLowerCase() === "km"))
