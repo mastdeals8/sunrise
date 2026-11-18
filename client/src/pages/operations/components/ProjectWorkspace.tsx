@@ -1435,6 +1435,18 @@ const ExecutionTab: React.FC<{
 
 // ── Tab: Documents ────────────────────────────────────────────────────────────
 
+interface PendingTransportReceipt {
+  key: string;
+  file: File;
+  preview: string | null;
+}
+
+const isSupportedTransportReceipt = (file: File) => {
+  const extension = file.name.toLowerCase().split(".").pop() || "";
+  return ["jpg", "jpeg", "png", "pdf"].includes(extension)
+    && ["image/jpeg", "image/png", "application/pdf"].includes(file.type || `application/${extension}`);
+};
+
 const DocumentsTab: React.FC<{
   data: ProjectData;
   token: string | null;
@@ -1447,6 +1459,13 @@ const DocumentsTab: React.FC<{
   const { estimate, projectDocuments } = data;
   const client = clients.find(c => c.id === estimate.clientId);
   const [uploading, setUploading] = React.useState(false);
+  const [pendingReceipts, setPendingReceipts] = React.useState<PendingTransportReceipt[]>([]);
+  const [receiptProgress, setReceiptProgress] = React.useState(0);
+  const [receiptErrors, setReceiptErrors] = React.useState<string[]>([]);
+  const [receiptZoneActive, setReceiptZoneActive] = React.useState(false);
+  const receiptInputRef = React.useRef<HTMLInputElement>(null);
+  const receiptCameraInputRef = React.useRef<HTMLInputElement>(null);
+  const receiptZoneRef = React.useRef<HTMLDivElement>(null);
   const authHeader = { Authorization: `Bearer ${token}` };
 
   const byType = (type: string) => projectDocuments.filter(d => d.documentType === type);
@@ -1463,40 +1482,101 @@ const DocumentsTab: React.FC<{
     }
   };
 
-  const uploadTransport = async (file: File) => {
-    setUploading(true);
-    try {
-      if (isBoltMode) {
-        const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-        const storagePath = `estimate-${estimate.id}/transport/${Date.now()}-${safeName}`;
-        const { storagePath: saved } = await uploadToStorage("execution-documents", storagePath, file);
-        await registerExecutionDocument(token, {
-          estimateId: estimate.id,
-          storeCode: "",
-          documentType: "transport_receipt",
-          filePath: saved,
-          originalFileName: file.name,
-          mimeType: file.type || null,
-          fileSize: file.size || null,
-          uploadedVia: "project_workspace",
-          companyId: estimate.companyId || (estimate as any).company_id || getActiveCompanyId(),
-        });
-      } else {
-        const fd = new FormData();
-        fd.append("file", file);
-        const res = await fetch(`/api/projects/${estimate.id}/transport-receipt`, {
-          method: "POST",
-          headers: authHeader,
-          body: fd,
-        });
-        if (!res.ok) throw new Error("Upload failed");
+  React.useEffect(() => () => {
+    pendingReceipts.forEach(item => {
+      if (item.preview) URL.revokeObjectURL(item.preview);
+    });
+  }, []);
+
+  const addReceiptFiles = React.useCallback((files: File[]) => {
+    const errors: string[] = [];
+    const valid = files.filter(file => {
+      if (!isSupportedTransportReceipt(file)) {
+        errors.push(`${file.name}: use JPG, JPEG, PNG, or PDF.`);
+        return false;
       }
-      onRefresh();
-    } catch (e: any) {
-      alert(e?.message || "Upload failed.");
-    } finally {
-      setUploading(false);
+      if (file.size > 10 * 1024 * 1024) {
+        errors.push(`${file.name}: maximum size is 10 MB.`);
+        return false;
+      }
+      return true;
+    });
+    setReceiptErrors(errors);
+    setPendingReceipts(current => {
+      const existingKeys = new Set([
+        ...current.map(item => `${item.file.name}:${item.file.size}:${item.file.lastModified}`),
+        ...transportDocs.map(doc => `${doc.originalFileName || ""}:${doc.fileSize || 0}:0`),
+      ]);
+      return [...current, ...valid.filter(file => {
+        const key = `${file.name}:${file.size}:${file.lastModified}`;
+        if (existingKeys.has(key)) return false;
+        existingKeys.add(key);
+        return true;
+      }).map(file => ({
+        key: `${file.name}-${file.size}-${file.lastModified}-${Math.random()}`,
+        file,
+        preview: URL.createObjectURL(file),
+      }))];
+    });
+  }, [transportDocs]);
+
+  const removePendingReceipt = (key: string) => {
+    setPendingReceipts(current => {
+      const item = current.find(entry => entry.key === key);
+      if (item?.preview) URL.revokeObjectURL(item.preview);
+      return current.filter(entry => entry.key !== key);
+    });
+  };
+
+  const uploadTransportReceipts = async () => {
+    if (pendingReceipts.length === 0) return;
+    setUploading(true);
+    setReceiptErrors([]);
+    setReceiptProgress(0);
+    const errors: string[] = [];
+
+    for (let index = 0; index < pendingReceipts.length; index += 1) {
+      const { file } = pendingReceipts[index];
+      try {
+        if (isBoltMode) {
+          const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+          const storagePath = `estimate-${estimate.id}/transport/${Date.now()}-${safeName}`;
+          const { storagePath: saved } = await uploadToStorage("execution-documents", storagePath, file);
+          await registerExecutionDocument(token, {
+            estimateId: estimate.id,
+            storeCode: "",
+            documentType: "transport_receipt",
+            filePath: saved,
+            originalFileName: file.name,
+            mimeType: file.type || null,
+            fileSize: file.size || null,
+            uploadedVia: "project_workspace",
+            companyId: estimate.companyId || (estimate as any).company_id || getActiveCompanyId(),
+          });
+        } else {
+          const fd = new FormData();
+          fd.append("file", file);
+          const res = await fetch(`/api/projects/${estimate.id}/transport-receipt`, {
+            method: "POST",
+            headers: authHeader,
+            body: fd,
+          });
+          if (!res.ok) throw new Error("Upload failed");
+        }
+      } catch {
+        errors.push(`${file.name}: upload failed.`);
+      }
+      setReceiptProgress(Math.round(((index + 1) / pendingReceipts.length) * 100));
     }
+
+    pendingReceipts.forEach(item => {
+      if (item.preview) URL.revokeObjectURL(item.preview);
+    });
+    setPendingReceipts([]);
+    setUploading(false);
+    setReceiptErrors(errors);
+    if (errors.length === 0) onRefresh();
+    else onRefresh();
   };
 
   const uploadExtra = async (file: File) => {
@@ -1606,31 +1686,77 @@ const DocumentsTab: React.FC<{
 
       {/* Transport Receipts */}
       <div className="bg-white border border-slate-200 rounded-xl p-5">
-        <SectionTitle action={
-          <label className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded border text-xs font-bold cursor-pointer transition ${uploading ? "opacity-60 pointer-events-none" : "bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"}`}>
-            <Truck className="w-3.5 h-3.5" />
-            {uploading ? "Uploading…" : "Upload Receipt"}
-            <input
-              type="file"
-              accept=".pdf,image/*"
-              className="hidden"
-              disabled={uploading}
-              onChange={e => {
-                const file = e.target.files?.[0];
-                e.target.value = "";
-                if (file) uploadTransport(file);
-              }}
-            />
-          </label>
-        }>
+        <SectionTitle action={<span className="text-[10px] font-bold text-slate-400">JPG, JPEG, PNG, PDF · max 10 MB</span>}>
           Transport Receipts ({transportDocs.length})
         </SectionTitle>
+        <div
+          ref={receiptZoneRef}
+          tabIndex={0}
+          onPaste={event => {
+            const files = Array.from(event.clipboardData.items)
+              .filter(item => item.kind === "file")
+              .map(item => item.getAsFile())
+              .filter((file): file is File => Boolean(file));
+            if (files.length > 0) {
+              event.preventDefault();
+              addReceiptFiles(files);
+            }
+          }}
+          onDrop={event => {
+            event.preventDefault();
+            setReceiptZoneActive(false);
+            addReceiptFiles(Array.from(event.dataTransfer.files));
+          }}
+          onDragOver={event => { event.preventDefault(); setReceiptZoneActive(true); }}
+          onDragLeave={() => setReceiptZoneActive(false)}
+          onFocus={() => setReceiptZoneActive(true)}
+          onBlur={() => setReceiptZoneActive(false)}
+          className={`rounded-xl border-2 border-dashed p-5 text-center outline-none transition ${receiptZoneActive ? "border-blue-400 bg-blue-50" : "border-slate-200 bg-slate-50/60"}`}
+        >
+          <Truck className="w-7 h-7 mx-auto text-blue-400 mb-2" />
+          <p className="text-sm font-bold text-slate-700">Drop receipts here or paste with Cmd+V / Ctrl+V</p>
+          <p className="text-[11px] text-slate-400 mt-1">Click a button to choose files or capture a receipt from your phone.</p>
+          <div className="flex flex-wrap justify-center gap-2 mt-3">
+            <button type="button" disabled={uploading} onClick={() => receiptInputRef.current?.click()} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded border text-xs font-bold bg-white border-slate-200 text-slate-700 hover:bg-slate-100 disabled:opacity-50">
+              <Upload className="w-3.5 h-3.5" /> Choose files
+            </button>
+            <button type="button" disabled={uploading} onClick={() => receiptCameraInputRef.current?.click()} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded border text-xs font-bold bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100 disabled:opacity-50">
+              <Camera className="w-3.5 h-3.5" /> Take photo
+            </button>
+            <input ref={receiptInputRef} type="file" accept=".jpg,.jpeg,.png,.pdf,image/jpeg,image/png,application/pdf" multiple className="hidden" onChange={event => { addReceiptFiles(Array.from(event.target.files || [])); event.target.value = ""; }} />
+            <input ref={receiptCameraInputRef} type="file" accept="image/jpeg,image/png" capture="environment" className="hidden" onChange={event => { addReceiptFiles(Array.from(event.target.files || [])); event.target.value = ""; }} />
+          </div>
+        </div>
+
+        {pendingReceipts.length > 0 && (
+          <div className="mt-4 space-y-2">
+            <div className="flex items-center justify-between text-xs font-bold text-slate-600">
+              <span>{pendingReceipts.length} receipt{pendingReceipts.length === 1 ? "" : "s"} ready</span>
+              <button type="button" disabled={uploading} onClick={uploadTransportReceipts} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50">
+                <Upload className="w-3.5 h-3.5" /> {uploading ? `Uploading ${receiptProgress}%` : "Upload receipts"}
+              </button>
+            </div>
+            {uploading && <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden"><div className="h-full bg-blue-600 transition-all" style={{ width: `${receiptProgress}%` }} /></div>}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {pendingReceipts.map(item => (
+                <div key={item.key} className="flex items-center gap-2 rounded-lg border border-slate-200 p-2">
+                  <div className="w-12 h-12 rounded overflow-hidden bg-slate-50 flex items-center justify-center shrink-0">
+                    {item.preview && item.file.type.startsWith("image/") ? <img src={item.preview} alt="" className="w-full h-full object-cover" /> : item.preview ? <iframe src={item.preview} title={item.file.name} className="w-full h-full pointer-events-none" /> : <FileText className="w-5 h-5 text-slate-400" />}
+                  </div>
+                  <span className="text-xs font-semibold text-slate-700 truncate flex-1" title={item.file.name}>{item.file.name}</span>
+                  <button type="button" disabled={uploading} onClick={() => removePendingReceipt(item.key)} className="p-1 text-red-400 hover:text-red-600 disabled:opacity-50" title="Remove from upload queue"><X className="w-3.5 h-3.5" /></button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        {receiptErrors.length > 0 && <div className="mt-3 rounded-lg border border-red-200 bg-red-50 p-2 text-xs text-red-700 space-y-1">{receiptErrors.map(error => <p key={error}>{error}</p>)}</div>}
         {transportDocs.length > 0 ? (
-          <div className="space-y-1.5">
+          <div className="mt-5 space-y-1.5">
             {transportDocs.map(doc => <DocRow key={doc.id} doc={doc} token={token} onDelete={deleteDoc} />)}
           </div>
         ) : (
-          <p className="text-xs text-slate-400 py-2">No transport receipts uploaded. Upload courier receipts, LR copies, or dispatch proofs here.</p>
+          <p className="text-xs text-slate-400 py-3">No transport receipts uploaded. Upload courier receipts, LR copies, or dispatch proofs here.</p>
         )}
       </div>
 
