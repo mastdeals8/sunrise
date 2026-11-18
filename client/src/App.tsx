@@ -4,6 +4,7 @@ import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import { GlobalDateProvider } from "./contexts/GlobalDateContext";
 import { NotificationBell } from "./components/NotificationBell";
 import { CompanySwitcher } from "./components/CompanySwitcher";
+import ErrorBoundary from "./components/ErrorBoundary";
 import {
   LayoutDashboard,
   LogOut,
@@ -667,7 +668,7 @@ const AppContent: React.FC = () => {
             <Route path="/pending-payments" component={PendingPaymentsPage} />
             <Route path="/client-ledger" component={ClientLedgerPage} />
             <Route path="/project-documents" component={ProjectDocumentsPage} />
-            <Route path="/invoice-packet" component={InvoicePacketPage} />
+            <Route path="/invoice-packet">{() => <ErrorBoundary><InvoicePacketPage /></ErrorBoundary>}</Route>
             <Route path="/automation/telegram" component={TelegramSettings} />
             <Route path="/automation/whatsapp" component={WhatsAppSettings} />
             <Route path="/automation/tally" component={TallySettingsPage} />

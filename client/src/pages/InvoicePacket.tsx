@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { formatCurrency } from "@/utils/format";
 import { useAuth } from "../contexts/AuthContext";
 import { isAblblFormat, extractInvoiceSequence, extractPoNumber, getPacketPdfFilename, getPacketPdfTitle } from "../../../shared/textFormat";
-import { Package, Search, Printer, Loader as Loader2, FileDown, TriangleAlert as AlertTriangle, SlidersHorizontal, Copy, Check, Mail } from "lucide-react";
+import { Package, Search, Printer, Loader as Loader2, FileDown, TriangleAlert as AlertTriangle, SlidersHorizontal, Copy, Check, Mail, RotateCw } from "lucide-react";
 import { PDFDocument, rgb } from "pdf-lib";
 import html2canvas from "html2canvas";
 import EstimateDocument from "../components/EstimateDocument";
@@ -140,6 +140,10 @@ const InvoicePacketPage: React.FC = () => {
   const [pdfMode, setPdfMode] = useState<string | null>(null);
   const [generatedPacketPdf, setGeneratedPacketPdf] = useState<Blob | null>(null);
   const [copyStatus, setCopyStatus] = useState<string>("");
+  const [packetError, setPacketError] = useState<string | null>(null);
+  const [packetLoading, setPacketLoading] = useState(false);
+  const [retryNonce, setRetryNonce] = useState(0);
+  const buildingRef = React.useRef(false);
 
   const handleCopySummary = async () => {
     if (!packet) return;
@@ -282,15 +286,27 @@ const InvoicePacketPage: React.FC = () => {
   useEffect(() => {
     if (!selectedId) {
       setPacket(null); setPages([]); setGeneratedPacketPdf(null);
+      setPacketError(null);
       return;
     }
+    setPacketLoading(true);
+    setPacketError(null);
     const load = async () => {
       try {
         let data: PacketData | null = null;
         if (isBoltMode) {
           // Client-side packet assembly from Supabase
-          const inv = invoices.find((i: any) => i.id === selectedId);
-          if (!inv) return;
+          // Wait for invoices to load before deciding the invoice is missing
+          let inv = invoices.find((i: any) => i.id === selectedId);
+          if (!inv && loading) {
+            setPacketLoading(false);
+            return; // will re-run when invoices arrive
+          }
+          if (!inv) {
+            setPacketError(`Invoice #${selectedId} was not found. It may have been deleted or you may not have access to it.`);
+            setPacketLoading(false);
+            return;
+          }
           const estimateId = inv.estimateId ?? null;
           const [estimate, estimateItems, challans, payments, clients, stores, products, executionDocuments, executionStores] = await Promise.all([
             estimateId ? fetchEstimateById(token, estimateId) : Promise.resolve(null),
@@ -487,12 +503,15 @@ const InvoicePacketPage: React.FC = () => {
           );
           setPages(resolvedPages.filter(Boolean) as PacketPage[]);
         }
-      } catch (err) {
-        console.error(err);
+      } catch (err: any) {
+        console.error("[invoice-packet] load error:", err);
+        setPacketError(err?.message || "Failed to load the invoice packet. Please try again.");
+      } finally {
+        setPacketLoading(false);
       }
     };
     load();
-  }, [selectedId, token, invoices]);
+  }, [selectedId, token, invoices, loading, retryNonce]);
 
   // Retained for the existing legacy deployment path. Bolt packet generation
   // remains entirely client-side and does not call this route mode.
@@ -870,6 +889,8 @@ const dataUrlToBytes = (dataUrl: string): Uint8Array => {
 
   const runPacketAction = async (action: "download" | "print", force = false, scope: "all" | "invoice" = "all") => {
     if (!packet) return;
+    if (buildingRef.current) return; // prevent duplicate concurrent PDF jobs
+    buildingRef.current = true;
     if (scope === "all") {
       const gaps = computeMissing();
       if (gaps.length) {
@@ -928,9 +949,10 @@ const dataUrlToBytes = (dataUrl: string): Uint8Array => {
       }
     } catch (err: any) {
       console.error("[packet-pdf] Error:", err);
-      alert("PDF generation failed: " + (err?.message || err));
+      setPacketError("PDF generation failed: " + (err?.message || err));
     } finally {
       setBuilding(false);
+      buildingRef.current = false;
     }
   };
 
@@ -938,7 +960,12 @@ const dataUrlToBytes = (dataUrl: string): Uint8Array => {
 
   if (pdfMode === "invoice" || pdfMode === "estimate" || pdfMode === "summary") {
     return <div style={{ background: "white", padding: 0, margin: 0 }}>
-      {!packet ? <div style={{ padding: 40, textAlign: "center", color: "#666" }}>Loading…</div>
+      {!packet ? <div style={{ padding: 40, textAlign: "center", color: "#666" }}>
+        {packetError ? <div>
+          <p style={{ marginBottom: 12 }}>{packetError}</p>
+          <button onClick={() => setRetryNonce(n => n + 1)} style={{ padding: "8px 16px", background: "#f97316", color: "white", border: 0, borderRadius: 8, cursor: "pointer", fontWeight: 600 }}>Try Again</button>
+        </div> : "Loading…"}
+      </div>
         : pdfMode === "summary" ? <InvoiceSummaryDocument packet={packet} sellerProfile={sellerProfile} pages={pages} />
         : pdfMode === "invoice" ? <InvoicePacketDocument packet={packet} sellerProfile={sellerProfile} assetToken={token} />
         : <EstimatePacketPage packet={packet} sellerProfile={sellerProfile} assetToken={token} />}
@@ -1077,8 +1104,19 @@ const dataUrlToBytes = (dataUrl: string): Uint8Array => {
               <Package className="w-10 h-10 mx-auto mb-3 text-slate-300" />
               Select an invoice to assemble its packet.
             </div>
+          ) : packetError ? (
+            <div className="glass-panel p-8 text-center">
+              <AlertTriangle className="w-10 h-10 mx-auto mb-3 text-amber-500" />
+              <p className="text-sm font-semibold text-slate-700 mb-1">Could not load this invoice packet</p>
+              <p className="text-xs text-slate-500 mb-4 max-w-md mx-auto">{packetError}</p>
+              <button onClick={() => setRetryNonce(n => n + 1)} className="inline-flex items-center gap-1.5 px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white rounded-lg text-sm font-semibold transition">
+                <RotateCw className="w-3.5 h-3.5" /> Try Again
+              </button>
+            </div>
           ) : !packet ? (
-            <div className="glass-panel p-8 text-center text-slate-500">Loading packet…</div>
+            <div className="glass-panel p-8 text-center text-slate-500">
+              {packetLoading ? <div className="flex flex-col items-center gap-2"><Loader2 className="w-5 h-5 animate-spin text-orange-500" /> <span className="text-sm">Loading packet…</span></div> : "Loading packet…"}
+            </div>
           ) : (
             <div className="space-y-6 packet-print-root" data-print-document="true">
               {missingDocs && missingDocs.length > 0 && (
