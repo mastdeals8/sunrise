@@ -1,0 +1,33 @@
+{
+  "projectId": "67978954",
+  "functions": {
+    "dc-save": {
+      "hasChanged": false,
+      "hash": "4812eee5be224f29478f10dcb26852aaf1b397992aa8f27b0b4951a70f6b13be506ec2e07e098b731bff2ca4ddfe3f80b486c805f2f712f41bc04e93caa72e10"
+    },
+    "estimate-save": {
+      "hasChanged": false,
+      "hash": "083c23aeee3ea73ae297084310e53f0eb7056d18918e91318e66c7c1bcd6fd28506ec2e07e098b731bff2ca4ddfe3f80b486c805f2f712f41bc04e93caa72e10"
+    },
+    "exec-doc-update": {
+      "hasChanged": false,
+      "hash": "76ed3ca28365973b782c9a03bcd2effe017fd5d9b46fc67e70142371c4768a5f506ec2e07e098b731bff2ca4ddfe3f80b486c805f2f712f41bc04e93caa72e10"
+    },
+    "invoice-create": {
+      "hasChanged": false,
+      "hash": "08cd6fa87f83fbac7e631ef643f923bea0cdd71c2ff09373a5869475d8c6196d506ec2e07e098b731bff2ca4ddfe3f80b486c805f2f712f41bc04e93caa72e10"
+    },
+    "master-data-save": {
+      "hasChanged": false,
+      "hash": "856fe0ba74c1f97c44e34a10ff661e2d26f4c68fb500c6a09e27ae42e4a8506c506ec2e07e098b731bff2ca4ddfe3f80b486c805f2f712f41bc04e93caa72e10"
+    },
+    "payment-post": {
+      "hasChanged": false,
+      "hash": "d2f31a3d0ba53c24f69bdb0c62745e8a5db6510aa4dcccbdb83b3a36b52d3d9f506ec2e07e098b731bff2ca4ddfe3f80b486c805f2f712f41bc04e93caa72e10"
+    },
+    "settings-save": {
+      "hasChanged": false,
+      "hash": "fb46f1fcf31fa77b962aef2dba31ebade46b86a1a7b62d0994150d411429e60b506ec2e07e098b731bff2ca4ddfe3f80b486c805f2f712f41bc04e93caa72e10"
+    }
+  }
+}

@@ -13,8 +13,10 @@ import { requireUser, adminClient } from "../_shared/auth.ts";
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return corsResponse();
 
+  let authenticatedUser: { id: string; email?: string };
   try {
-    await requireUser(req);
+    const auth = await requireUser(req);
+    authenticatedUser = auth.user;
   } catch (r) {
     return r as Response;
   }
@@ -39,7 +41,7 @@ Deno.serve(async (req: Request) => {
     // 1. Verify existence and company_id of target document
     const { data: existing, error: findErr } = await db
       .from("execution_documents")
-      .select("id, company_id, status, estimate_id")
+      .select("id, company_id, status, estimate_id, file_path")
       .eq("id", id)
       .maybeSingle();
 
@@ -47,14 +49,23 @@ Deno.serve(async (req: Request) => {
     if (!existing) return errorResponse("Document not found", 404);
 
     // 2. Enforce workspace access check
-    const { data: dbUser } = await db
+    const { data: authLinkedUser } = await db
       .from("users")
       .select("id, role")
-      .eq("email", user.email!)
+      .eq("auth_user_id", authenticatedUser.id)
       .maybeSingle();
+    const { data: emailLinkedUser } = authLinkedUser || !authenticatedUser.email
+      ? { data: null }
+      : await db
+          .from("users")
+          .select("id, role")
+          .eq("email", authenticatedUser.email)
+          .maybeSingle();
+    const dbUser = authLinkedUser || emailLinkedUser;
 
-    const isSuper = dbUser && (dbUser.id === 1 || dbUser.role === "admin");
-    if (!isSuper && dbUser) {
+    if (!dbUser) return errorResponse("Access denied", 403);
+    const isSuper = dbUser.id === 1 || dbUser.role === "admin";
+    if (!isSuper) {
       const { data: cu } = await db
         .from("company_users")
         .select("id, role")
@@ -62,18 +73,33 @@ Deno.serve(async (req: Request) => {
         .eq("company_id", existing.company_id)
         .maybeSingle();
       if (!cu) {
-        return errorResponse(`Access denied to company workspace ${existing.company_id}`, 403);
+        return errorResponse("Access denied", 403);
+      }
+      const allowedCompanyRoles = ["super_admin", "company_admin"];
+      const allowedGlobalRoles = ["admin", "manager", "production", "installer"];
+      if (!allowedCompanyRoles.includes(String(cu.role)) && !allowedGlobalRoles.includes(String(dbUser.role))) {
+        return errorResponse("You do not have permission to delete this file", 403);
       }
     }
 
-    // 3. Disallow modifying company_id
-    delete fields.company_id;
-    delete fields.companyId;
+    // 3. This endpoint only supports deletion; do not allow arbitrary field updates.
+    if (fields.status !== "deleted") {
+      return errorResponse("Only document deletion is supported", 400);
+    }
+
+    // 4. Remove the selected storage object first. A missing object is safe to
+    // treat as already deleted, but any other storage error preserves the DB row.
+    const filePath = typeof existing.file_path === "string" ? existing.file_path : "";
+    if (filePath && !/^https?:\/\//i.test(filePath)) {
+      const { error: storageErr } = await db.storage.from("execution-documents").remove([filePath]);
+      if (storageErr) return errorResponse("Could not delete the file", 502);
+    }
 
     const { data, error } = await db
       .from("execution_documents")
-      .update(fields)
+      .update({ status: "deleted", deleted_at: fields.deleted_at ?? new Date().toISOString() })
       .eq("id", id)
+      .eq("company_id", existing.company_id)
       .select()
       .single();
 
