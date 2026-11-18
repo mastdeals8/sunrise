@@ -1983,7 +1983,12 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
 
       const estimatePayload = {
         estimateNumber: estNumber,
-        estimateDate: estDate || todayYmd,
+        // On create, default to today if empty. On update, omit the field
+        // entirely when empty so the server preserves the existing date
+        // instead of silently overwriting it with today.
+        ...(estDate
+          ? { estimateDate: estDate }
+          : editingEstimateId ? {} : { estimateDate: todayYmd }),
         clientId: Number(estClientId),
         brandId: estBrandId ? Number(estBrandId) : null,
         storeId: (profile.code === "RETAIL_SINGLE_STORE" && estStoreId)
