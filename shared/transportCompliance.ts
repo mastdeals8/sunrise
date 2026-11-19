@@ -6,9 +6,14 @@ export interface StoreTransportRequirement {
   storeCode: string;
   storeName: string;
   transportMode: "outstation" | "local" | "none";
-  transportDetails?: string;
+  origin?: string;
+  destination?: string;
+  distanceKm?: number;
   transportAmount?: number;
+  transportDetails?: string;
   status: "Uploaded" | "Pending" | "Not Applicable";
+  receiptDoc?: any;
+  /** @deprecated Kept for backward compatibility */
   invoiceDoc?: any;
 }
 
@@ -67,83 +72,83 @@ export function isAblblProject(clientOrEstimate: any, invoiceOrClient?: any): bo
   );
 }
 
-export type TransportClassification = "lr" | "transport_invoice";
-
 /**
- * Check whether an execution document is a verified supplier transport invoice,
- * NOT an ordinary LR copy, courier slip, or dispatch receipt.
+ * Single document rule: any active transport receipt (transport_receipt, transport, transport_invoice)
+ * is recognized as valid without complex sub-classification.
  */
 export function isVerifiedTransportInvoice(doc: any): boolean {
   if (!doc) return false;
   if (doc.status === "deleted" || doc.status === "replaced") return false;
-
   const docType = String(doc.documentType || doc.document_type || "").trim().toLowerCase();
-  const category = String(doc.metadata?.documentCategory || doc.metadata?.category || "").trim().toLowerCase();
-  const classification = String(
-    doc.metadata?.transportClassification ||
-    doc.metadata?.transport_classification ||
-    doc.metadata?.classification ||
-    ""
-  ).trim().toLowerCase();
-
-  return (
-    classification === "transport_invoice" ||
-    classification === "supplier_invoice" ||
-    classification === "official_transport_invoice" ||
-    category === "transport_invoice" ||
-    docType === "transport_invoice"
-  );
+  return docType === "transport_receipt" || docType === "transport" || docType === "transport_invoice";
 }
 
-export function getTransportClassification(doc: any): TransportClassification {
-  return isVerifiedTransportInvoice(doc) ? "transport_invoice" : "lr";
-}
-
-export function getTransportClassificationLabel(classificationOrDoc: any): string {
-  const isInvoice = typeof classificationOrDoc === "string"
-    ? classificationOrDoc === "transport_invoice" || classificationOrDoc === "supplier_invoice"
-    : isVerifiedTransportInvoice(classificationOrDoc);
-  return isInvoice ? "Official Supplier Transport Invoice" : "Ordinary Transport Receipt / LR";
+export function getTransportClassificationLabel(_doc?: any): string {
+  return "Transport Receipt";
 }
 
 /**
- * Derive transport mode and details for a given store from store grouping and estimate items.
+ * Derive transport mode, origin, destination, distance, and amount for a given store.
  */
 export function getStoreTransportMode(
   storeId: number | null,
   storeCode: string | null,
   estimate: any,
-  estimateItems: any[] = []
-): { mode: "outstation" | "local" | "none"; details: string; amount: number } {
+  estimateItems: any[] = [],
+  storeObj?: any
+): {
+  mode: "outstation" | "local" | "none";
+  origin: string;
+  destination: string;
+  distanceKm: number;
+  amount: number;
+  details: string;
+} {
   const sidKey = storeId ? String(storeId) : null;
   const grouping = (estimate?.storeGrouping || estimate?.store_grouping || {}) as Record<string, any>;
   const groupData = sidKey && grouping[sidKey] ? grouping[sidKey] : null;
+
+  let origin = (groupData && !Array.isArray(groupData) && groupData.transportOrigin) || estimate?.transportOrigin || "Pune";
+  let destination =
+    (groupData && !Array.isArray(groupData) && (groupData.transportDestination || groupData.destinationCity)) ||
+    storeObj?.city ||
+    storeObj?.storeCity ||
+    storeObj?.state ||
+    storeObj?.name ||
+    storeObj?.storeName ||
+    "";
 
   // 1. Check storeGrouping overrides
   if (groupData && !Array.isArray(groupData)) {
     const isExplicitOutstation = groupData.transportType === "outstation" || Number(groupData.transportKm || 0) > 0;
     const isExplicitLocal = groupData.transportType === "local";
-    const transAmt = Number(groupData.transportAmount || 0);
+    const km = Number(groupData.transportKm || 0);
+    const rate = Number(groupData.transportRate || 0);
+    const transAmt = Number(groupData.transportAmount || (km * rate) || 0);
+    const desc = groupData.transportDescription ? String(groupData.transportDescription) : "";
 
     if (isExplicitOutstation) {
-      const km = Number(groupData.transportKm || 0);
-      const rate = Number(groupData.transportRate || 0);
-      const desc = groupData.transportDescription ? String(groupData.transportDescription) : "";
       const kmPart = km > 0 ? `${km} KM` : "";
       const ratePart = rate > 0 ? `@ ₹${rate}/KM` : "";
       const details = [kmPart, ratePart, desc].filter(Boolean).join(" ");
       return {
         mode: "outstation",
+        origin,
+        destination: destination || desc || "Outstation",
+        distanceKm: km,
+        amount: transAmt,
         details: details || "Outstation Transportation",
-        amount: transAmt || (km * rate),
       };
     }
 
     if (isExplicitLocal && transAmt > 0) {
       return {
         mode: "local",
-        details: groupData.transportDescription || "Local Transportation",
+        origin,
+        destination: destination || "Local",
+        distanceKm: km,
         amount: transAmt,
+        details: desc || "Local Transportation",
       };
     }
   }
@@ -155,7 +160,6 @@ export function getStoreTransportMode(
     const itScode = String(it.storeCode || it.store_code || "").trim().toLowerCase();
     if (storeId && itSid && itSid === storeId) return true;
     if (cleanCode && itScode && itScode === cleanCode) return true;
-    // If single store estimate with no store IDs on items, consider all items
     if (!storeId && !cleanCode) return true;
     return false;
   });
@@ -166,53 +170,71 @@ export function getStoreTransportMode(
     const unit = String(line.unit || "").toLowerCase();
     const calcType = String(line.calculationType || line.calculation_type || "").toLowerCase();
     const name = String(line.itemName || line.item_name || "").toLowerCase();
-    const desc = String(line.description || "").toLowerCase();
+    const desc = String(line.description || "");
+    const descLower = desc.toLowerCase();
     const rate = Number(line.rate || 0);
     const qty = Number(line.quantity || 0);
-    const amt = Number(line.totalPrice || line.total_price || line.amount || 0);
+    const amt = Number(line.totalPrice || line.total_price || line.amount || (qty * rate) || 0);
 
-    const isKm = unit === "km" || calcType === "per_km" || name.includes("outstation") || desc.includes("outstation");
+    const isKm = unit === "km" || calcType === "per_km" || name.includes("outstation") || descLower.includes("outstation") || qty > 0;
 
     if (isKm) {
-      const details = line.description || `${qty > 0 ? `${qty} KM ` : ""}${rate > 0 ? `@ ₹${rate}/KM` : ""}`.trim() || "Outstation Transportation";
+      const km = unit === "km" || calcType === "per_km" ? qty : Number(line.quantity || 0);
       return {
         mode: "outstation",
-        details,
-        amount: amt || (qty * rate),
+        origin,
+        destination: destination || desc || "Outstation",
+        distanceKm: km,
+        amount: amt,
+        details: desc || `${km > 0 ? `${km} KM ` : ""}${rate > 0 ? `@ ₹${rate}/KM` : ""}`.trim() || "Outstation Transportation",
       };
     }
 
     return {
       mode: "local",
-      details: line.description || line.itemName || line.item_name || "Local Transportation",
+      origin,
+      destination: destination || "Local",
+      distanceKm: 0,
       amount: amt,
+      details: desc || line.itemName || line.item_name || "Local Transportation",
     };
   }
 
   // 3. Fallback to estimate-level transport settings if no store-specific items/grouping
   if (!storeId && !storeCode) {
     const isEstOutstation = estimate?.transportType === "outstation" || Number(estimate?.transportKm || 0) > 0;
+    const km = Number(estimate?.transportKm || 0);
+    const amt = Number(estimate?.transportAmount || 0);
     if (isEstOutstation) {
       return {
         mode: "outstation",
+        origin,
+        destination: destination || "Outstation",
+        distanceKm: km,
+        amount: amt,
         details: estimate.transportDescription || "Outstation Transportation",
-        amount: Number(estimate.transportAmount || 0),
       };
     }
-    if (Number(estimate?.transportAmount || 0) > 0) {
+    if (amt > 0) {
       return {
         mode: "local",
+        origin,
+        destination: destination || "Local",
+        distanceKm: 0,
+        amount: amt,
         details: estimate.transportDescription || "Local Transportation",
-        amount: Number(estimate.transportAmount || 0),
       };
     }
   }
 
-  return { mode: "none", details: "", amount: 0 };
+  return { mode: "none", origin, destination, distanceKm: 0, amount: 0, details: "" };
 }
 
 /**
- * Complete evaluation of transport invoice compliance for all scoped stores of an estimate/invoice.
+ * Complete evaluation of transport receipt compliance for all scoped stores of an estimate/invoice.
+ * Simple rule:
+ * - If active transport receipt exists for store -> Uploaded
+ * - If no active transport receipt exists -> Pending
  */
 export function evaluateTransportCompliance(
   estimate: any,
@@ -237,7 +259,13 @@ export function evaluateTransportCompliance(
     (d: any) => d.status !== "deleted" && d.status !== "replaced"
   );
 
-  const transportInvoices = activeDocs.filter(isVerifiedTransportInvoice);
+  const isTransportReceipt = (d: any) => {
+    if (!d) return false;
+    const t = String(d.documentType || d.document_type || "").trim().toLowerCase();
+    return t === "transport_receipt" || t === "transport" || t === "transport_invoice";
+  };
+
+  const transportReceipts = activeDocs.filter(isTransportReceipt);
 
   // If scopedStores is empty (e.g. single store or project-level), create a virtual store context
   const storesToEvaluate: ScopedStore[] = scopedStores.length > 0
@@ -251,7 +279,7 @@ export function evaluateTransportCompliance(
   const requirements: StoreTransportRequirement[] = [];
 
   for (const st of storesToEvaluate) {
-    const { mode, details, amount } = getStoreTransportMode(st.storeId, st.storeCode, estimate, estimateItems);
+    const { mode, origin, destination, distanceKm, amount, details } = getStoreTransportMode(st.storeId, st.storeCode, estimate, estimateItems, st);
 
     if (mode !== "outstation") {
       requirements.push({
@@ -259,16 +287,19 @@ export function evaluateTransportCompliance(
         storeCode: st.storeCode,
         storeName: st.storeName,
         transportMode: mode,
-        transportDetails: details,
+        origin,
+        destination,
+        distanceKm,
         transportAmount: amount,
+        transportDetails: details,
         status: "Not Applicable",
       });
       continue;
     }
 
-    // Match transport invoice for this store
+    // Match transport receipt for this store
     const cleanSc = st.storeCode ? st.storeCode.toLowerCase() : "";
-    const matchingDoc = transportInvoices.find((d: any) => {
+    const matchingDoc = transportReceipts.find((d: any) => {
       const docSc = String(d.storeCode || d.store_code || d.metadata?.storeCode || "").trim().toLowerCase();
       const docSid = d.storeId || d.store_id || d.metadata?.storeId ? Number(d.storeId || d.store_id || d.metadata?.storeId) : null;
 
@@ -286,9 +317,13 @@ export function evaluateTransportCompliance(
       storeCode: st.storeCode,
       storeName: st.storeName,
       transportMode: "outstation",
-      transportDetails: details,
+      origin: origin || "Pune",
+      destination: destination || (st as any).city || (st as any).storeCity || st.storeName || "Outstation",
+      distanceKm: distanceKm || 0,
       transportAmount: amount,
+      transportDetails: details,
       status: matchingDoc ? "Uploaded" : "Pending",
+      receiptDoc: matchingDoc || undefined,
       invoiceDoc: matchingDoc || undefined,
     });
   }

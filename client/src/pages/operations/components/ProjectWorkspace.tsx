@@ -1461,7 +1461,9 @@ const DocumentsTab: React.FC<{
   products: Product[];
   onPoUpload: (est: Estimate) => void;
   onRefresh: () => void;
-}> = ({ data, token, clients, stores, products, onPoUpload, onRefresh }) => {
+  onOpenWcc?: (dc: DeliveryChallan, msg?: string) => void;
+  onPreviewWcc?: (dc: DeliveryChallan) => void;
+}> = ({ data, token, clients, stores, products, onPoUpload, onRefresh, onOpenWcc, onPreviewWcc }) => {
   const { estimate, projectDocuments } = data;
   const client = clients.find(c => c.id === estimate.clientId);
   const [uploading, setUploading] = React.useState(false);
@@ -1481,6 +1483,8 @@ const DocumentsTab: React.FC<{
     d.status !== "deleted"
   );
   const extraDocs = byType("extra");
+  const allChallans = data.challans || [];
+  const allSignedDocs = projectDocuments.filter(d => (d.documentType === "signed_wcc" || d.documentType === "signed_dc") && d.status !== "deleted");
 
   const scopedStores = React.useMemo(
     () => getEstimateScopedStores(estimate, data.items, stores),
@@ -1490,42 +1494,6 @@ const DocumentsTab: React.FC<{
     () => evaluateTransportCompliance(estimate, data.items, allRawDocs, scopedStores, client),
     [estimate, data.items, allRawDocs, scopedStores, client]
   );
-
-  const [targetStoreForInvoice, setTargetStoreForInvoice] = React.useState<StoreTransportRequirement | null>(null);
-  const [uploadClassification, setUploadClassification] = React.useState<"receipt" | "transport_invoice">("receipt");
-  const [classifyingDocId, setClassifyingDocId] = React.useState<number | null>(null);
-
-  const handleToggleDocClassification = async (
-    doc: ExecDoc,
-    storeReq?: { storeCode?: string | null; storeId?: number | null; storeName?: string | null } | null
-  ) => {
-    const isCurrentlyInvoice = isVerifiedTransportInvoice(doc);
-    const targetClassification = isCurrentlyInvoice ? "receipt" : "transport_invoice";
-    setClassifyingDocId(doc.id);
-    try {
-      const existingMeta = doc.metadata || {};
-      const updatedMeta = {
-        ...existingMeta,
-        transportClassification: targetClassification,
-        documentCategory: targetClassification === "transport_invoice" ? "transport_invoice" : "transport_receipt",
-        ...(targetClassification === "transport_invoice" ? {
-          storeCode: storeReq?.storeCode || (existingMeta as any)?.storeCode || doc.storeCode || (scopedStores.length === 1 ? scopedStores[0]?.storeCode : null),
-          storeId: storeReq?.storeId ?? (existingMeta as any)?.storeId ?? (scopedStores.length === 1 ? scopedStores[0]?.storeId : null),
-          storeName: storeReq?.storeName ?? (existingMeta as any)?.storeName ?? (scopedStores.length === 1 ? scopedStores[0]?.storeName : ""),
-        } : {}),
-      };
-
-      await updateExecutionDocumentMetadata(token, doc.id, {
-        metadata: updatedMeta,
-        storeCode: (updatedMeta as any).storeCode || doc.storeCode || null,
-      });
-      onRefresh();
-    } catch (e: any) {
-      alert(e?.message || "Failed to update classification.");
-    } finally {
-      setClassifyingDocId(null);
-    }
-  };
 
   const deleteDoc = async (doc: ExecDoc) => {
     if (!confirm(`Delete ${doc.originalFileName || "this file"}?`)) return;
@@ -1590,19 +1558,14 @@ const DocumentsTab: React.FC<{
     setReceiptProgress(0);
     const errors: string[] = [];
 
-    const isInvoiceClass = uploadClassification === "transport_invoice";
-    const reqStore = targetStoreForInvoice;
-
     for (let index = 0; index < pendingReceipts.length; index += 1) {
       const { file } = pendingReceipts[index];
       try {
         const meta = {
-          transportClassification: isInvoiceClass ? "transport_invoice" : "receipt",
-          documentCategory: isInvoiceClass ? "transport_invoice" : "transport_receipt",
-          ...(reqStore?.storeCode ? {
-            storeCode: reqStore.storeCode,
-            storeId: reqStore.storeId ?? null,
-            storeName: reqStore.storeName ?? "",
+          ...(scopedStores.length === 1 && scopedStores[0]?.storeCode ? {
+            storeCode: scopedStores[0].storeCode,
+            storeId: scopedStores[0].storeId ?? null,
+            storeName: scopedStores[0].storeName ?? "",
           } : {}),
         };
 
@@ -1612,7 +1575,7 @@ const DocumentsTab: React.FC<{
           const { storagePath: saved } = await uploadToStorage("execution-documents", storagePath, file);
           await registerExecutionDocument(token, {
             estimateId: estimate.id,
-            storeCode: reqStore?.storeCode || "",
+            storeCode: scopedStores.length === 1 ? scopedStores[0]?.storeCode || "" : "",
             documentType: "transport_receipt",
             filePath: saved,
             originalFileName: file.name,
@@ -1625,7 +1588,9 @@ const DocumentsTab: React.FC<{
         } else {
           const fd = new FormData();
           fd.append("file", file);
-          if (reqStore?.storeCode) fd.append("storeCode", reqStore.storeCode);
+          if (scopedStores.length === 1 && scopedStores[0]?.storeCode) {
+            fd.append("storeCode", scopedStores[0].storeCode);
+          }
           fd.append("metadata", JSON.stringify(meta));
           const res = await fetch(`/api/projects/${estimate.id}/transport-receipt`, {
             method: "POST",
@@ -1645,8 +1610,6 @@ const DocumentsTab: React.FC<{
     });
     setPendingReceipts([]);
     setUploading(false);
-    setUploadClassification("receipt");
-    setTargetStoreForInvoice(null);
     setReceiptErrors(errors);
     onRefresh();
   };
@@ -1693,7 +1656,7 @@ const DocumentsTab: React.FC<{
 
   return (
     <div className="space-y-5">
-      {/* Estimate */}
+      {/* 1. Estimate */}
       <div className="bg-white border border-slate-200 rounded-xl p-5">
         <SectionTitle>Estimate</SectionTitle>
         <div className="flex items-center gap-3 py-2">
@@ -1729,138 +1692,66 @@ const DocumentsTab: React.FC<{
         </div>
       </div>
 
-      {/* Purchase Order */}
-      <div className="bg-white border border-slate-200 rounded-xl p-5">
-        <SectionTitle action={
-          <button type="button" onClick={() => onPoUpload(estimate)} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded border text-xs font-bold bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100">
-            <Upload className="w-3.5 h-3.5" /> {estimate.poFilePath ? "Replace PO" : "Upload PO"}
-          </button>
-        }>
-          Purchase Order
-        </SectionTitle>
-        {estimate.poFilePath ? (
-          <div className="flex items-center gap-3 py-2">
-            <FileText className="w-4 h-4 text-purple-400" />
-            <span className="text-sm font-bold text-slate-700">PO {estimate.poNumber || "—"}</span>
-            <button type="button" onClick={() => openExecutionDocument(estimate.poFilePath!, false, estimate.id, true).catch(() => alert("Purchase Order not found"))} className="ml-auto inline-flex items-center gap-1 px-2.5 py-1.5 rounded border text-xs font-bold bg-purple-50 border-purple-200 text-purple-700 hover:bg-purple-100">
-              <Eye className="w-3.5 h-3.5" /> View PO
-            </button>
-          </div>
-        ) : (
-          <p className="text-xs text-slate-400 py-2">
-            {estimate.poNumber
-              ? `PO number: ${estimate.poNumber} — file not uploaded yet.`
-              : "No PO received yet. PO is optional — execution can proceed without it."
-            }
-          </p>
-        )}
-      </div>
-
-      {/* Aditya Birla Outstation Transport Invoice Reminder */}
-      {compliance.isAblbl && compliance.hasOutstation && (
-        <div className="bg-amber-50/70 border-2 border-amber-300/80 rounded-xl p-5 shadow-sm">
-          <div className="flex items-start justify-between gap-4">
-            <div className="flex items-start gap-3">
-              <div className="p-2 bg-amber-100 rounded-lg text-amber-800 mt-0.5">
-                <Truck className="w-5 h-5" />
-              </div>
-              <div>
-                <div className="flex items-center gap-2">
-                  <h4 className="text-sm font-bold text-amber-900">
-                    Outstation transportation — Transport Invoice Required.
-                  </h4>
-                  <span className={`px-2 py-0.5 rounded text-[11px] font-bold ${
-                    compliance.pendingCount === 0
-                      ? "bg-emerald-100 text-emerald-800 border border-emerald-300"
-                      : "bg-amber-200 text-amber-900 font-extrabold"
-                  }`}>
-                    {compliance.pendingCount === 0 ? "Compliant" : `${compliance.pendingCount} Pending`}
-                  </span>
-                </div>
-                <p className="text-xs text-amber-800 mt-1">
-                  Aditya Birla Lifestyle Brands Limited requires an official supplier Transport Invoice for all outstation deliveries before billing submission. Ordinary LR copies or delivery slips do not fulfill this requirement.
-                </p>
-              </div>
-            </div>
-          </div>
-
-          <div className="mt-4 divide-y divide-amber-200/60 border border-amber-200/80 rounded-lg bg-white overflow-hidden">
-            {compliance.requirements.map(req => {
-              if (req.transportMode !== "outstation") return null;
-              const unclassifiedDocs = transportDocs.filter(d => !isVerifiedTransportInvoice(d));
-              return (
-                <div key={req.storeCode || req.storeName || "main"} className="p-3 flex flex-wrap items-center justify-between gap-3 text-xs">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="font-bold text-slate-800">{req.storeName}</span>
-                      {req.storeCode && <span className="font-mono text-[11px] text-slate-500">({req.storeCode})</span>}
-                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase ${
-                        req.status === "Uploaded"
-                          ? "bg-emerald-100 text-emerald-800"
-                          : req.status === "Pending"
-                          ? "bg-rose-100 text-rose-800"
-                          : "bg-slate-100 text-slate-600"
-                      }`}>
-                        {req.status}
-                      </span>
-                    </div>
-                    {req.transportDetails && (
-                      <p className="text-[11px] text-slate-500 mt-0.5">
-                        Mode: <span className="font-medium text-slate-700 capitalize">{req.transportMode}</span> — {req.transportDetails}
-                        {req.transportAmount ? ` (₹${req.transportAmount.toLocaleString("en-IN")})` : ""}
-                      </p>
-                    )}
-                    {req.invoiceDoc && (
-                      <p className="text-[11px] text-emerald-700 mt-0.5 font-medium flex items-center gap-1">
-                        <CheckCircle2 className="w-3.5 h-3.5" />
-                        Attached: {req.invoiceDoc.originalFileName || req.invoiceDoc.fileName}
-                      </p>
-                    )}
-                  </div>
-
-                  <div className="shrink-0 flex flex-wrap items-center gap-2">
-                    {req.status === "Pending" && unclassifiedDocs.length > 0 && (
-                      <button
-                        type="button"
-                        disabled={classifyingDocId === unclassifiedDocs[0].id}
-                        onClick={() => handleToggleDocClassification(unclassifiedDocs[0], req)}
-                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded border border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 font-bold text-xs transition disabled:opacity-50"
-                        title="Classify already uploaded receipt as Official Supplier Transport Invoice without re-uploading"
-                      >
-                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                        Classify "{unclassifiedDocs[0].originalFileName || 'receipt'}" as Invoice
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      disabled={uploading}
-                      onClick={() => {
-                        setUploadClassification("transport_invoice");
-                        setTargetStoreForInvoice(req);
-                        receiptInputRef.current?.click();
-                      }}
-                      className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded border text-xs font-bold transition ${
-                        req.status === "Uploaded"
-                          ? "bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100"
-                          : "bg-amber-600 text-white border-amber-600 hover:bg-amber-700 shadow-sm"
-                      }`}
-                    >
-                      <Upload className="w-3.5 h-3.5" />
-                      {req.status === "Uploaded" ? "Upload Replacement" : "Upload Transport Invoice"}
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* Transport Receipts */}
+      {/* 2. Transport Receipts */}
       <div className="bg-white border border-slate-200 rounded-xl p-5">
         <SectionTitle action={<span className="text-[10px] font-bold text-slate-400">JPG, JPEG, PNG, PDF · max 10 MB</span>}>
           Transport Receipts ({transportDocs.length})
         </SectionTitle>
+
+        {/* Outstation Transport Requirement Reminder (if applicable) */}
+        {compliance.isAblbl && compliance.hasOutstation && (
+          <div className={`rounded-lg border p-4 mb-4 ${
+            compliance.pendingCount > 0 ? "border-amber-300 bg-amber-50/80" : "border-emerald-200 bg-emerald-50/80"
+          }`}>
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Truck className={`w-4 h-4 ${compliance.pendingCount > 0 ? "text-amber-600" : "text-emerald-600"}`} />
+                <h4 className="text-xs font-bold text-slate-800">
+                  Outstation Transportation — Transport Receipts
+                </h4>
+              </div>
+              <span className={`px-2 py-0.5 rounded text-[11px] font-bold ${
+                compliance.pendingCount === 0
+                  ? "bg-emerald-100 text-emerald-800 border border-emerald-300"
+                  : "bg-amber-100 text-amber-900 border border-amber-300"
+              }`}>
+                {compliance.pendingCount === 0 ? "Uploaded ✓" : `${compliance.pendingCount} Pending`}
+              </span>
+            </div>
+
+            <div className="mt-3 divide-y divide-slate-100 border border-slate-200 rounded-lg bg-white overflow-hidden text-xs">
+              {compliance.requirements.map(req => {
+                if (req.transportMode !== "outstation") return null;
+                return (
+                  <div key={req.storeCode || req.storeName || "main"} className="p-3 flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-slate-800">{req.storeName}</span>
+                        {req.storeCode && <span className="font-mono text-[11px] text-slate-500">({req.storeCode})</span>}
+                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase ${
+                          req.status === "Uploaded"
+                            ? "bg-emerald-100 text-emerald-800"
+                            : "bg-rose-100 text-rose-800"
+                        }`}>
+                          {req.status === "Uploaded" ? "Uploaded ✓" : "Pending"}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        {req.origin} → {req.destination} {req.distanceKm ? `· ${req.distanceKm} KM` : ""} {req.transportAmount ? `· ₹${req.transportAmount.toLocaleString("en-IN")}` : ""}
+                      </p>
+                      {req.status === "Pending" && (
+                        <p className="text-[11px] text-rose-600 font-semibold mt-0.5">
+                          Transport Receipt not attached
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         <div
           ref={receiptZoneRef}
           tabIndex={0}
@@ -1892,11 +1783,7 @@ const DocumentsTab: React.FC<{
             <button
               type="button"
               disabled={uploading}
-              onClick={() => {
-                setUploadClassification("receipt");
-                setTargetStoreForInvoice(null);
-                receiptInputRef.current?.click();
-              }}
+              onClick={() => receiptInputRef.current?.click()}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded border text-xs font-bold bg-white border-slate-200 text-slate-700 hover:bg-slate-100 disabled:opacity-50"
             >
               <Upload className="w-3.5 h-3.5" /> Choose files
@@ -1904,11 +1791,7 @@ const DocumentsTab: React.FC<{
             <button
               type="button"
               disabled={uploading}
-              onClick={() => {
-                setUploadClassification("receipt");
-                setTargetStoreForInvoice(null);
-                receiptCameraInputRef.current?.click();
-              }}
+              onClick={() => receiptCameraInputRef.current?.click()}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded border text-xs font-bold bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100 disabled:opacity-50"
             >
               <Camera className="w-3.5 h-3.5" /> Take photo
@@ -1941,18 +1824,7 @@ const DocumentsTab: React.FC<{
         {pendingReceipts.length > 0 && (
           <div className="mt-4 space-y-2">
             <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-bold text-slate-600">
-              <div className="flex items-center gap-3">
-                <span>{pendingReceipts.length} receipt{pendingReceipts.length === 1 ? "" : "s"} ready</span>
-                <label className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-slate-700 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={uploadClassification === "transport_invoice"}
-                    onChange={e => setUploadClassification(e.target.checked ? "transport_invoice" : "receipt")}
-                    className="rounded border-slate-300 text-amber-600 focus:ring-amber-500"
-                  />
-                  <span>Upload as Official Supplier Transport Invoice</span>
-                </label>
-              </div>
+              <span>{pendingReceipts.length} receipt{pendingReceipts.length === 1 ? "" : "s"} ready</span>
               <button
                 type="button"
                 disabled={uploading}
@@ -1993,63 +1865,126 @@ const DocumentsTab: React.FC<{
         )}
         {transportDocs.length > 0 ? (
           <div className="mt-5 space-y-1.5">
-            {transportDocs.map(doc => {
-              const isInvoice = isVerifiedTransportInvoice(doc);
-              return (
-                <DocRow
-                  key={doc.id}
-                  doc={doc}
-                  token={token}
-                  onDelete={deleteDoc}
-                  classificationBadge={
-                    isInvoice ? (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200 shrink-0">
-                        <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                        Official Supplier Transport Invoice
-                        {doc.storeCode ? <span className="font-mono text-[9px] text-emerald-700">({doc.storeCode})</span> : null}
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium bg-slate-100 text-slate-600 border border-slate-200 shrink-0">
-                        Ordinary Transport Receipt / LR
-                      </span>
-                    )
-                  }
-                  classificationAction={
-                    <div className="shrink-0 flex items-center gap-1">
-                      {isInvoice ? (
-                        <button
-                          type="button"
-                          disabled={classifyingDocId === doc.id}
-                          onClick={() => handleToggleDocClassification(doc)}
-                          title="Reclassify as ordinary transport receipt"
-                          className="px-2 py-0.5 rounded text-[10px] font-semibold text-slate-500 hover:text-slate-800 hover:bg-slate-100 border border-transparent hover:border-slate-200 disabled:opacity-50"
-                        >
-                          {classifyingDocId === doc.id ? "Updating…" : "Reclassify as LR"}
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          disabled={classifyingDocId === doc.id}
-                          onClick={() => handleToggleDocClassification(doc, compliance.requirements.find(r => r.status === "Pending") || null)}
-                          title="Classify this uploaded receipt as Official Supplier Transport Invoice"
-                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 transition shadow-xs disabled:opacity-50"
-                        >
-                          <CheckCircle2 className="w-3 h-3 text-amber-600" />
-                          {classifyingDocId === doc.id ? "Updating…" : "Classify as Supplier Invoice"}
-                        </button>
-                      )}
-                    </div>
-                  }
-                />
-              );
-            })}
+            {transportDocs.map(doc => (
+              <DocRow
+                key={doc.id}
+                doc={doc}
+                token={token}
+                onDelete={deleteDoc}
+              />
+            ))}
           </div>
         ) : (
           <p className="text-xs text-slate-400 py-3">No transport receipts uploaded. Upload courier receipts, LR copies, or dispatch proofs here.</p>
         )}
       </div>
 
-      {/* Other Documents */}
+      {/* 3. Delivery Challans / WCC */}
+      <div className="bg-white border border-slate-200 rounded-xl p-5">
+        <SectionTitle action={
+          <span className="text-xs text-slate-400 font-bold">
+            {allChallans.length} generated · {allSignedDocs.length} signed
+          </span>
+        }>
+          Delivery Challans / WCC ({allChallans.length})
+        </SectionTitle>
+
+        {allChallans.length > 0 || allSignedDocs.length > 0 ? (
+          <div className="space-y-2 mt-2">
+            {allChallans.map(dc => {
+              const dcStoreCode = (dc as any).storeCode || (dc.metadata as any)?.storeCode || "";
+              const dcStoreName = (dc as any).storeName || (dc.metadata as any)?.storeName || (dc.metadata as any)?.title || "Delivery Challan / WCC";
+              const matchingSigned = allSignedDocs.find(
+                d => d.deliveryChallanId === dc.id || (dcStoreCode && d.storeCode && d.storeCode.toLowerCase() === dcStoreCode.toLowerCase())
+              );
+              return (
+                <div key={dc.id} className="flex flex-wrap items-center justify-between gap-3 p-3 rounded-lg border border-slate-200 bg-slate-50/50 hover:bg-slate-50 transition text-xs">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <div className="p-1.5 rounded-md bg-blue-50 text-blue-700">
+                      <FileCheck2 className="w-4 h-4" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-slate-800 font-mono">{dc.dcNumber || `DC #${dc.id}`}</span>
+                        {dcStoreCode && <span className="text-[10px] font-mono text-slate-500">({dcStoreCode})</span>}
+                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${
+                          dc.status === "completed" || dc.status === "signed" ? "bg-emerald-100 text-emerald-800" : "bg-blue-100 text-blue-800"
+                        }`}>
+                          {dc.status || "active"}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-500 mt-0.5 truncate">
+                        {dcStoreName}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 shrink-0">
+                    {matchingSigned && (
+                      <button
+                        type="button"
+                        onClick={() => openExecutionDocument(matchingSigned.filePath, false, estimate.id).catch(() => alert("Signed document not found"))}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded border border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 font-bold text-xs"
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Signed Copy
+                      </button>
+                    )}
+                    {onPreviewWcc && (
+                      <button
+                        type="button"
+                        onClick={() => onPreviewWcc(dc)}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded border border-slate-200 bg-white text-slate-700 hover:bg-slate-100 font-bold text-xs"
+                      >
+                        <Eye className="w-3.5 h-3.5" /> View / Print
+                      </button>
+                    )}
+                    {onOpenWcc && (
+                      <button
+                        type="button"
+                        onClick={() => onOpenWcc(dc)}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded border border-slate-200 bg-white text-slate-700 hover:bg-slate-100 font-bold text-xs"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" /> Open
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="text-xs text-slate-400 py-2">No delivery challans or WCCs generated yet.</p>
+        )}
+      </div>
+
+      {/* 4. Purchase Order */}
+      <div className="bg-white border border-slate-200 rounded-xl p-5">
+        <SectionTitle action={
+          <button type="button" onClick={() => onPoUpload(estimate)} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded border text-xs font-bold bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100">
+            <Upload className="w-3.5 h-3.5" /> {estimate.poFilePath ? "Replace PO" : "Upload PO"}
+          </button>
+        }>
+          Purchase Order
+        </SectionTitle>
+        {estimate.poFilePath ? (
+          <div className="flex items-center gap-3 py-2">
+            <FileText className="w-4 h-4 text-purple-400" />
+            <span className="text-sm font-bold text-slate-700">PO {estimate.poNumber || "—"}</span>
+            <button type="button" onClick={() => openExecutionDocument(estimate.poFilePath!, false, estimate.id, true).catch(() => alert("Purchase Order not found"))} className="ml-auto inline-flex items-center gap-1 px-2.5 py-1.5 rounded border text-xs font-bold bg-purple-50 border-purple-200 text-purple-700 hover:bg-purple-100">
+              <Eye className="w-3.5 h-3.5" /> View PO
+            </button>
+          </div>
+        ) : (
+          <p className="text-xs text-slate-400 py-2">
+            {estimate.poNumber
+              ? `PO number: ${estimate.poNumber} — file not uploaded yet.`
+              : "No PO received yet. PO is optional — execution can proceed without it."
+            }
+          </p>
+        )}
+      </div>
+
+      {/* 5. Other Documents */}
       <div className="bg-white border border-slate-200 rounded-xl p-5">
         <SectionTitle action={
           <label className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded border text-xs font-bold cursor-pointer transition ${uploading ? "opacity-60 pointer-events-none" : "bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100"}`}>
@@ -2641,6 +2576,8 @@ const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({
               products={products}
               onPoUpload={onPoUpload}
               onRefresh={refresh}
+              onOpenWcc={onOpenWcc}
+              onPreviewWcc={onPreviewWcc}
             />
           )}
           {activeTab === "invoice" && (

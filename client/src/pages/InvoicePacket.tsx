@@ -634,6 +634,21 @@ const InvoicePacketPage: React.FC = () => {
       );
       if (!hasPhoto) storeMissing.push("Installation Photos");
 
+      // Check transport receipt for this store if outstation transport is required
+      const transReq = transportCompliance?.requirements?.find(r => {
+        if (r.storeCode && scLower && r.storeCode.toLowerCase() === scLower) return true;
+        if (r.storeId && store.storeId && r.storeId === store.storeId) return true;
+        return false;
+      });
+      if (transReq && transReq.transportMode === "outstation" && transReq.status === "Pending") {
+        const transDetails = [
+          transReq.origin && transReq.destination ? `${transReq.origin} → ${transReq.destination}` : transReq.destination ? `Destination: ${transReq.destination}` : null,
+          transReq.distanceKm ? `${transReq.distanceKm} KM` : null,
+          transReq.transportAmount ? `₹${transReq.transportAmount.toLocaleString("en-IN")}` : null,
+        ].filter(Boolean).join(" · ");
+        storeMissing.push(`Transport Receipt not attached${transDetails ? ` (${transDetails})` : ""}`);
+      }
+
       if (storeMissing.length) {
         gaps.push({ store: storeLabel, missing: storeMissing });
       }
@@ -934,7 +949,7 @@ const dataUrlToBytes = (dataUrl: string): Uint8Array => {
     return new Blob([pdfBytes as BlobPart], { type: "application/pdf" });
   };
 
-  const handleUploadTransportInvoice = async (file: File) => {
+  const handleUploadTransportReceipt = async (file: File) => {
     if (!uploadTargetStore || !packet?.estimate?.id) return;
     const estId = packet.estimate.id;
     const sc = uploadTargetStore.storeCode || "";
@@ -953,10 +968,9 @@ const dataUrlToBytes = (dataUrl: string): Uint8Array => {
         if (sc) fd.append("storeCode", sc);
         fd.append("documentType", "transport_receipt");
         fd.append("metadata", JSON.stringify({
-          transportClassification: "transport_invoice",
-          documentCategory: "transport_invoice",
           storeCode: sc,
           storeName: uploadTargetStore.storeName,
+          storeId: uploadTargetStore.storeId,
         }));
         const res = await fetch("/api/operations/execution-documents/upload", {
           method: "POST",
@@ -981,48 +995,26 @@ const dataUrlToBytes = (dataUrl: string): Uint8Array => {
         fileSize: file.size || null,
         uploadedVia: "invoice_packet",
         metadata: {
-          transportClassification: "transport_invoice",
-          documentCategory: "transport_invoice",
-          verified: true,
           storeName: uploadTargetStore.storeName,
           storeCode: sc,
+          storeId: uploadTargetStore.storeId,
           uploadedAt: new Date().toISOString(),
         },
         companyId: packet.estimate.companyId || 1,
       });
 
-      setGenerationNotice(`Transport invoice for ${uploadTargetStore.storeName} uploaded successfully.`);
+      setGenerationNotice(`Transport receipt for ${uploadTargetStore.storeName} uploaded successfully.`);
       setRetryNonce(n => n + 1);
     } catch (err: any) {
-      console.error("[transport-invoice-upload]", err);
-      alert("Failed to upload transport invoice: " + (err?.message || err));
+      console.error("[transport-receipt-upload]", err);
+      alert("Failed to upload transport receipt: " + (err?.message || err));
     } finally {
       setUploadingTransportStoreCode(null);
       setUploadTargetStore(null);
     }
   };
 
-  const handleClassifyExistingReceiptInPacket = async (doc: any, req: any) => {
-    try {
-      const sc = req.storeCode || "";
-      await updateExecutionDocumentMetadata(token, doc.id, {
-        storeCode: sc || doc.storeCode || null,
-        metadata: {
-          ...(doc.metadata || {}),
-          transportClassification: "transport_invoice",
-          documentCategory: "transport_invoice",
-          storeCode: sc,
-          storeName: req.storeName,
-        },
-      });
-      setGenerationNotice(`Classified ${doc.originalFileName || "receipt"} as Official Supplier Transport Invoice.`);
-      setRetryNonce(n => n + 1);
-    } catch (err: any) {
-      alert("Failed to classify receipt: " + (err?.message || err));
-    }
-  };
-
-  const handleTriggerUploadTransportInvoice = (req: any) => {
+  const handleTriggerUploadTransportReceipt = (req: any) => {
     setUploadTargetStore({
       storeId: req.storeId,
       storeCode: req.storeCode,
@@ -1321,7 +1313,7 @@ const dataUrlToBytes = (dataUrl: string): Uint8Array => {
                 accept=".jpg,.jpeg,.png,.pdf,image/jpeg,image/png,application/pdf"
                 className="hidden"
                 onChange={e => {
-                  if (e.target.files?.[0]) handleUploadTransportInvoice(e.target.files[0]);
+                  if (e.target.files?.[0]) handleUploadTransportReceipt(e.target.files[0]);
                   e.target.value = "";
                 }}
               />
@@ -1363,9 +1355,9 @@ const dataUrlToBytes = (dataUrl: string): Uint8Array => {
                 </div>
               )}
 
-              {/* Aditya Birla Outstation Transport Invoice Reminder */}
+              {/* Outstation Transport Receipts Reminder */}
               {transportCompliance && transportCompliance.hasOutstation && (
-                <div className={`glass-panel p-5 border rounded-xl print:hidden ${
+                <div className={`glass-panel p-4 border rounded-xl print:hidden ${
                   transportCompliance.pendingCount > 0 ? "border-amber-300 bg-amber-50/90" : "border-emerald-200 bg-emerald-50/80"
                 }`}>
                   <div className="flex items-start gap-3">
@@ -1373,72 +1365,55 @@ const dataUrlToBytes = (dataUrl: string): Uint8Array => {
                     <div className="flex-1">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <h3 className={`font-bold text-sm ${transportCompliance.pendingCount > 0 ? "text-amber-950" : "text-emerald-950"}`}>
-                          Outstation transportation — Transport Invoice Required.
+                          Outstation Transportation — Transport Receipts
                         </h3>
                         <span className={`px-2 py-0.5 rounded text-xs font-bold ${
                           transportCompliance.pendingCount > 0 ? "bg-amber-100 text-amber-800 border border-amber-300" : "bg-emerald-100 text-emerald-800 border border-emerald-300"
                         }`}>
-                          {transportCompliance.pendingCount > 0 ? `${transportCompliance.pendingCount} Pending` : "All Uploaded ✓"}
+                          {transportCompliance.pendingCount > 0 ? `${transportCompliance.pendingCount} Pending` : "Uploaded ✓"}
                         </span>
                       </div>
-                      <p className="text-xs text-slate-600 mt-1 mb-3">
-                        Aditya Birla Lifestyle Brands Limited project requirement: a verified supplier transport invoice must be provided for non-local / outstation logistics.
-                      </p>
 
-                      <div className="space-y-2">
+                      <div className="mt-3 space-y-2">
                         {transportCompliance.requirements.map((req, idx) => {
                           if (req.transportMode !== "outstation") return null;
                           return (
                             <div key={idx} className="flex flex-wrap items-center justify-between gap-3 p-3 rounded-lg bg-white/80 border border-slate-200 text-xs">
                               <div className="space-y-0.5 min-w-[200px]">
                                 <div className="font-bold text-slate-800">{req.storeName} {req.storeCode ? `(${req.storeCode})` : ""}</div>
-                                <div className="text-slate-500">{req.transportDetails}</div>
-                                {req.transportAmount ? <div className="text-slate-700 font-semibold">{formatCurrency(req.transportAmount)}</div> : null}
-                              </div>
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <span className={`px-2 py-1 rounded font-bold text-xs ${
-                                    req.status === "Uploaded" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-800"
-                                  }`}>
-                                    {req.status}
-                                  </span>
-                                  {req.status === "Pending" ? (
-                                    <>
-                                      {((packet?.executionDocuments || []).filter((d: any) =>
-                                        (d.documentType === "transport_receipt" || d.documentType === "transport_invoice") &&
-                                        d.status !== "deleted" &&
-                                        !isVerifiedTransportInvoice(d)
-                                      )).map((rec: any) => (
-                                        <button
-                                          key={rec.id}
-                                          type="button"
-                                          onClick={() => handleClassifyExistingReceiptInPacket(rec, req)}
-                                          className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded font-bold text-xs flex items-center gap-1 shadow-xs transition"
-                                          title="Classify this already uploaded file as Official Supplier Transport Invoice without re-uploading"
-                                        >
-                                          <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                                          Classify "{rec.originalFileName || 'receipt'}" as Invoice
-                                        </button>
-                                      ))}
-                                      <button
-                                        type="button"
-                                        onClick={() => handleTriggerUploadTransportInvoice(req)}
-                                        disabled={uploadingTransportStoreCode !== null}
-                                        className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded font-bold text-xs flex items-center gap-1 shadow-sm transition"
-                                      >
-                                        <Upload className="w-3 h-3" /> {uploadingTransportStoreCode === (req.storeCode || "project") ? "Uploading…" : "Upload Transport Invoice"}
-                                      </button>
-                                    </>
-                                  ) : req.invoiceDoc?.filePath ? (
-                                    <a
-                                      href={req.invoiceDoc.filePath}
-                                      target="_blank"
-                                      rel="noreferrer"
-                                      className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded font-semibold text-xs inline-flex items-center gap-1"
-                                    >
-                                      <FileText className="w-3 h-3" /> View Invoice
-                                    </a>
-                                  ) : null}
+                                <div className="text-slate-600 font-medium">
+                                  {req.origin} → {req.destination} {req.distanceKm ? `· ${req.distanceKm} KM` : ""} {req.transportAmount ? `· ₹${req.transportAmount.toLocaleString("en-IN")}` : ""}
                                 </div>
+                                {req.status === "Pending" && (
+                                  <div className="text-rose-600 font-semibold mt-0.5">Transport Receipt not attached</div>
+                                )}
+                              </div>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className={`px-2 py-1 rounded font-bold text-xs ${
+                                  req.status === "Uploaded" ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"
+                                }`}>
+                                  {req.status === "Uploaded" ? "Uploaded ✓" : "Pending"}
+                                </span>
+                                {req.status === "Pending" ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleTriggerUploadTransportReceipt(req)}
+                                    disabled={uploadingTransportStoreCode !== null}
+                                    className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded font-bold text-xs flex items-center gap-1 shadow-sm transition"
+                                  >
+                                    <Upload className="w-3 h-3" /> {uploadingTransportStoreCode === (req.storeCode || "project") ? "Uploading…" : "Upload Receipt"}
+                                  </button>
+                                ) : (req.receiptDoc?.filePath || req.invoiceDoc?.filePath) ? (
+                                  <a
+                                    href={req.receiptDoc?.filePath || req.invoiceDoc?.filePath}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded font-semibold text-xs inline-flex items-center gap-1"
+                                  >
+                                    <FileText className="w-3 h-3" /> View Receipt
+                                  </a>
+                                ) : null}
+                              </div>
                             </div>
                           );
                         })}

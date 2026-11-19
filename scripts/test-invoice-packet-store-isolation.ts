@@ -65,8 +65,8 @@ async function runTests() {
   assert(!invoiceScoped.some(s => s.storeId === 73), "Invoice scoping must exclude store 73");
   console.log("✓ Test 2 passed: Invoice correctly scoped to Goa only.");
 
-  // 3. Transport Compliance Logic
-  console.log("\n[TEST 3] ABLBL Outstation Transport Compliance Evaluation");
+  // 3. Transport Compliance Logic — Single Document Rule
+  console.log("\n[TEST 3] ABLBL Outstation Transport Compliance Evaluation — Single Document Rule");
   const ablblEstimate = {
     ...phantomHeaderEstimate,
     clientFormat: "ablbl_standard",
@@ -79,62 +79,92 @@ async function runTests() {
     clientFormat: "ablbl_standard",
   };
 
-  // Initially without transport invoice
-  const complianceBefore = evaluateTransportCompliance(
+  // 3A: Receipt absent -> Pending
+  const complianceNoDocs = evaluateTransportCompliance(
     ablblEstimate,
     phantomItems,
-    [
-      { id: 10, documentType: "transport_receipt", originalFileName: "lr_copy.pdf" }, // ordinary LR copy
-    ],
+    [],
     scopedStores,
     clientRecord
   );
 
-  assert.equal(complianceBefore.isAblbl, true, "Must detect ABLBL project");
-  assert.equal(complianceBefore.hasOutstation, true, "Must detect outstation transport");
-  assert.equal(complianceBefore.pendingCount, 1, "Must flag 1 pending transport invoice");
-  assert.equal(complianceBefore.requirements[0].status, "Pending", "Status must be Pending");
-  console.log("✓ Test 3A passed: Pending status flagged when only ordinary transport receipt exists.");
+  assert.equal(complianceNoDocs.isAblbl, true, "Must detect ABLBL project");
+  assert.equal(complianceNoDocs.hasOutstation, true, "Must detect outstation transport");
+  assert.equal(complianceNoDocs.pendingCount, 1, "Must flag 1 pending transport receipt");
+  assert.equal(complianceNoDocs.requirements[0].status, "Pending", "Status must be Pending");
+  assert.equal(complianceNoDocs.requirements[0].distanceKm, 450, "Distance must be 450 KM");
+  console.log("✓ Test 3A passed: Receipt absent -> Pending status correctly flagged with KM.");
 
-  // Now with metadata classified transport receipt (No separate document type needed!)
-  const complianceClassified = evaluateTransportCompliance(
+  // 3B: Active transport receipt uploaded -> Uploaded
+  const complianceUploaded = evaluateTransportCompliance(
     ablblEstimate,
     phantomItems,
     [
-      {
-        id: 10,
-        documentType: "transport_receipt",
-        originalFileName: "lr_copy.pdf",
-        metadata: { transportClassification: "lr" }
-      },
       {
         id: 11,
-        documentType: "transport_receipt", // Existing transport_receipt record!
+        documentType: "transport_receipt",
         originalFileName: "1795074465298-image.png",
         storeCode: "101387",
-        metadata: { transportClassification: "transport_invoice" } // Classified!
+        status: "active",
       },
     ],
     scopedStores,
     clientRecord
   );
 
-  assert.equal(complianceClassified.pendingCount, 0, "Classified transport_receipt must satisfy compliance");
-  assert.equal(complianceClassified.uploadedCount, 1, "Must have 1 uploaded transport invoice");
-  assert.equal(complianceClassified.requirements[0].status, "Uploaded");
-  assert.equal(isVerifiedTransportInvoice({
-    documentType: "transport_receipt",
-    metadata: { transportClassification: "transport_invoice" }
-  }), true, "Classified metadata must be recognized as verified transport invoice");
-  assert.equal(isVerifiedTransportInvoice({
-    documentType: "transport_receipt",
-    metadata: { transportClassification: "lr" }
-  }), false, "Ordinary LR metadata must NOT be recognized as invoice");
-  assert.equal(isVerifiedTransportInvoice({
-    documentType: "transport_receipt",
-    metadata: {}
-  }), false, "Empty metadata transport_receipt must NOT be recognized as invoice");
-  console.log("✓ Test 3B passed: Metadata-classified transport_receipt achieves full compliance without parallel doc systems.");
+  assert.equal(complianceUploaded.pendingCount, 0, "Active transport_receipt must satisfy requirement");
+  assert.equal(complianceUploaded.uploadedCount, 1, "Must have 1 uploaded transport receipt");
+  assert.equal(complianceUploaded.requirements[0].status, "Uploaded");
+  console.log("✓ Test 3B passed: Active transport receipt uploaded -> Uploaded status confirmed.");
+
+  // 3C: Receipt deleted -> Pending
+  const complianceDeleted = evaluateTransportCompliance(
+    ablblEstimate,
+    phantomItems,
+    [
+      {
+        id: 11,
+        documentType: "transport_receipt",
+        originalFileName: "1795074465298-image.png",
+        storeCode: "101387",
+        status: "deleted",
+      },
+    ],
+    scopedStores,
+    clientRecord
+  );
+
+  assert.equal(complianceDeleted.pendingCount, 1, "Deleted receipt must return status to Pending");
+  assert.equal(complianceDeleted.requirements[0].status, "Pending");
+  console.log("✓ Test 3C passed: Receipt deleted -> Pending status correctly verified.");
+
+  // 3D: Receipt replaced -> Uploaded
+  const complianceReplaced = evaluateTransportCompliance(
+    ablblEstimate,
+    phantomItems,
+    [
+      {
+        id: 11,
+        documentType: "transport_receipt",
+        originalFileName: "old_receipt.png",
+        storeCode: "101387",
+        status: "replaced",
+      },
+      {
+        id: 12,
+        documentType: "transport_receipt",
+        originalFileName: "replacement_receipt.pdf",
+        storeCode: "101387",
+        status: "active",
+      },
+    ],
+    scopedStores,
+    clientRecord
+  );
+
+  assert.equal(complianceReplaced.pendingCount, 0, "Replaced active receipt must satisfy requirement");
+  assert.equal(complianceReplaced.requirements[0].status, "Uploaded");
+  console.log("✓ Test 3D passed: Receipt replaced -> Uploaded status confirmed.");
 
   // 4. Test live DB records if DB connection is available
   if (connectionString) {
@@ -168,20 +198,22 @@ async function runTests() {
         assert(!liveScoped.some(s => s.storeId === 73 || s.storeName.toLowerCase().includes("shagun")), "Must NOT include Shagun Pune!");
         console.log("✓ Test 4 passed: Live DB records verify that Shagun Pune is 100% excluded and only Goa is scoped.");
 
-        // Verify Requirement 10: 1795074465298-image.png appears only once and is compliant
-        console.log("\n[TEST 5] Live DB Verification: 1795074465298-image.png uniqueness & compliance");
+        // Verify Requirement 4: Doc 2222 is preserved, active, unique, and compliant
+        console.log("\n[TEST 5] Live DB Verification: Goa receipt record 2222 uniqueness & compliance");
         const docRes = await dbClient.query(`
           SELECT * FROM execution_documents 
-          WHERE (file_path LIKE '%1795074465298%' OR original_file_name LIKE '%1795074465298%')
+          WHERE estimate_id = 218 AND (document_type = 'transport_receipt' OR document_type = 'transport')
             AND status = 'active'
         `);
-        console.log("Active records matching 1795074465298-image.png count:", docRes.rows.length);
-        assert.equal(docRes.rows.length, 1, "Must have exactly ONE active record for 1795074465298-image.png");
+        console.log("Active transport records for Estimate 218 count:", docRes.rows.length);
+        assert.equal(docRes.rows.length, 1, "Must have exactly ONE active record for Goa transport receipt");
 
         const activeDoc = docRes.rows[0];
+        assert.equal(activeDoc.id, 2222, "Active Goa receipt must be document record 2222");
         assert.equal(activeDoc.document_type, "transport_receipt", "Must use standard transport_receipt document type");
-        assert(isVerifiedTransportInvoice(activeDoc), "1795074465298-image.png must be recognized as compliant Official Supplier Transport Invoice");
-        console.log("✓ Test 5 passed: 1795074465298-image.png is unique (single active record), standard transport_receipt, and fully compliant.");
+        assert.equal(activeDoc.store_code, "101387", "Must be scoped to store 101387 (Goa)");
+        assert(isVerifiedTransportInvoice(activeDoc), "Goa receipt must be recognized as active compliant transport receipt");
+        console.log("✓ Test 5 passed: Document 2222 is active, single record (no duplicate), standard transport_receipt, and fully compliant.");
       }
       await dbClient.end();
     } catch (err: any) {
