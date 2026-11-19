@@ -183,10 +183,27 @@ export async function exportEstimateToExcel(
   const sellerTerms = termsRaw.split(/\n+/).map((l: string) => l.trim()).filter(Boolean);
 
   // Billing / shipping
-  const billingName = s(estimate.billingLegalNameSnapshot || clientName || "");
-  const billingAddr = s(estimate.billingAddressSnapshot || "");
-  const billingGstin = s(estimate.billingGstinSnapshot || estimate.gstin || "");
-  const billingStateCode = s(estimate.billingStateCodeSnapshot || estimate.stateCode || "");
+  const billingRaw = s(estimate.billingTo || "");
+  const billingLines = billingRaw.split("\n").map((l: string) => l.trim()).filter(Boolean);
+  const firstLineHasPrefix = /^M\/S\s*:?\s*/i.test(billingLines[0] || "");
+  const firstLineName = (billingLines[0] || "").replace(/^M\/S\s*:?\s*/i, "").trim();
+  const snapName = s(estimate.billingLegalNameSnapshot || "");
+
+  let billingName = snapName;
+  if (!billingName) {
+    billingName = firstLineName || clientName || "";
+  } else if (firstLineHasPrefix && firstLineName && snapName && !firstLineName.toLowerCase().includes(snapName.toLowerCase()) && !snapName.toLowerCase().includes(firstLineName.toLowerCase())) {
+    billingName = firstLineName;
+  }
+
+  const snapAddr = s(estimate.billingAddressSnapshot || "");
+  let billingAddr = snapAddr;
+  if (!billingAddr || (billingLines.length > 1 && snapAddr && !billingRaw.includes(snapAddr))) {
+    billingAddr = billingLines.length > 1 ? billingLines.slice(1).join("\n") : (snapAddr || "");
+  }
+
+  const billingGstin = s(estimate.gstin || estimate.billingGstinSnapshot || "");
+  const billingStateCode = s(estimate.stateCode || estimate.billingStateCodeSnapshot || "");
 
   const shippingRaw = s(estimate.shippingAddressSnapshot || estimate.shippingTo || "");
   const shippingHasOwn = shippingRaw.trim().length > 0;

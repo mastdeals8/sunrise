@@ -1981,6 +1981,21 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
       );
       const estimateGrandTotal = estimateSubtotal + estimateTax;
 
+      // Resolve selected billing profile if any to snapshot accurate franchise billing details
+      let resolvedBp = estBillingProfileId
+        ? (clientBillingProfilesList.find(p => String(p.id) === String(estBillingProfileId))
+           || billingProfiles.find(p => String(p.id) === String(estBillingProfileId)))
+        : null;
+
+      if (!resolvedBp && estBillingProfileId && estClientId) {
+        try {
+          const bpList = await apiFetchBillingProfiles(token, Number(estClientId));
+          resolvedBp = (bpList || []).find((p: any) => String(p.id) === String(estBillingProfileId));
+        } catch (e) {
+          console.warn("[save] failed to fetch billing profile:", e);
+        }
+      }
+
       const estimatePayload = {
         estimateNumber: estNumber,
         // On create, default to today if empty. On update, omit the field
@@ -2007,11 +2022,11 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
         clientFormat: isAbfrl ? "ABLBL" : (profile.code === "RETAIL_SINGLE_STORE" ? "RETAIL_SINGLE_STORE" : normalizeFormatMode(estFormat)),
         formatProfileCode: profile.code,
         subject: estSubject || null,
-        billingTo: estBillingTo || null,
-        shippingTo: estShippingTo || null,
-        gstin: estGstin || null,
-        pan: estPan || null,
-        stateCode: estStateCode || null,
+        billingTo: estBillingTo || (resolvedBp ? [resolvedBp.legalCompanyName ? `M/S : ${resolvedBp.legalCompanyName}` : "", resolvedBp.billingAddress || ""].filter(Boolean).join("\n") || resolvedBp.legalCompanyName : null),
+        shippingTo: estShippingTo || (resolvedBp?.shippingAddress || null),
+        gstin: estGstin || resolvedBp?.gstin || null,
+        pan: estPan || resolvedBp?.pan || null,
+        stateCode: estStateCode || resolvedBp?.stateCode || null,
         vendorCode: estVendorCode || null,
         gstType: estGstType,
         packingPercent: Number(estPacking) || 0,
@@ -2019,6 +2034,12 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
         transportAmount: Number(estTransport) || 0,
         storeGrouping: isAbfrl && Object.keys(storeGrouping).length > 0 ? storeGrouping : null,
         billingProfileId: estBillingProfileId ? Number(estBillingProfileId) : null,
+        billingLegalNameSnapshot: resolvedBp ? (resolvedBp.legalCompanyName || null) : null,
+        billingGstinSnapshot: resolvedBp ? (resolvedBp.gstin || null) : null,
+        billingStateSnapshot: resolvedBp ? (resolvedBp.state || null) : null,
+        billingStateCodeSnapshot: resolvedBp ? (resolvedBp.stateCode || null) : null,
+        billingAddressSnapshot: resolvedBp ? (resolvedBp.billingAddress || null) : null,
+        shippingAddressSnapshot: resolvedBp ? (resolvedBp.shippingAddress || null) : (estShippingTo || null),
         // CAPEX/SELEX uses the existing persisted project-type field. Normal
         // estimates may record it without inheriting ABFRL validation/rules.
         abfrlProjectType: estAbfrlProjectType || null,
@@ -2091,6 +2112,9 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
           setEstimates(prev =>
             prev.map(e => (e.id === editingEstimateId ? { ...e, ...patched } : e))
           );
+          if (selectedEstimate && selectedEstimate.id === editingEstimateId) {
+            setSelectedEstimate(prev => prev ? ({ ...prev, ...patched } as Estimate) : null);
+          }
         }
 
         // When "Save" (or Ctrl+S / autosave) is used: stay in editor!
@@ -2190,30 +2214,24 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
       setProjectDashboardInitialTab(initialTab);
     }
     // Overlay the LIVE GST Profile data onto the estimate when one is linked,
-    // so View Estimate / Print / Excel reflect the latest GST Profile edits
-    // (e.g. the new structured multi-line address). The DB row keeps its
-    // historical snapshot fields untouched.
+    // so View Estimate / Print / Excel reflect the current estimate's saved GST profile.
     let liveEst: Estimate = est;
-    // In Bolt mode skip the live GST profile overlay — the saved snapshot fields
-    // on the estimate are used directly, which is always the safe fallback.
-    if (!isBoltMode && (est as any).billingProfileId && (est as any).clientId) {
+    if ((est as any).billingProfileId && (est as any).clientId) {
       try {
-        const bpRes = await fetch(`/api/operations/clients/${(est as any).clientId}/billing-profiles`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        if (bpRes.ok) {
-          const list: any[] = await bpRes.json();
-          const bp = list.find(p => p.id === (est as any).billingProfileId);
+        const list = await apiFetchBillingProfiles(token, Number((est as any).clientId));
+        if (Array.isArray(list)) {
+          const bp = list.find((p: any) => Number(p.id) === Number((est as any).billingProfileId));
           if (bp) {
             liveEst = {
               ...est,
+              billingProfileId: bp.id,
               billingLegalNameSnapshot: bp.legalCompanyName,
               billingGstinSnapshot: bp.gstin,
               billingStateSnapshot: bp.state,
               billingStateCodeSnapshot: bp.stateCode,
               billingAddressSnapshot: bp.billingAddress,
               shippingAddressSnapshot: bp.shippingAddress || (est as any).shippingAddressSnapshot,
-              billingTo: bp.legalCompanyName,
+              billingTo: [bp.legalCompanyName ? `M/S : ${bp.legalCompanyName}` : "", bp.billingAddress || ""].filter(Boolean).join("\n") || bp.legalCompanyName,
               gstin: bp.gstin,
               pan: bp.pan || (est as any).pan,
               stateCode: bp.stateCode,

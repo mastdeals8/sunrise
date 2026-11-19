@@ -3395,7 +3395,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           estimate.billingAddressSnapshot = bp.billingAddress;
           estimate.shippingAddressSnapshot = bp.shippingAddress;
 
-          estimate.billingTo = bp.legalCompanyName;
+          if (!estimate.billingTo || estimate.billingTo === bp.legalCompanyName) {
+            estimate.billingTo = [bp.legalCompanyName ? `M/S : ${bp.legalCompanyName}` : "", bp.billingAddress || ""].filter(Boolean).join("\n") || bp.legalCompanyName;
+          }
           estimate.gstin = bp.gstin;
           estimate.pan = bp.pan || estimate.pan;
           estimate.stateCode = bp.stateCode;
@@ -3529,11 +3531,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
           updates.billingAddressSnapshot = bp.billingAddress;
           updates.shippingAddressSnapshot = bp.shippingAddress;
 
-          updates.billingTo = bp.legalCompanyName;
+          if (!updates.billingTo || updates.billingTo === bp.legalCompanyName) {
+            updates.billingTo = [bp.legalCompanyName ? `M/S : ${bp.legalCompanyName}` : "", bp.billingAddress || ""].filter(Boolean).join("\n") || bp.legalCompanyName;
+          }
           updates.gstin = bp.gstin;
           updates.pan = bp.pan || updates.pan;
           updates.stateCode = bp.stateCode;
         }
+      } else if (updates.billingProfileId === null) {
+        updates.billingLegalNameSnapshot = null;
+        updates.billingGstinSnapshot = null;
+        updates.billingStateSnapshot = null;
+        updates.billingStateCodeSnapshot = null;
+        updates.billingAddressSnapshot = null;
+        updates.shippingAddressSnapshot = null;
       }
 
       // Re-derive gstType when state changes and the caller didn't explicitly
@@ -3910,21 +3921,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // --- Billing / shipping parsing (mirrors client preview) ---
       const billingRaw = estimate.billingTo || "";
       const billingLines = billingRaw.split("\n").map(s => s.trim()).filter(Boolean);
+      const firstLineHasPrefix = /^M\/S\s*:?\s*/i.test(billingLines[0] || "");
+      const firstLineName = (billingLines[0] || "").replace(/^M\/S\s*:?\s*/i, "").trim();
       const billingNameSnap = estimate.billingLegalNameSnapshot || "";
       const billingAddrSnap = estimate.billingAddressSnapshot || "";
       let billingName = billingNameSnap;
-      let billingAddress = billingAddrSnap;
       if (!billingName) {
-        const first = (billingLines[0] || "").replace(/^M\/S\s*:?\s*/i, "").trim();
-        billingName = first || client?.name || "";
+        billingName = firstLineName || client?.name || "";
+      } else if (firstLineHasPrefix && firstLineName && billingNameSnap && !firstLineName.toLowerCase().includes(billingNameSnap.toLowerCase()) && !billingNameSnap.toLowerCase().includes(firstLineName.toLowerCase())) {
+        billingName = firstLineName;
       }
-      if (!billingAddress) {
+      let billingAddress = billingAddrSnap;
+      if (!billingAddress || (billingLines.length > 1 && billingAddrSnap && !billingRaw.includes(billingAddrSnap))) {
         if (billingLines.length > 1) billingAddress = billingLines.slice(1).join("\n");
         else if (billingNameSnap && billingRaw && billingRaw !== billingNameSnap) billingAddress = billingRaw;
         else billingAddress = client?.address || "";
       }
-      const billingGstin = estimate.billingGstinSnapshot || estimate.gstin || client?.gstNumber || "";
-      const billingStateCode = estimate.billingStateCodeSnapshot || estimate.stateCode || "";
+      const billingGstin = estimate.gstin || estimate.billingGstinSnapshot || client?.gstNumber || "";
+      const billingStateCode = estimate.stateCode || estimate.billingStateCodeSnapshot || "";
       const billingPan = estimate.pan || client?.pan || "";
 
       const shippingRaw = estimate.shippingAddressSnapshot || estimate.shippingTo || "";

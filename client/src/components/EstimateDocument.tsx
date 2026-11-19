@@ -81,15 +81,19 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
 
   const billingRaw = est.billingTo || "";
   const billingLines = billingRaw.split("\n").map(s => s.trim()).filter(Boolean);
+  const firstLineHasPrefix = /^M\/S\s*:?\s*/i.test(billingLines[0] || "");
+  const firstLineName = (billingLines[0] || "").replace(/^M\/S\s*:?\s*/i, "").trim();
   const billingNameSnap = est.billingLegalNameSnapshot || "";
   const billingAddrSnap = est.billingAddressSnapshot || "";
   let billingName = billingNameSnap;
-  let billingAddress = billingAddrSnap;
   if (!billingName) {
-    const first = (billingLines[0] || "").replace(/^M\/S\s*:?\s*/i, "").trim();
-    billingName = first || targetClient?.name || "";
+    billingName = firstLineName || targetClient?.name || "";
+  } else if (firstLineHasPrefix && firstLineName && billingNameSnap && !firstLineName.toLowerCase().includes(billingNameSnap.toLowerCase()) && !billingNameSnap.toLowerCase().includes(firstLineName.toLowerCase())) {
+    // If explicit M/S in billingTo differs from snapshot (e.g. after duplicating an estimate and changing GST profile), use explicit profile name
+    billingName = firstLineName;
   }
-  if (!billingAddress) {
+  let billingAddress = billingAddrSnap;
+  if (!billingAddress || (billingLines.length > 1 && billingAddrSnap && !billingRaw.includes(billingAddrSnap))) {
     if (billingLines.length > 1) {
       billingAddress = billingLines.slice(1).join("\n");
     } else if (billingNameSnap && billingRaw && billingRaw !== billingNameSnap) {
@@ -98,8 +102,8 @@ const EstimateDocument: React.FC<EstimateDocumentProps> = ({
       billingAddress = targetClient?.address || "";
     }
   }
-  const billingGstin = est.billingGstinSnapshot || est.gstin || targetClient?.gstNumber || "";
-  const billingStateCode = est.billingStateCodeSnapshot || est.stateCode || "";
+  const billingGstin = est.gstin || est.billingGstinSnapshot || targetClient?.gstNumber || "";
+  const billingStateCode = est.stateCode || est.billingStateCodeSnapshot || "";
   const billingPan = est.pan || targetClient?.pan || "";
 
   // Shipping: if user typed shipping text, parse name+address from it.

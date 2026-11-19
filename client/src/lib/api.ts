@@ -1962,6 +1962,43 @@ async function edgeFetch(
 
 // ─── Estimates ────────────────────────────────────────────────────────────────
 
+async function populateBillingSnapshotsIfNeeded(estObj: Record<string, unknown>) {
+  if (estObj.billingProfileId !== undefined) {
+    if (estObj.billingProfileId && !estObj.billingLegalNameSnapshot) {
+      try {
+        const { data: bp } = await supabase
+          .from("client_billing_profiles")
+          .select("*")
+          .eq("id", Number(estObj.billingProfileId))
+          .maybeSingle();
+        if (bp) {
+          estObj.billingLegalNameSnapshot = bp.legal_company_name;
+          estObj.billingGstinSnapshot = bp.gstin;
+          estObj.billingStateSnapshot = bp.state;
+          estObj.billingStateCodeSnapshot = bp.state_code;
+          estObj.billingAddressSnapshot = bp.billing_address;
+          estObj.shippingAddressSnapshot = bp.shipping_address;
+          if (!estObj.billingTo) {
+            estObj.billingTo = [bp.legal_company_name ? `M/S : ${bp.legal_company_name}` : "", bp.billing_address || ""].filter(Boolean).join("\n") || bp.legal_company_name;
+          }
+          if (!estObj.gstin) estObj.gstin = bp.gstin;
+          if (!estObj.stateCode) estObj.stateCode = bp.state_code;
+          if (!estObj.pan && bp.pan) estObj.pan = bp.pan;
+        }
+      } catch (err) {
+        console.warn("[api] Failed to resolve billing profile snapshots:", err);
+      }
+    } else if (estObj.billingProfileId === null && estObj.billingLegalNameSnapshot === undefined) {
+      estObj.billingLegalNameSnapshot = null;
+      estObj.billingGstinSnapshot = null;
+      estObj.billingStateSnapshot = null;
+      estObj.billingStateCodeSnapshot = null;
+      estObj.billingAddressSnapshot = null;
+      estObj.shippingAddressSnapshot = null;
+    }
+  }
+}
+
 export async function createEstimate(
   token: string | null,
   payload: { estimate: Record<string, unknown>; items: unknown[] }
@@ -1973,6 +2010,9 @@ export async function createEstimate(
     });
     if (!res.ok) throw new Error((await res.json()).message ?? "Failed to create estimate");
     return res.json();
+  }
+  if (payload?.estimate) {
+    await populateBillingSnapshotsIfNeeded(payload.estimate);
   }
   // 1. Try atomic RPC save directly in PostgreSQL (single transaction, guaranteed rollback)
   try {
@@ -2290,6 +2330,8 @@ export async function updateEstimate(
   }
 
   // Bolt mode:
+  await populateBillingSnapshotsIfNeeded(payload);
+
   // 1. Try atomic RPC save directly in PostgreSQL (single transaction, guaranteed rollback)
   try {
     const { items: rawItems, expectedRevisionNumber, revisionNote, ...estimateFields } = payload;
