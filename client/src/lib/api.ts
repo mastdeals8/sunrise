@@ -3052,6 +3052,47 @@ export async function deleteExecutionDocument(
   }
 }
 
+/** Update an execution document's metadata, storeCode, or documentType. */
+export async function updateExecutionDocumentMetadata(
+  token: string | null,
+  docId: number,
+  updates: {
+    metadata?: Record<string, unknown>;
+    storeCode?: string | null;
+    documentType?: string;
+  }
+): Promise<any> {
+  if (isBoltMode) {
+    const patch: Record<string, any> = { updated_at: new Date().toISOString() };
+    if (updates.metadata !== undefined) patch.metadata = updates.metadata;
+    if (updates.storeCode !== undefined) patch.store_code = updates.storeCode;
+    if (updates.documentType !== undefined) patch.document_type = updates.documentType;
+
+    const { data, error } = await supabase
+      .from("execution_documents")
+      .update(patch)
+      .eq("id", docId)
+      .select()
+      .single();
+
+    if (error) {
+      console.warn("[updateExecutionDocumentMetadata] Supabase direct update failed:", error);
+      throw new Error(error.message);
+    }
+    return toCamel(data);
+  } else {
+    const res = await apiFetch(`/api/operations/execution-documents/${docId}`, token, {
+      method: "PATCH",
+      body: JSON.stringify(updates),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.message || "Failed to update document");
+    }
+    return res.json();
+  }
+}
+
 /**
  * Upload a file to execution-documents bucket and register it in the DB.
  * Returns the raw storagePath, a signed displayUrl, and the DB row.

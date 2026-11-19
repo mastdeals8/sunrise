@@ -1,13 +1,13 @@
 import React from "react";
 import { isBoltMode, supabase } from "../../../lib/supabase";
-import { fetchEstimateItems, fetchDeliveryChallansForEstimate, fetchExecutionStores, fetchExecutionDocuments, fetchInvoiceForEstimate, uploadToStorage, registerExecutionDocument, deleteExecutionDocument, openExecutionDocument, isActiveDeliveryChallan, isWccDeliveryChallan, getActiveCompanyId } from "../../../lib/api";
+import { fetchEstimateItems, fetchDeliveryChallansForEstimate, fetchExecutionStores, fetchExecutionDocuments, fetchInvoiceForEstimate, uploadToStorage, registerExecutionDocument, deleteExecutionDocument, updateExecutionDocumentMetadata, openExecutionDocument, isActiveDeliveryChallan, isWccDeliveryChallan, getActiveCompanyId } from "../../../lib/api";
 import { ArrowLeft, Camera, CircleCheck as CheckCircle, CircleCheck as CheckCircle2, ChevronRight, Clock, Download, ExternalLink, Eye, File, FileCheck2, FilePlus, FileText, FileUp, Image as ImageIcon, IndianRupee, MapPin, Package, Paperclip, Printer, RefreshCw, Trash2, TrendingUp, Truck, Upload, X, CircleAlert as AlertCircle, Activity as ActivityIcon, Zap } from "lucide-react";
 import { StatusBadge } from "@/components/ui-kit";
 import type { Client, Brand, Store, Estimate, DeliveryChallan, Product } from "../types";
 import ProjectUploadModal, { type UploadMode } from "./ProjectUploadModal";
 import { isAblblFormat } from "../../../../../shared/textFormat";
 import { getEstimateScopedStores } from "@shared/storeScoping";
-import { evaluateTransportCompliance, type StoreTransportRequirement } from "../../../../../shared/transportCompliance";
+import { evaluateTransportCompliance, isVerifiedTransportInvoice, type StoreTransportRequirement } from "../../../../../shared/transportCompliance";
 import { orderedStoreKeysFromGrouping } from "../utils/estimateOrdering";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -476,16 +476,20 @@ const DocRow: React.FC<{
   doc: ExecDoc;
   token: string | null;
   onDelete?: (doc: ExecDoc) => void;
-}> = ({ doc, token, onDelete }) => {
+  classificationBadge?: React.ReactNode;
+  classificationAction?: React.ReactNode;
+}> = ({ doc, token, onDelete, classificationBadge, classificationAction }) => {
   const Icon = isImg(doc) ? ImageIcon : doc.mimeType === "application/pdf" ? FileText : File;
   const fileUrl = safeDocumentUrl(doc.filePath);
   const name = doc.originalFileName || String(doc.filePath || "").split("/").pop() || "file";
   return (
-    <div className="flex items-center gap-2 px-3 py-2 border border-slate-100 rounded-lg hover:bg-slate-50 group">
+    <div className="flex flex-wrap sm:flex-nowrap items-center gap-2 px-3 py-2 border border-slate-100 rounded-lg hover:bg-slate-50 group">
       <Icon className="w-4 h-4 text-slate-400 shrink-0" />
-      <span className="text-xs text-slate-700 flex-1 truncate font-medium" title={name}>{name}</span>
+      <span className="text-xs text-slate-700 flex-1 truncate font-medium min-w-[140px]" title={name}>{name}</span>
+      {classificationBadge}
+      {classificationAction}
       {doc.fileSize ? <span className="text-[10px] text-slate-400 shrink-0">{fmtBytes(doc.fileSize)}</span> : null}
-      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+      <div className="flex items-center gap-1 opacity-80 sm:opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
         {fileUrl && (
           <>
             <a href={fileUrl} target="_blank" rel="noreferrer" className="p-1 text-slate-500 hover:text-slate-800" title="View">
@@ -1470,9 +1474,12 @@ const DocumentsTab: React.FC<{
   const receiptZoneRef = React.useRef<HTMLDivElement>(null);
   const authHeader = { Authorization: `Bearer ${token}` };
 
-  const byType = (type: string) => projectDocuments.filter(d => d.documentType === type);
-  const transportDocs = byType("transport_receipt");
-  const transportInvoiceDocs = byType("transport_invoice");
+  const byType = (type: string) => projectDocuments.filter(d => d.documentType === type && d.status !== "deleted");
+  const allRawDocs: ExecDoc[] = (data as any).allExecutionDocuments || projectDocuments;
+  const transportDocs = allRawDocs.filter(d =>
+    (d.documentType === "transport_receipt" || d.documentType === "transport_invoice") &&
+    d.status !== "deleted"
+  );
   const extraDocs = byType("extra");
 
   const scopedStores = React.useMemo(
@@ -1480,12 +1487,45 @@ const DocumentsTab: React.FC<{
     [estimate, data.items, stores]
   );
   const compliance = React.useMemo(
-    () => evaluateTransportCompliance(estimate, data.items, (data as any).allExecutionDocuments || projectDocuments, scopedStores, client),
-    [estimate, data.items, data, projectDocuments, scopedStores, client]
+    () => evaluateTransportCompliance(estimate, data.items, allRawDocs, scopedStores, client),
+    [estimate, data.items, allRawDocs, scopedStores, client]
   );
 
   const [targetStoreForInvoice, setTargetStoreForInvoice] = React.useState<StoreTransportRequirement | null>(null);
-  const invoiceFileInputRef = React.useRef<HTMLInputElement>(null);
+  const [uploadClassification, setUploadClassification] = React.useState<"receipt" | "transport_invoice">("receipt");
+  const [classifyingDocId, setClassifyingDocId] = React.useState<number | null>(null);
+
+  const handleToggleDocClassification = async (
+    doc: ExecDoc,
+    storeReq?: { storeCode?: string | null; storeId?: number | null; storeName?: string | null } | null
+  ) => {
+    const isCurrentlyInvoice = isVerifiedTransportInvoice(doc);
+    const targetClassification = isCurrentlyInvoice ? "receipt" : "transport_invoice";
+    setClassifyingDocId(doc.id);
+    try {
+      const existingMeta = doc.metadata || {};
+      const updatedMeta = {
+        ...existingMeta,
+        transportClassification: targetClassification,
+        documentCategory: targetClassification === "transport_invoice" ? "transport_invoice" : "transport_receipt",
+        ...(targetClassification === "transport_invoice" ? {
+          storeCode: storeReq?.storeCode || (existingMeta as any)?.storeCode || doc.storeCode || (scopedStores.length === 1 ? scopedStores[0]?.storeCode : null),
+          storeId: storeReq?.storeId ?? (existingMeta as any)?.storeId ?? (scopedStores.length === 1 ? scopedStores[0]?.storeId : null),
+          storeName: storeReq?.storeName ?? (existingMeta as any)?.storeName ?? (scopedStores.length === 1 ? scopedStores[0]?.storeName : ""),
+        } : {}),
+      };
+
+      await updateExecutionDocumentMetadata(token, doc.id, {
+        metadata: updatedMeta,
+        storeCode: (updatedMeta as any).storeCode || doc.storeCode || null,
+      });
+      onRefresh();
+    } catch (e: any) {
+      alert(e?.message || "Failed to update classification.");
+    } finally {
+      setClassifyingDocId(null);
+    }
+  };
 
   const deleteDoc = async (doc: ExecDoc) => {
     if (!confirm(`Delete ${doc.originalFileName || "this file"}?`)) return;
@@ -1550,16 +1590,29 @@ const DocumentsTab: React.FC<{
     setReceiptProgress(0);
     const errors: string[] = [];
 
+    const isInvoiceClass = uploadClassification === "transport_invoice";
+    const reqStore = targetStoreForInvoice;
+
     for (let index = 0; index < pendingReceipts.length; index += 1) {
       const { file } = pendingReceipts[index];
       try {
+        const meta = {
+          transportClassification: isInvoiceClass ? "transport_invoice" : "receipt",
+          documentCategory: isInvoiceClass ? "transport_invoice" : "transport_receipt",
+          ...(reqStore?.storeCode ? {
+            storeCode: reqStore.storeCode,
+            storeId: reqStore.storeId ?? null,
+            storeName: reqStore.storeName ?? "",
+          } : {}),
+        };
+
         if (isBoltMode) {
           const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
           const storagePath = `estimate-${estimate.id}/transport/${Date.now()}-${safeName}`;
           const { storagePath: saved } = await uploadToStorage("execution-documents", storagePath, file);
           await registerExecutionDocument(token, {
             estimateId: estimate.id,
-            storeCode: "",
+            storeCode: reqStore?.storeCode || "",
             documentType: "transport_receipt",
             filePath: saved,
             originalFileName: file.name,
@@ -1567,10 +1620,13 @@ const DocumentsTab: React.FC<{
             fileSize: file.size || null,
             uploadedVia: "project_workspace",
             companyId: estimate.companyId || (estimate as any).company_id || getActiveCompanyId(),
+            metadata: meta,
           });
         } else {
           const fd = new FormData();
           fd.append("file", file);
+          if (reqStore?.storeCode) fd.append("storeCode", reqStore.storeCode);
+          fd.append("metadata", JSON.stringify(meta));
           const res = await fetch(`/api/projects/${estimate.id}/transport-receipt`, {
             method: "POST",
             headers: authHeader,
@@ -1589,9 +1645,10 @@ const DocumentsTab: React.FC<{
     });
     setPendingReceipts([]);
     setUploading(false);
+    setUploadClassification("receipt");
+    setTargetStoreForInvoice(null);
     setReceiptErrors(errors);
-    if (errors.length === 0) onRefresh();
-    else onRefresh();
+    onRefresh();
   };
 
   const uploadExtra = async (file: File) => {
@@ -1631,53 +1688,6 @@ const DocumentsTab: React.FC<{
       alert(e?.message || "Upload failed.");
     } finally {
       setUploading(false);
-    }
-  };
-
-  const uploadTransportInvoice = async (file: File, req?: StoreTransportRequirement | null) => {
-    setUploading(true);
-    try {
-      let filePath: string;
-      let fileName = file.name;
-      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-      const storagePath = `estimate-${estimate.id}/transport-invoices/${Date.now()}-${safeName}`;
-
-      if (isBoltMode) {
-        const { storagePath: saved } = await uploadToStorage("execution-documents", storagePath, file);
-        filePath = saved;
-      } else {
-        const fd = new FormData();
-        fd.append("file", file);
-        const upRes = await fetch("/api/operations/upload", { method: "POST", headers: authHeader, body: fd });
-        if (!upRes.ok) throw new Error("Upload failed");
-        const data = await upRes.json();
-        filePath = data.filePath;
-        fileName = data.fileName || file.name;
-      }
-
-      await registerExecutionDocument(token, {
-        estimateId: estimate.id,
-        storeCode: req?.storeCode || "",
-        documentType: "transport_invoice",
-        filePath,
-        originalFileName: fileName,
-        mimeType: file.type || null,
-        fileSize: file.size || null,
-        uploadedVia: "project_workspace",
-        companyId: estimate.companyId || (estimate as any).company_id || getActiveCompanyId(),
-        metadata: {
-          documentCategory: "transport_invoice",
-          storeId: req?.storeId || null,
-          storeCode: req?.storeCode || "",
-          storeName: req?.storeName || "",
-        },
-      });
-      onRefresh();
-    } catch (e: any) {
-      alert(e?.message || "Transport invoice upload failed.");
-    } finally {
-      setUploading(false);
-      setTargetStoreForInvoice(null);
     }
   };
 
@@ -1775,82 +1785,73 @@ const DocumentsTab: React.FC<{
           </div>
 
           <div className="mt-4 divide-y divide-amber-200/60 border border-amber-200/80 rounded-lg bg-white overflow-hidden">
-            {compliance.requirements.map(req => (
-              <div key={req.storeCode || req.storeName || "main"} className="p-3 flex items-center justify-between gap-3 text-xs">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="font-bold text-slate-800">{req.storeName}</span>
-                    {req.storeCode && <span className="font-mono text-[11px] text-slate-500">({req.storeCode})</span>}
-                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase ${
-                      req.status === "Uploaded"
-                        ? "bg-emerald-100 text-emerald-800"
-                        : req.status === "Pending"
-                        ? "bg-rose-100 text-rose-800"
-                        : "bg-slate-100 text-slate-600"
-                    }`}>
-                      {req.status}
-                    </span>
+            {compliance.requirements.map(req => {
+              if (req.transportMode !== "outstation") return null;
+              const unclassifiedDocs = transportDocs.filter(d => !isVerifiedTransportInvoice(d));
+              return (
+                <div key={req.storeCode || req.storeName || "main"} className="p-3 flex flex-wrap items-center justify-between gap-3 text-xs">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-slate-800">{req.storeName}</span>
+                      {req.storeCode && <span className="font-mono text-[11px] text-slate-500">({req.storeCode})</span>}
+                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase ${
+                        req.status === "Uploaded"
+                          ? "bg-emerald-100 text-emerald-800"
+                          : req.status === "Pending"
+                          ? "bg-rose-100 text-rose-800"
+                          : "bg-slate-100 text-slate-600"
+                      }`}>
+                        {req.status}
+                      </span>
+                    </div>
+                    {req.transportDetails && (
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        Mode: <span className="font-medium text-slate-700 capitalize">{req.transportMode}</span> — {req.transportDetails}
+                        {req.transportAmount ? ` (₹${req.transportAmount.toLocaleString("en-IN")})` : ""}
+                      </p>
+                    )}
+                    {req.invoiceDoc && (
+                      <p className="text-[11px] text-emerald-700 mt-0.5 font-medium flex items-center gap-1">
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        Attached: {req.invoiceDoc.originalFileName || req.invoiceDoc.fileName}
+                      </p>
+                    )}
                   </div>
-                  {req.transportDetails && (
-                    <p className="text-[11px] text-slate-500 mt-0.5">
-                      Mode: <span className="font-medium text-slate-700 capitalize">{req.transportMode}</span> — {req.transportDetails}
-                      {req.transportAmount ? ` (₹${req.transportAmount.toLocaleString("en-IN")})` : ""}
-                    </p>
-                  )}
-                  {req.invoiceDoc && (
-                    <p className="text-[11px] text-emerald-700 mt-0.5 font-medium flex items-center gap-1">
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      Attached: {req.invoiceDoc.originalFileName || req.invoiceDoc.fileName}
-                    </p>
-                  )}
+
+                  <div className="shrink-0 flex flex-wrap items-center gap-2">
+                    {req.status === "Pending" && unclassifiedDocs.length > 0 && (
+                      <button
+                        type="button"
+                        disabled={classifyingDocId === unclassifiedDocs[0].id}
+                        onClick={() => handleToggleDocClassification(unclassifiedDocs[0], req)}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded border border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 font-bold text-xs transition disabled:opacity-50"
+                        title="Classify already uploaded receipt as Official Supplier Transport Invoice without re-uploading"
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                        Classify "{unclassifiedDocs[0].originalFileName || 'receipt'}" as Invoice
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      disabled={uploading}
+                      onClick={() => {
+                        setUploadClassification("transport_invoice");
+                        setTargetStoreForInvoice(req);
+                        receiptInputRef.current?.click();
+                      }}
+                      className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded border text-xs font-bold transition ${
+                        req.status === "Uploaded"
+                          ? "bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100"
+                          : "bg-amber-600 text-white border-amber-600 hover:bg-amber-700 shadow-sm"
+                      }`}
+                    >
+                      <Upload className="w-3.5 h-3.5" />
+                      {req.status === "Uploaded" ? "Upload Replacement" : "Upload Transport Invoice"}
+                    </button>
+                  </div>
                 </div>
-
-                <div className="shrink-0">
-                  <button
-                    type="button"
-                    disabled={uploading}
-                    onClick={() => {
-                      setTargetStoreForInvoice(req);
-                      invoiceFileInputRef.current?.click();
-                    }}
-                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded border text-xs font-bold transition ${
-                      req.status === "Uploaded"
-                        ? "bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100"
-                        : "bg-amber-600 text-white border-amber-600 hover:bg-amber-700 shadow-sm"
-                    }`}
-                  >
-                    <Upload className="w-3.5 h-3.5" />
-                    {req.status === "Uploaded" ? "Replace Invoice" : "Upload Transport Invoice"}
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          <input
-            ref={invoiceFileInputRef}
-            type="file"
-            accept=".pdf,.jpg,.jpeg,.png,image/jpeg,image/png,application/pdf"
-            className="hidden"
-            onChange={e => {
-              const file = e.target.files?.[0];
-              e.target.value = "";
-              if (file) uploadTransportInvoice(file, targetStoreForInvoice);
-            }}
-          />
-        </div>
-      )}
-
-      {/* Verified Supplier Transport Invoices */}
-      {transportInvoiceDocs.length > 0 && (
-        <div className="bg-white border border-slate-200 rounded-xl p-5">
-          <SectionTitle action={<span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">AB Verified</span>}>
-            Supplier Transport Invoices ({transportInvoiceDocs.length})
-          </SectionTitle>
-          <div className="space-y-1.5">
-            {transportInvoiceDocs.map(doc => (
-              <DocRow key={doc.id} doc={doc} token={token} onDelete={deleteDoc} />
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
@@ -1888,31 +1889,95 @@ const DocumentsTab: React.FC<{
           <p className="text-sm font-bold text-slate-700">Drop receipts here or paste with Cmd+V / Ctrl+V</p>
           <p className="text-[11px] text-slate-400 mt-1">Click a button to choose files or capture a receipt from your phone.</p>
           <div className="flex flex-wrap justify-center gap-2 mt-3">
-            <button type="button" disabled={uploading} onClick={() => receiptInputRef.current?.click()} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded border text-xs font-bold bg-white border-slate-200 text-slate-700 hover:bg-slate-100 disabled:opacity-50">
+            <button
+              type="button"
+              disabled={uploading}
+              onClick={() => {
+                setUploadClassification("receipt");
+                setTargetStoreForInvoice(null);
+                receiptInputRef.current?.click();
+              }}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded border text-xs font-bold bg-white border-slate-200 text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+            >
               <Upload className="w-3.5 h-3.5" /> Choose files
             </button>
-            <button type="button" disabled={uploading} onClick={() => receiptCameraInputRef.current?.click()} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded border text-xs font-bold bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100 disabled:opacity-50">
+            <button
+              type="button"
+              disabled={uploading}
+              onClick={() => {
+                setUploadClassification("receipt");
+                setTargetStoreForInvoice(null);
+                receiptCameraInputRef.current?.click();
+              }}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded border text-xs font-bold bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100 disabled:opacity-50"
+            >
               <Camera className="w-3.5 h-3.5" /> Take photo
             </button>
-            <input ref={receiptInputRef} type="file" accept=".jpg,.jpeg,.png,.pdf,image/jpeg,image/png,application/pdf" multiple className="hidden" onChange={event => { addReceiptFiles(Array.from(event.target.files || [])); event.target.value = ""; }} />
-            <input ref={receiptCameraInputRef} type="file" accept="image/jpeg,image/png" capture="environment" className="hidden" onChange={event => { addReceiptFiles(Array.from(event.target.files || [])); event.target.value = ""; }} />
+            <input
+              ref={receiptInputRef}
+              type="file"
+              accept=".jpg,.jpeg,.png,.pdf,image/jpeg,image/png,application/pdf"
+              multiple
+              className="hidden"
+              onChange={event => {
+                addReceiptFiles(Array.from(event.target.files || []));
+                event.target.value = "";
+              }}
+            />
+            <input
+              ref={receiptCameraInputRef}
+              type="file"
+              accept="image/jpeg,image/png"
+              capture="environment"
+              className="hidden"
+              onChange={event => {
+                addReceiptFiles(Array.from(event.target.files || []));
+                event.target.value = "";
+              }}
+            />
           </div>
         </div>
 
         {pendingReceipts.length > 0 && (
           <div className="mt-4 space-y-2">
-            <div className="flex items-center justify-between text-xs font-bold text-slate-600">
-              <span>{pendingReceipts.length} receipt{pendingReceipts.length === 1 ? "" : "s"} ready</span>
-              <button type="button" disabled={uploading} onClick={uploadTransportReceipts} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50">
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-bold text-slate-600">
+              <div className="flex items-center gap-3">
+                <span>{pendingReceipts.length} receipt{pendingReceipts.length === 1 ? "" : "s"} ready</span>
+                <label className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-slate-700 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={uploadClassification === "transport_invoice"}
+                    onChange={e => setUploadClassification(e.target.checked ? "transport_invoice" : "receipt")}
+                    className="rounded border-slate-300 text-amber-600 focus:ring-amber-500"
+                  />
+                  <span>Upload as Official Supplier Transport Invoice</span>
+                </label>
+              </div>
+              <button
+                type="button"
+                disabled={uploading}
+                onClick={uploadTransportReceipts}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+              >
                 <Upload className="w-3.5 h-3.5" /> {uploading ? `Uploading ${receiptProgress}%` : "Upload receipts"}
               </button>
             </div>
-            {uploading && <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden"><div className="h-full bg-blue-600 transition-all" style={{ width: `${receiptProgress}%` }} /></div>}
+            {uploading && (
+              <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                <div className="h-full bg-blue-600 transition-all" style={{ width: `${receiptProgress}%` }} />
+              </div>
+            )}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               {pendingReceipts.map(item => (
                 <div key={item.key} className="flex items-center gap-2 rounded-lg border border-slate-200 p-2">
                   <div className="w-12 h-12 rounded overflow-hidden bg-slate-50 flex items-center justify-center shrink-0">
-                    {item.preview && item.file.type.startsWith("image/") ? <img src={item.preview} alt="" className="w-full h-full object-cover" /> : item.preview ? <iframe src={item.preview} title={item.file.name} className="w-full h-full pointer-events-none" /> : <FileText className="w-5 h-5 text-slate-400" />}
+                    {item.preview && item.file.type.startsWith("image/") ? (
+                      <img src={item.preview} alt="" className="w-full h-full object-cover" />
+                    ) : item.preview ? (
+                      <iframe src={item.preview} title={item.file.name} className="w-full h-full pointer-events-none" />
+                    ) : (
+                      <FileText className="w-5 h-5 text-slate-400" />
+                    )}
                   </div>
                   <span className="text-xs font-semibold text-slate-700 truncate flex-1" title={item.file.name}>{item.file.name}</span>
                   <button type="button" disabled={uploading} onClick={() => removePendingReceipt(item.key)} className="p-1 text-red-400 hover:text-red-600 disabled:opacity-50" title="Remove from upload queue"><X className="w-3.5 h-3.5" /></button>
@@ -1921,10 +1986,63 @@ const DocumentsTab: React.FC<{
             </div>
           </div>
         )}
-        {receiptErrors.length > 0 && <div className="mt-3 rounded-lg border border-red-200 bg-red-50 p-2 text-xs text-red-700 space-y-1">{receiptErrors.map(error => <p key={error}>{error}</p>)}</div>}
+        {receiptErrors.length > 0 && (
+          <div className="mt-3 rounded-lg border border-red-200 bg-red-50 p-2 text-xs text-red-700 space-y-1">
+            {receiptErrors.map(error => <p key={error}>{error}</p>)}
+          </div>
+        )}
         {transportDocs.length > 0 ? (
           <div className="mt-5 space-y-1.5">
-            {transportDocs.map(doc => <DocRow key={doc.id} doc={doc} token={token} onDelete={deleteDoc} />)}
+            {transportDocs.map(doc => {
+              const isInvoice = isVerifiedTransportInvoice(doc);
+              return (
+                <DocRow
+                  key={doc.id}
+                  doc={doc}
+                  token={token}
+                  onDelete={deleteDoc}
+                  classificationBadge={
+                    isInvoice ? (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200 shrink-0">
+                        <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                        Official Supplier Transport Invoice
+                        {doc.storeCode ? <span className="font-mono text-[9px] text-emerald-700">({doc.storeCode})</span> : null}
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium bg-slate-100 text-slate-600 border border-slate-200 shrink-0">
+                        Ordinary Transport Receipt / LR
+                      </span>
+                    )
+                  }
+                  classificationAction={
+                    <div className="shrink-0 flex items-center gap-1">
+                      {isInvoice ? (
+                        <button
+                          type="button"
+                          disabled={classifyingDocId === doc.id}
+                          onClick={() => handleToggleDocClassification(doc)}
+                          title="Reclassify as ordinary transport receipt"
+                          className="px-2 py-0.5 rounded text-[10px] font-semibold text-slate-500 hover:text-slate-800 hover:bg-slate-100 border border-transparent hover:border-slate-200 disabled:opacity-50"
+                        >
+                          {classifyingDocId === doc.id ? "Updating…" : "Reclassify as LR"}
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          disabled={classifyingDocId === doc.id}
+                          onClick={() => handleToggleDocClassification(doc, compliance.requirements.find(r => r.status === "Pending") || null)}
+                          title="Classify this uploaded receipt as Official Supplier Transport Invoice"
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 transition shadow-xs disabled:opacity-50"
+                        >
+                          <CheckCircle2 className="w-3 h-3 text-amber-600" />
+                          {classifyingDocId === doc.id ? "Updating…" : "Classify as Supplier Invoice"}
+                        </button>
+                      )}
+                    </div>
+                  }
+                />
+              );
+            })}
           </div>
         ) : (
           <p className="text-xs text-slate-400 py-3">No transport receipts uploaded. Upload courier receipts, LR copies, or dispatch proofs here.</p>

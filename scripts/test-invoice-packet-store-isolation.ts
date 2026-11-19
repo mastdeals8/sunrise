@@ -96,24 +96,45 @@ async function runTests() {
   assert.equal(complianceBefore.requirements[0].status, "Pending", "Status must be Pending");
   console.log("✓ Test 3A passed: Pending status flagged when only ordinary transport receipt exists.");
 
-  // Now with verified transport invoice uploaded
-  const complianceAfter = evaluateTransportCompliance(
+  // Now with metadata classified transport receipt (No separate document type needed!)
+  const complianceClassified = evaluateTransportCompliance(
     ablblEstimate,
     phantomItems,
     [
-      { id: 10, documentType: "transport_receipt", originalFileName: "lr_copy.pdf" },
-      { id: 11, documentType: "transport_invoice", originalFileName: "supplier_transport_inv_123.pdf", storeCode: "101387" },
+      {
+        id: 10,
+        documentType: "transport_receipt",
+        originalFileName: "lr_copy.pdf",
+        metadata: { transportClassification: "lr" }
+      },
+      {
+        id: 11,
+        documentType: "transport_receipt", // Existing transport_receipt record!
+        originalFileName: "1795074465298-image.png",
+        storeCode: "101387",
+        metadata: { transportClassification: "transport_invoice" } // Classified!
+      },
     ],
     scopedStores,
     clientRecord
   );
 
-  assert.equal(complianceAfter.pendingCount, 0, "Must have 0 pending transport invoices");
-  assert.equal(complianceAfter.uploadedCount, 1, "Must have 1 uploaded transport invoice");
-  assert.equal(complianceAfter.requirements[0].status, "Uploaded", "Status must be Uploaded");
-  assert.equal(isVerifiedTransportInvoice({ documentType: "transport_invoice" }), true);
-  assert.equal(isVerifiedTransportInvoice({ documentType: "transport_receipt" }), false);
-  console.log("✓ Test 3B passed: Verified transport invoice transitions status to Uploaded.");
+  assert.equal(complianceClassified.pendingCount, 0, "Classified transport_receipt must satisfy compliance");
+  assert.equal(complianceClassified.uploadedCount, 1, "Must have 1 uploaded transport invoice");
+  assert.equal(complianceClassified.requirements[0].status, "Uploaded");
+  assert.equal(isVerifiedTransportInvoice({
+    documentType: "transport_receipt",
+    metadata: { transportClassification: "transport_invoice" }
+  }), true, "Classified metadata must be recognized as verified transport invoice");
+  assert.equal(isVerifiedTransportInvoice({
+    documentType: "transport_receipt",
+    metadata: { transportClassification: "lr" }
+  }), false, "Ordinary LR metadata must NOT be recognized as invoice");
+  assert.equal(isVerifiedTransportInvoice({
+    documentType: "transport_receipt",
+    metadata: {}
+  }), false, "Empty metadata transport_receipt must NOT be recognized as invoice");
+  console.log("✓ Test 3B passed: Metadata-classified transport_receipt achieves full compliance without parallel doc systems.");
 
   // 4. Test live DB records if DB connection is available
   if (connectionString) {
@@ -146,6 +167,21 @@ async function runTests() {
         assert(liveScoped.length > 0, "Must have at least one store");
         assert(!liveScoped.some(s => s.storeId === 73 || s.storeName.toLowerCase().includes("shagun")), "Must NOT include Shagun Pune!");
         console.log("✓ Test 4 passed: Live DB records verify that Shagun Pune is 100% excluded and only Goa is scoped.");
+
+        // Verify Requirement 10: 1795074465298-image.png appears only once and is compliant
+        console.log("\n[TEST 5] Live DB Verification: 1795074465298-image.png uniqueness & compliance");
+        const docRes = await dbClient.query(`
+          SELECT * FROM execution_documents 
+          WHERE (file_path LIKE '%1795074465298%' OR original_file_name LIKE '%1795074465298%')
+            AND status = 'active'
+        `);
+        console.log("Active records matching 1795074465298-image.png count:", docRes.rows.length);
+        assert.equal(docRes.rows.length, 1, "Must have exactly ONE active record for 1795074465298-image.png");
+
+        const activeDoc = docRes.rows[0];
+        assert.equal(activeDoc.document_type, "transport_receipt", "Must use standard transport_receipt document type");
+        assert(isVerifiedTransportInvoice(activeDoc), "1795074465298-image.png must be recognized as compliant Official Supplier Transport Invoice");
+        console.log("✓ Test 5 passed: 1795074465298-image.png is unique (single active record), standard transport_receipt, and fully compliant.");
       }
       await dbClient.end();
     } catch (err: any) {

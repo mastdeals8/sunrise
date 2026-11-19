@@ -67,6 +67,8 @@ export function isAblblProject(clientOrEstimate: any, invoiceOrClient?: any): bo
   );
 }
 
+export type TransportClassification = "lr" | "transport_invoice";
+
 /**
  * Check whether an execution document is a verified supplier transport invoice,
  * NOT an ordinary LR copy, courier slip, or dispatch receipt.
@@ -77,8 +79,31 @@ export function isVerifiedTransportInvoice(doc: any): boolean {
 
   const docType = String(doc.documentType || doc.document_type || "").trim().toLowerCase();
   const category = String(doc.metadata?.documentCategory || doc.metadata?.category || "").trim().toLowerCase();
+  const classification = String(
+    doc.metadata?.transportClassification ||
+    doc.metadata?.transport_classification ||
+    doc.metadata?.classification ||
+    ""
+  ).trim().toLowerCase();
 
-  return docType === "transport_invoice" || category === "transport_invoice";
+  return (
+    classification === "transport_invoice" ||
+    classification === "supplier_invoice" ||
+    classification === "official_transport_invoice" ||
+    category === "transport_invoice" ||
+    docType === "transport_invoice"
+  );
+}
+
+export function getTransportClassification(doc: any): TransportClassification {
+  return isVerifiedTransportInvoice(doc) ? "transport_invoice" : "lr";
+}
+
+export function getTransportClassificationLabel(classificationOrDoc: any): string {
+  const isInvoice = typeof classificationOrDoc === "string"
+    ? classificationOrDoc === "transport_invoice" || classificationOrDoc === "supplier_invoice"
+    : isVerifiedTransportInvoice(classificationOrDoc);
+  return isInvoice ? "Official Supplier Transport Invoice" : "Ordinary Transport Receipt / LR";
 }
 
 /**

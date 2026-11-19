@@ -5008,6 +5008,44 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.patch("/api/operations/execution-documents/:id", authenticateToken, requireRole(["admin", "manager", "production", "installer"]), async (req: AuthRequest, res: Response) => {
+    try {
+      if (!req.user) return res.status(401).json({ message: "Unauthorized" });
+      const id = Number(req.params.id);
+      const [doc] = await db.select().from(executionDocuments).where(eq(executionDocuments.id, id)).limit(1);
+      if (!doc) return res.status(404).json({ message: "Document not found" });
+
+      const targetCompanyId = doc.companyId;
+      const isSuper = req.user.id === 1 || req.user.role === "admin";
+      if (!isSuper && targetCompanyId) {
+        const [membership] = await db.select().from(companyUsers)
+          .where(and(eq(companyUsers.userId, req.user.id), eq(companyUsers.companyId, targetCompanyId)))
+          .limit(1);
+        if (!membership) return res.status(403).json({ message: "Access denied to company workspace" });
+      }
+
+      const updates: Record<string, any> = { updatedAt: new Date() };
+      if (req.body.metadata !== undefined) {
+        updates.metadata = typeof req.body.metadata === "object" ? req.body.metadata : {};
+      }
+      if (req.body.storeCode !== undefined) {
+        updates.storeCode = req.body.storeCode ? String(req.body.storeCode) : null;
+      }
+      if (req.body.documentType !== undefined) {
+        updates.documentType = String(req.body.documentType);
+      }
+
+      const updated = await db.update(executionDocuments)
+        .set(updates)
+        .where(eq(executionDocuments.id, id))
+        .returning();
+
+      res.json(updated[0]);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
   app.get("/api/operations/execution-stores", authenticateToken, async (req: AuthRequest, res: Response) => {
     const _t0 = performance.now();
     try {
@@ -5201,12 +5239,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (!membership) return res.status(403).json({ message: "Access denied to company workspace" });
       }
 
+      let meta = {};
+      try {
+        if (req.body.metadata) {
+          meta = typeof req.body.metadata === "string" ? JSON.parse(req.body.metadata) : req.body.metadata;
+        } else if (req.body.transportClassification) {
+          meta = { transportClassification: req.body.transportClassification, documentCategory: req.body.transportClassification };
+        }
+      } catch {}
+
       const filePath = `/uploads/${req.file.filename}`;
       const doc = await db.insert(executionDocuments).values({
         companyId: targetCompanyId,
         estimateId,
         deliveryChallanId: null,
-        storeCode: null,
+        storeCode: req.body.storeCode ? String(req.body.storeCode) : null,
         documentType: "transport_receipt",
         filePath,
         originalFileName: req.file.originalname,
@@ -5217,6 +5264,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         uploadedBy: req.user.id,
         uploadedVia: "project_workspace",
         uploadedAt: new Date(),
+        metadata: meta,
       }).returning();
 
       audit(req as AuthRequest, {
