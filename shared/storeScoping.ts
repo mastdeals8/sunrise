@@ -67,7 +67,7 @@ export function getEstimateScopedStores(
     let master = sid ? allStores.find((s: any) => Number(s.id) === sid) : null;
     if (!master && scode) {
       master = allStores.find((s: any) => {
-        const c = String(s.storeCode || (s as any).code || "").trim().toLowerCase();
+        const c = String(s.storeCode || (s as any).code || (s as any).store_code || "").trim().toLowerCase();
         return c === scode.toLowerCase();
       });
     }
@@ -83,12 +83,13 @@ export function getEstimateScopedStores(
 
     const master = resolveStoreMaster(cleanId, cleanCode);
     const finalId = cleanId || (master?.id ? Number(master.id) : null);
-    const finalCode = cleanCode || String(master?.storeCode || (master as any)?.code || "").trim();
+    const finalCode = cleanCode || String(master?.storeCode || (master as any)?.code || (master as any)?.store_code || "").trim();
     const finalSapCode = String(master?.sapCode || (master as any)?.sap_code || "").trim();
     const finalName =
       sname ||
       master?.name ||
       (master as any)?.storeName ||
+      (master as any)?.store_name ||
       (finalCode ? `Store ${finalCode}` : `Store ${finalId}`);
 
     if (finalId) seenIds.add(finalId);
@@ -109,7 +110,7 @@ export function getEstimateScopedStores(
     for (const sidStr of orderedSids) {
       const sid = Number(sidStr);
       const g = grouping[sidStr] || {};
-      addStore(sid, g.storeCode || null, g.storeName || null);
+      addStore(sid, g.storeCode || g.store_code || null, g.storeName || g.store_name || null);
     }
   }
 
@@ -124,10 +125,15 @@ export function getEstimateScopedStores(
     }
   }
 
-  // 3. estimate.store_id / storeId (single store estimate)
-  const estStoreId = estimate.storeId != null ? Number(estimate.storeId) : estimate.store_id != null ? Number(estimate.store_id) : null;
-  if (estStoreId) {
-    addStore(estStoreId, estimate.storeCode || estimate.store_code || null, estimate.storeName || estimate.store_name || null);
+  // 3. estimate.store_id / storeId (single store estimate fallback)
+  // Only evaluate estimate.store_id if NO stores were resolved from grouping or items!
+  // If grouping or items already defined the stores for this estimate, the estimate header's
+  // store_id must not inject an unrelated/orphan store.
+  if (stores.length === 0) {
+    const estStoreId = estimate.storeId != null ? Number(estimate.storeId) : estimate.store_id != null ? Number(estimate.store_id) : null;
+    if (estStoreId) {
+      addStore(estStoreId, estimate.storeCode || estimate.store_code || null, estimate.storeName || estimate.store_name || null);
+    }
   }
 
   // 4. Fallback for legacy estimates only (if no grouping, items, or estimate.store_id gave any stores):
@@ -151,7 +157,15 @@ export function isStoreWiseInvoice(invoice: any): boolean {
   if (!invoice) return false;
   const invStoreId = Number(invoice.storeId ?? invoice.store_id ?? invoice.packetSettings?.storeId ?? invoice.packet_settings?.storeId) || null;
   const invStoreCode = String(invoice.storeCode ?? invoice.store_code ?? invoice.packetSettings?.storeCode ?? invoice.packet_settings?.storeCode ?? "").trim();
-  return Boolean(invStoreId || invStoreCode);
+  if (invStoreId || invStoreCode) return true;
+
+  const lines = Array.isArray(invoice.lineItems) ? invoice.lineItems : Array.isArray(invoice.line_items) ? invoice.line_items : [];
+  if (lines.length > 0) {
+    const codes = new Set(lines.map((it: any) => String(it.storeCode || it.store_code || "").trim().toLowerCase()).filter(Boolean));
+    const ids = new Set(lines.map((it: any) => it.storeId || it.store_id).filter((id: any) => id != null && Number(id) > 0));
+    if (codes.size === 1 || ids.size === 1) return true;
+  }
+  return false;
 }
 
 /**
@@ -164,36 +178,56 @@ export function getInvoiceScopedStores(
   invoice: any,
   allStores: any[] = []
 ): ScopedStore[] {
-  if (!invoice || !isStoreWiseInvoice(invoice)) {
-    return estimateScopedStores;
-  }
+  if (!invoice) return estimateScopedStores;
 
   const invStoreId = Number(invoice.storeId ?? invoice.store_id ?? invoice.packetSettings?.storeId ?? invoice.packet_settings?.storeId) || null;
   const invStoreCode = String(invoice.storeCode ?? invoice.store_code ?? invoice.packetSettings?.storeCode ?? invoice.packet_settings?.storeCode ?? "").trim().toLowerCase();
 
-  const matched = estimateScopedStores.filter(s => {
-    if (invStoreId && s.storeId && s.storeId === invStoreId) return true;
-    if (invStoreCode && s.storeCode && s.storeCode.toLowerCase() === invStoreCode) return true;
-    return false;
-  });
-
-  if (matched.length > 0) {
-    return matched;
+  // If explicit single-store invoice:
+  if (invStoreId || invStoreCode) {
+    const matched = estimateScopedStores.filter(s => {
+      if (invStoreId && s.storeId && s.storeId === invStoreId) return true;
+      if (invStoreCode && s.storeCode && s.storeCode.toLowerCase() === invStoreCode) return true;
+      return false;
+    });
+    if (matched.length > 0) return matched;
   }
 
-  // Fallback if not found in estimateScopedStores
-  let master = invStoreId ? allStores.find((s: any) => Number(s.id) === invStoreId) : null;
-  if (!master && invStoreCode) {
-    master = allStores.find((s: any) => String(s.storeCode || (s as any).code || "").trim().toLowerCase() === invStoreCode);
-  }
-  const finalCode = invStoreCode || String(master?.storeCode || (master as any)?.code || "").trim();
-  const finalSapCode = String(master?.sapCode || (master as any)?.sap_code || "").trim();
-  const finalName = master?.name || (master as any)?.storeName || (finalCode ? `Store ${finalCode}` : `Store ${invStoreId}`);
+  // If invoice has line items, check which stores actually belong to this invoice:
+  const lines = Array.isArray(invoice.lineItems) ? invoice.lineItems : Array.isArray(invoice.line_items) ? invoice.line_items : [];
+  if (lines.length > 0) {
+    const lineCodes = new Set(lines.map((it: any) => String(it.storeCode || it.store_code || "").trim().toLowerCase()).filter(Boolean));
+    const lineIds = new Set(lines.map((it: any) => Number(it.storeId || it.store_id)).filter((id: number) => id > 0));
 
-  return [{
-    storeId: invStoreId || (master?.id ? Number(master.id) : null),
-    storeCode: finalCode,
-    sapCode: finalSapCode || undefined,
-    storeName: finalName,
-  }];
+    if (lineCodes.size > 0 || lineIds.size > 0) {
+      const matchedFromLines = estimateScopedStores.filter(s => {
+        if (s.storeId && lineIds.has(s.storeId)) return true;
+        if (s.storeCode && lineCodes.has(s.storeCode.toLowerCase())) return true;
+        return false;
+      });
+      if (matchedFromLines.length > 0) {
+        return matchedFromLines;
+      }
+    }
+  }
+
+  if (isStoreWiseInvoice(invoice)) {
+    // Fallback if not found in estimateScopedStores
+    let master = invStoreId ? allStores.find((s: any) => Number(s.id) === invStoreId) : null;
+    if (!master && invStoreCode) {
+      master = allStores.find((s: any) => String(s.storeCode || (s as any).code || (s as any).store_code || "").trim().toLowerCase() === invStoreCode);
+    }
+    const finalCode = invStoreCode || String(master?.storeCode || (master as any)?.code || (master as any)?.store_code || "").trim();
+    const finalSapCode = String(master?.sapCode || (master as any)?.sap_code || "").trim();
+    const finalName = master?.name || (master as any)?.storeName || (master as any)?.store_name || (finalCode ? `Store ${finalCode}` : `Store ${invStoreId}`);
+
+    return [{
+      storeId: invStoreId || (master?.id ? Number(master.id) : null),
+      storeCode: finalCode,
+      sapCode: finalSapCode || undefined,
+      storeName: finalName,
+    }];
+  }
+
+  return estimateScopedStores;
 }

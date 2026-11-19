@@ -6,6 +6,8 @@ import { StatusBadge } from "@/components/ui-kit";
 import type { Client, Brand, Store, Estimate, DeliveryChallan, Product } from "../types";
 import ProjectUploadModal, { type UploadMode } from "./ProjectUploadModal";
 import { isAblblFormat } from "../../../../../shared/textFormat";
+import { getEstimateScopedStores } from "@shared/storeScoping";
+import { evaluateTransportCompliance, type StoreTransportRequirement } from "../../../../../shared/transportCompliance";
 import { orderedStoreKeysFromGrouping } from "../utils/estimateOrdering";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -399,7 +401,7 @@ const loadProjectDataFallback = async (estimate: Estimate, masterStores: Store[]
     : execStores;
 
   const projectDocuments = Array.isArray(docs)
-    ? docs.filter((doc: any) => !doc?.storeCode || ["po", "transport_receipt", "extra"].includes(doc?.documentType))
+    ? docs.filter((doc: any) => !doc?.storeCode || ["po", "transport_receipt", "transport_invoice", "extra"].includes(doc?.documentType))
     : [];
   return normalizeProjectData({
     estimate,
@@ -1470,7 +1472,20 @@ const DocumentsTab: React.FC<{
 
   const byType = (type: string) => projectDocuments.filter(d => d.documentType === type);
   const transportDocs = byType("transport_receipt");
+  const transportInvoiceDocs = byType("transport_invoice");
   const extraDocs = byType("extra");
+
+  const scopedStores = React.useMemo(
+    () => getEstimateScopedStores(estimate, data.items, stores),
+    [estimate, data.items, stores]
+  );
+  const compliance = React.useMemo(
+    () => evaluateTransportCompliance(estimate, data.items, (data as any).allExecutionDocuments || projectDocuments, scopedStores, client),
+    [estimate, data.items, data, projectDocuments, scopedStores, client]
+  );
+
+  const [targetStoreForInvoice, setTargetStoreForInvoice] = React.useState<StoreTransportRequirement | null>(null);
+  const invoiceFileInputRef = React.useRef<HTMLInputElement>(null);
 
   const deleteDoc = async (doc: ExecDoc) => {
     if (!confirm(`Delete ${doc.originalFileName || "this file"}?`)) return;
@@ -1619,6 +1634,53 @@ const DocumentsTab: React.FC<{
     }
   };
 
+  const uploadTransportInvoice = async (file: File, req?: StoreTransportRequirement | null) => {
+    setUploading(true);
+    try {
+      let filePath: string;
+      let fileName = file.name;
+      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+      const storagePath = `estimate-${estimate.id}/transport-invoices/${Date.now()}-${safeName}`;
+
+      if (isBoltMode) {
+        const { storagePath: saved } = await uploadToStorage("execution-documents", storagePath, file);
+        filePath = saved;
+      } else {
+        const fd = new FormData();
+        fd.append("file", file);
+        const upRes = await fetch("/api/operations/upload", { method: "POST", headers: authHeader, body: fd });
+        if (!upRes.ok) throw new Error("Upload failed");
+        const data = await upRes.json();
+        filePath = data.filePath;
+        fileName = data.fileName || file.name;
+      }
+
+      await registerExecutionDocument(token, {
+        estimateId: estimate.id,
+        storeCode: req?.storeCode || "",
+        documentType: "transport_invoice",
+        filePath,
+        originalFileName: fileName,
+        mimeType: file.type || null,
+        fileSize: file.size || null,
+        uploadedVia: "project_workspace",
+        companyId: estimate.companyId || (estimate as any).company_id || getActiveCompanyId(),
+        metadata: {
+          documentCategory: "transport_invoice",
+          storeId: req?.storeId || null,
+          storeCode: req?.storeCode || "",
+          storeName: req?.storeName || "",
+        },
+      });
+      onRefresh();
+    } catch (e: any) {
+      alert(e?.message || "Transport invoice upload failed.");
+    } finally {
+      setUploading(false);
+      setTargetStoreForInvoice(null);
+    }
+  };
+
   return (
     <div className="space-y-5">
       {/* Estimate */}
@@ -1683,6 +1745,115 @@ const DocumentsTab: React.FC<{
           </p>
         )}
       </div>
+
+      {/* Aditya Birla Outstation Transport Invoice Reminder */}
+      {compliance.isAblbl && compliance.hasOutstation && (
+        <div className="bg-amber-50/70 border-2 border-amber-300/80 rounded-xl p-5 shadow-sm">
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex items-start gap-3">
+              <div className="p-2 bg-amber-100 rounded-lg text-amber-800 mt-0.5">
+                <Truck className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h4 className="text-sm font-bold text-amber-900">
+                    Outstation transportation — Transport Invoice Required.
+                  </h4>
+                  <span className={`px-2 py-0.5 rounded text-[11px] font-bold ${
+                    compliance.pendingCount === 0
+                      ? "bg-emerald-100 text-emerald-800 border border-emerald-300"
+                      : "bg-amber-200 text-amber-900 font-extrabold"
+                  }`}>
+                    {compliance.pendingCount === 0 ? "Compliant" : `${compliance.pendingCount} Pending`}
+                  </span>
+                </div>
+                <p className="text-xs text-amber-800 mt-1">
+                  Aditya Birla Lifestyle Brands Limited requires an official supplier Transport Invoice for all outstation deliveries before billing submission. Ordinary LR copies or delivery slips do not fulfill this requirement.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-4 divide-y divide-amber-200/60 border border-amber-200/80 rounded-lg bg-white overflow-hidden">
+            {compliance.requirements.map(req => (
+              <div key={req.storeCode || req.storeName || "main"} className="p-3 flex items-center justify-between gap-3 text-xs">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-slate-800">{req.storeName}</span>
+                    {req.storeCode && <span className="font-mono text-[11px] text-slate-500">({req.storeCode})</span>}
+                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase ${
+                      req.status === "Uploaded"
+                        ? "bg-emerald-100 text-emerald-800"
+                        : req.status === "Pending"
+                        ? "bg-rose-100 text-rose-800"
+                        : "bg-slate-100 text-slate-600"
+                    }`}>
+                      {req.status}
+                    </span>
+                  </div>
+                  {req.transportDetails && (
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      Mode: <span className="font-medium text-slate-700 capitalize">{req.transportMode}</span> — {req.transportDetails}
+                      {req.transportAmount ? ` (₹${req.transportAmount.toLocaleString("en-IN")})` : ""}
+                    </p>
+                  )}
+                  {req.invoiceDoc && (
+                    <p className="text-[11px] text-emerald-700 mt-0.5 font-medium flex items-center gap-1">
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      Attached: {req.invoiceDoc.originalFileName || req.invoiceDoc.fileName}
+                    </p>
+                  )}
+                </div>
+
+                <div className="shrink-0">
+                  <button
+                    type="button"
+                    disabled={uploading}
+                    onClick={() => {
+                      setTargetStoreForInvoice(req);
+                      invoiceFileInputRef.current?.click();
+                    }}
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded border text-xs font-bold transition ${
+                      req.status === "Uploaded"
+                        ? "bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100"
+                        : "bg-amber-600 text-white border-amber-600 hover:bg-amber-700 shadow-sm"
+                    }`}
+                  >
+                    <Upload className="w-3.5 h-3.5" />
+                    {req.status === "Uploaded" ? "Replace Invoice" : "Upload Transport Invoice"}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <input
+            ref={invoiceFileInputRef}
+            type="file"
+            accept=".pdf,.jpg,.jpeg,.png,image/jpeg,image/png,application/pdf"
+            className="hidden"
+            onChange={e => {
+              const file = e.target.files?.[0];
+              e.target.value = "";
+              if (file) uploadTransportInvoice(file, targetStoreForInvoice);
+            }}
+          />
+        </div>
+      )}
+
+      {/* Verified Supplier Transport Invoices */}
+      {transportInvoiceDocs.length > 0 && (
+        <div className="bg-white border border-slate-200 rounded-xl p-5">
+          <SectionTitle action={<span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">AB Verified</span>}>
+            Supplier Transport Invoices ({transportInvoiceDocs.length})
+          </SectionTitle>
+          <div className="space-y-1.5">
+            {transportInvoiceDocs.map(doc => (
+              <DocRow key={doc.id} doc={doc} token={token} onDelete={deleteDoc} />
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Transport Receipts */}
       <div className="bg-white border border-slate-200 rounded-xl p-5">

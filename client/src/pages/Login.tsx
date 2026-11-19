@@ -19,7 +19,18 @@ const Login: React.FC = () => {
     try {
       if (isLogin) {
         const success = await login(username, password);
-        if (!success) setError("Invalid username or password.");
+        if (!success) {
+          setError("Invalid username or password.");
+        } else {
+          try {
+            const ret = sessionStorage.getItem("sunrise_return_url");
+            if (ret) {
+              sessionStorage.removeItem("sunrise_return_url");
+              window.location.href = ret;
+              return;
+            }
+          } catch {}
+        }
       } else {
         if (!email || !name) {
           setError("Email and Name are required");

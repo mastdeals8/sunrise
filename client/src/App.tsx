@@ -530,6 +530,10 @@ const AppContent: React.FC = () => {
     if (location === "/login") {
       return <Login />;
     }
+    const fullPath = window.location.pathname + window.location.search;
+    if (fullPath !== "/login" && fullPath !== "/" && fullPath !== "") {
+      try { sessionStorage.setItem("sunrise_return_url", fullPath); } catch {}
+    }
     return <Redirect to="/login" />;
   }
 

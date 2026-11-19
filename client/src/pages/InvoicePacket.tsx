@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { formatCurrency } from "@/utils/format";
 import { useAuth } from "../contexts/AuthContext";
 import { isAblblFormat, extractInvoiceSequence, extractPoNumber, getPacketPdfFilename, getPacketPdfTitle } from "../../../shared/textFormat";
-import { Package, Search, Printer, Loader as Loader2, FileDown, TriangleAlert as AlertTriangle, SlidersHorizontal, Copy, Check, Mail, RotateCw } from "lucide-react";
+import { Package, Search, Printer, Loader as Loader2, FileDown, TriangleAlert as AlertTriangle, SlidersHorizontal, Copy, Check, Mail, RotateCw, Truck, Upload, FileText, CheckCircle2 } from "lucide-react";
 import { PDFDocument, rgb } from "pdf-lib";
 import html2canvas from "html2canvas";
 import EstimateDocument from "../components/EstimateDocument";
@@ -10,7 +10,9 @@ import InvoiceDocument from "../components/InvoiceDocument";
 import InvoiceSummaryDocument, { copyInvoiceSummaryToClipboard } from "../components/InvoiceSummaryDocument";
 import type { Client, Product, Store } from "./operations/types";
 import { isBoltMode } from "../lib/supabase";
-import { fetchInvoices, fetchCompanySettings, fetchEstimateById, fetchEstimateItems, fetchDeliveryChallansForEstimate, fetchPaymentsForInvoice, fetchClients, fetchStores, fetchProducts, fetchExecutionDocuments, fetchExecutionStores, getExecutionDocumentSignedUrl } from "../lib/api";
+import { fetchInvoices, fetchCompanySettings, fetchEstimateById, fetchEstimateItems, fetchDeliveryChallansForEstimate, fetchPaymentsForInvoice, fetchClients, fetchStores, fetchProducts, fetchExecutionDocuments, fetchExecutionStores, getExecutionDocumentSignedUrl, fetchInvoiceById, registerExecutionDocument, uploadToStorage } from "../lib/api";
+import { evaluateTransportCompliance, type TransportComplianceSummary } from "../../../shared/transportCompliance";
+import type { ScopedStore } from "@shared/storeScoping";
 
 interface Invoice {
   id: number;
@@ -143,6 +145,12 @@ const InvoicePacketPage: React.FC = () => {
   const [packetError, setPacketError] = useState<string | null>(null);
   const [packetLoading, setPacketLoading] = useState(false);
   const [retryNonce, setRetryNonce] = useState(0);
+  const [generationError, setGenerationError] = useState<string | null>(null);
+  const [generationNotice, setGenerationNotice] = useState<string | null>(null);
+  const [transportCompliance, setTransportCompliance] = useState<TransportComplianceSummary | null>(null);
+  const [uploadingTransportStoreCode, setUploadingTransportStoreCode] = useState<string | null>(null);
+  const [uploadTargetStore, setUploadTargetStore] = useState<ScopedStore | null>(null);
+  const transportInputRef = React.useRef<HTMLInputElement>(null);
   const buildingRef = React.useRef(false);
 
   const handleCopySummary = async () => {
@@ -303,6 +311,10 @@ const InvoicePacketPage: React.FC = () => {
             return; // will re-run when invoices arrive
           }
           if (!inv) {
+            // Fetch directly by ID in case activeCompanyId in storage doesn't match
+            inv = await fetchInvoiceById(token, selectedId);
+          }
+          if (!inv) {
             setPacketError(`Invoice #${selectedId} was not found. It may have been deleted or you may not have access to it.`);
             setPacketLoading(false);
             return;
@@ -323,7 +335,12 @@ const InvoicePacketPage: React.FC = () => {
           data = { invoice: inv, estimate, estimateItems, challans, client, payments, stores, clients, products, executionDocuments, executionStores };
         } else {
           const res = await fetch(`/api/finance/invoice-packet/${selectedId}`, { headers: { Authorization: `Bearer ${token}` } });
-          if (res.ok) data = await res.json();
+          if (res.ok) {
+            data = await res.json();
+          } else {
+            const errJson = await res.json().catch(() => ({}));
+            throw new Error(errJson.message || `Failed to load invoice packet (HTTP ${res.status})`);
+          }
         }
         if (data) {
           const invCompanyId = data.invoice?.companyId || (data.estimate?.companyId ?? 1);
@@ -379,6 +396,14 @@ const InvoicePacketPage: React.FC = () => {
             data.invoice,
             data.stores || []
           );
+          const comp = evaluateTransportCompliance(
+            data.estimate,
+            data.estimateItems || [],
+            data.executionDocuments || [],
+            activeScopedStores,
+            data.client || data.invoice
+          );
+          setTransportCompliance(comp);
           const isStoreScoped = isStoreWiseInvoice(data.invoice);
           const scopedStoreCodes = new Set(activeScopedStores.map(s => s.storeCode.toLowerCase()).filter(Boolean));
           const scopedStoreIds = new Set(activeScopedStores.map(s => s.storeId).filter((id): id is number => id != null));
@@ -887,14 +912,91 @@ const dataUrlToBytes = (dataUrl: string): Uint8Array => {
     return new Blob([pdfBytes as BlobPart], { type: "application/pdf" });
   };
 
+  const handleUploadTransportInvoice = async (file: File) => {
+    if (!uploadTargetStore || !packet?.estimate?.id) return;
+    const estId = packet.estimate.id;
+    const sc = uploadTargetStore.storeCode || "";
+    setUploadingTransportStoreCode(sc || "project");
+    try {
+      let savedPath = "";
+      if (isBoltMode) {
+        const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+        const storagePath = `estimate-${estId}/transport-invoices/${Date.now()}-${safeName}`;
+        const { storagePath: uploadedPath } = await uploadToStorage("execution-documents", storagePath, file);
+        savedPath = uploadedPath;
+      } else {
+        const fd = new FormData();
+        fd.append("file", file);
+        fd.append("estimateId", String(estId));
+        fd.append("storeCode", sc);
+        fd.append("documentType", "transport_invoice");
+        const res = await fetch("/api/operations/execution-documents/upload", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+          body: fd,
+        });
+        if (res.ok) {
+          const body = await res.json();
+          savedPath = body.filePath || body.storagePath;
+        } else {
+          throw new Error("Upload failed");
+        }
+      }
+
+      await registerExecutionDocument(token, {
+        estimateId: estId,
+        storeCode: sc,
+        documentType: "transport_invoice",
+        filePath: savedPath,
+        originalFileName: file.name,
+        mimeType: file.type || null,
+        fileSize: file.size || null,
+        uploadedVia: "invoice_packet",
+        metadata: {
+          documentCategory: "transport_invoice",
+          verified: true,
+          storeName: uploadTargetStore.storeName,
+          uploadedAt: new Date().toISOString(),
+        },
+        companyId: packet.estimate.companyId || 1,
+      });
+
+      setGenerationNotice(`Transport invoice for ${uploadTargetStore.storeName} uploaded successfully.`);
+      setRetryNonce(n => n + 1);
+    } catch (err: any) {
+      console.error("[transport-invoice-upload]", err);
+      alert("Failed to upload transport invoice: " + (err?.message || err));
+    } finally {
+      setUploadingTransportStoreCode(null);
+      setUploadTargetStore(null);
+    }
+  };
+
+  const handleTriggerUploadTransportInvoice = (req: any) => {
+    setUploadTargetStore({
+      storeId: req.storeId,
+      storeCode: req.storeCode,
+      storeName: req.storeName,
+    });
+    if (transportInputRef.current) {
+      transportInputRef.current.value = "";
+      transportInputRef.current.click();
+    }
+  };
+
   const runPacketAction = async (action: "download" | "print", force = false, scope: "all" | "invoice" = "all") => {
     if (!packet) return;
     if (buildingRef.current) return; // prevent duplicate concurrent PDF jobs
     buildingRef.current = true;
-    if (scope === "all") {
+    setGenerationError(null);
+    setGenerationNotice(null);
+
+    if (scope === "all" && !force) {
       const gaps = computeMissing();
       if (gaps.length) {
         setMissingDocs(gaps);
+        buildingRef.current = false;
+        return;
       } else {
         setMissingDocs(null);
       }
@@ -908,48 +1010,39 @@ const dataUrlToBytes = (dataUrl: string): Uint8Array => {
       const poNum = extractPoNumber(packet.invoice?.poNumber || packet.estimate?.poNumber);
       const filename = scope === "invoice" ? `Inv_${invSeq}.pdf` : `Inv_${invSeq}_PO_${poNum}.pdf`;
 
-      if (action === "download") {
-        // Direct download attached to DOM so Chrome and Safari initiate download properly
-        // without opening any blank tab/window
-        const a = document.createElement("a");
-        a.style.display = "none";
-        a.href = url;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        window.setTimeout(() => {
-          if (a.parentNode) a.parentNode.removeChild(a);
-          URL.revokeObjectURL(url);
-        }, 60000);
-      } else if (action === "print") {
-        // Direct print via hidden iframe so no blank popup or window is ever created
-        const iframe = document.createElement("iframe");
-        iframe.style.position = "fixed";
-        iframe.style.top = "-10000px";
-        iframe.style.left = "-10000px";
-        iframe.style.width = "1px";
-        iframe.style.height = "1px";
-        iframe.style.border = "0";
-        iframe.src = url;
-        document.body.appendChild(iframe);
-        iframe.onload = () => {
-          setTimeout(() => {
-            try {
-              iframe.contentWindow?.focus();
-              iframe.contentWindow?.print();
-            } catch {
-              window.print();
-            }
-          }, 400);
-        };
-        window.setTimeout(() => {
-          if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
-          URL.revokeObjectURL(url);
-        }, 120000);
+      // Always trigger direct download attached to DOM for 100% browser compatibility (Chrome, Safari, Firefox, Edge)
+      const a = document.createElement("a");
+      a.style.display = "none";
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      window.setTimeout(() => {
+        if (a.parentNode) a.parentNode.removeChild(a);
+      }, 5000);
+
+      if (action === "print") {
+        // Attempt to open the PDF in a new tab for native printing, without failing or blocking
+        try {
+          const opened = window.open(url, "_blank");
+          if (opened) {
+            setGenerationNotice("PDF opened in new tab and downloaded for printing.");
+          } else {
+            setGenerationNotice("PDF downloaded. Open the file to print.");
+          }
+        } catch {
+          setGenerationNotice("PDF downloaded. Open the file to print.");
+        }
+      } else {
+        setGenerationNotice("PDF downloaded successfully.");
       }
+
+      window.setTimeout(() => {
+        URL.revokeObjectURL(url);
+      }, 120000);
     } catch (err: any) {
       console.error("[packet-pdf] Error:", err);
-      setPacketError("PDF generation failed: " + (err?.message || err));
+      setGenerationError(err?.message || "PDF generation failed. Please try again.");
     } finally {
       setBuilding(false);
       buildingRef.current = false;
@@ -1119,6 +1212,120 @@ const dataUrlToBytes = (dataUrl: string): Uint8Array => {
             </div>
           ) : (
             <div className="space-y-6 packet-print-root" data-print-document="true">
+              <input
+                ref={transportInputRef}
+                type="file"
+                accept=".jpg,.jpeg,.png,.pdf,image/jpeg,image/png,application/pdf"
+                className="hidden"
+                onChange={e => {
+                  if (e.target.files?.[0]) handleUploadTransportInvoice(e.target.files[0]);
+                  e.target.value = "";
+                }}
+              />
+
+              {generationError && (
+                <div className="glass-panel p-4 border border-rose-300 bg-rose-50 text-rose-900 rounded-xl print:hidden flex items-start justify-between gap-3">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-bold text-sm">PDF Generation Notice</p>
+                      <p className="text-xs text-rose-700 mt-0.5">{generationError}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => runPacketAction("download", true, "all")}
+                      disabled={building}
+                      className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded transition"
+                    >
+                      Try Again
+                    </button>
+                    <button
+                      onClick={() => setGenerationError(null)}
+                      className="px-2 py-1 text-xs text-rose-600 hover:text-rose-800"
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {generationNotice && (
+                <div className="glass-panel p-3 border border-emerald-300 bg-emerald-50 text-emerald-900 rounded-xl print:hidden flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 text-xs font-semibold">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span>{generationNotice}</span>
+                  </div>
+                  <button onClick={() => setGenerationNotice(null)} className="text-xs text-emerald-700 hover:underline">✕</button>
+                </div>
+              )}
+
+              {/* Aditya Birla Outstation Transport Invoice Reminder */}
+              {transportCompliance && transportCompliance.hasOutstation && (
+                <div className={`glass-panel p-5 border rounded-xl print:hidden ${
+                  transportCompliance.pendingCount > 0 ? "border-amber-300 bg-amber-50/90" : "border-emerald-200 bg-emerald-50/80"
+                }`}>
+                  <div className="flex items-start gap-3">
+                    <Truck className={`w-5 h-5 shrink-0 mt-0.5 ${transportCompliance.pendingCount > 0 ? "text-amber-600" : "text-emerald-600"}`} />
+                    <div className="flex-1">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <h3 className={`font-bold text-sm ${transportCompliance.pendingCount > 0 ? "text-amber-950" : "text-emerald-950"}`}>
+                          Outstation transportation — Transport Invoice Required.
+                        </h3>
+                        <span className={`px-2 py-0.5 rounded text-xs font-bold ${
+                          transportCompliance.pendingCount > 0 ? "bg-amber-100 text-amber-800 border border-amber-300" : "bg-emerald-100 text-emerald-800 border border-emerald-300"
+                        }`}>
+                          {transportCompliance.pendingCount > 0 ? `${transportCompliance.pendingCount} Pending` : "All Uploaded ✓"}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-600 mt-1 mb-3">
+                        Aditya Birla Lifestyle Brands Limited project requirement: a verified supplier transport invoice must be provided for non-local / outstation logistics.
+                      </p>
+
+                      <div className="space-y-2">
+                        {transportCompliance.requirements.map((req, idx) => {
+                          if (req.transportMode !== "outstation") return null;
+                          return (
+                            <div key={idx} className="flex flex-wrap items-center justify-between gap-3 p-3 rounded-lg bg-white/80 border border-slate-200 text-xs">
+                              <div className="space-y-0.5 min-w-[200px]">
+                                <div className="font-bold text-slate-800">{req.storeName} {req.storeCode ? `(${req.storeCode})` : ""}</div>
+                                <div className="text-slate-500">{req.transportDetails}</div>
+                                {req.transportAmount ? <div className="text-slate-700 font-semibold">{formatCurrency(req.transportAmount)}</div> : null}
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <span className={`px-2 py-1 rounded font-bold text-xs ${
+                                  req.status === "Uploaded" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-800"
+                                }`}>
+                                  {req.status}
+                                </span>
+                                {req.status === "Pending" ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleTriggerUploadTransportInvoice(req)}
+                                    disabled={uploadingTransportStoreCode !== null}
+                                    className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded font-bold text-xs flex items-center gap-1 shadow-sm transition"
+                                  >
+                                    <Upload className="w-3 h-3" /> {uploadingTransportStoreCode === (req.storeCode || "project") ? "Uploading…" : "Upload Transport Invoice"}
+                                  </button>
+                                ) : req.invoiceDoc?.filePath ? (
+                                  <a
+                                    href={req.invoiceDoc.filePath}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded font-semibold text-xs inline-flex items-center gap-1"
+                                  >
+                                    <FileText className="w-3 h-3" /> View Invoice
+                                  </a>
+                                ) : null}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
               {missingDocs && missingDocs.length > 0 && (
                 <div className="glass-panel p-5 border border-amber-200 bg-amber-50 rounded-xl print:hidden">
                   <div className="flex items-start gap-2">
