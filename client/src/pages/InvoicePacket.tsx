@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { formatCurrency } from "@/utils/format";
 import { useAuth } from "../contexts/AuthContext";
 import { isAblblFormat, extractInvoiceSequence, extractPoNumber, getPacketPdfFilename, getPacketPdfTitle } from "../../../shared/textFormat";
-import { Package, Search, Printer, Loader as Loader2, FileDown, TriangleAlert as AlertTriangle, SlidersHorizontal, Copy, Check, Mail, RotateCw, Truck, Upload, FileText, CheckCircle2 } from "lucide-react";
+import { Package, Search, Printer, Loader as Loader2, FileDown, TriangleAlert as AlertTriangle, SlidersHorizontal, Copy, Check, Mail, RotateCw, Truck, Upload, FileText, CheckCircle2, X } from "lucide-react";
 import { PDFDocument, rgb } from "pdf-lib";
 import html2canvas from "html2canvas";
 import EstimateDocument from "../components/EstimateDocument";
@@ -152,6 +152,28 @@ const InvoicePacketPage: React.FC = () => {
   const [uploadTargetStore, setUploadTargetStore] = useState<ScopedStore | null>(null);
   const transportInputRef = React.useRef<HTMLInputElement>(null);
   const buildingRef = React.useRef(false);
+  const [viewerModal, setViewerModal] = useState<{
+    url: string;
+    blob: Blob;
+    filename: string;
+    title: string;
+    scope: "all" | "invoice";
+  } | null>(null);
+
+  useEffect(() => {
+    if (!viewerModal) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        if (viewerModal?.url) {
+          const u = viewerModal.url;
+          window.setTimeout(() => URL.revokeObjectURL(u), 1000);
+        }
+        setViewerModal(null);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [viewerModal]);
 
   const handleCopySummary = async () => {
     if (!packet) return;
@@ -1012,7 +1034,7 @@ const dataUrlToBytes = (dataUrl: string): Uint8Array => {
     }
   };
 
-  const runPacketAction = async (action: "download" | "print", force = false, scope: "all" | "invoice" = "all") => {
+  const handleDownloadPdf = async (scope: "all" | "invoice" = "all", force = false) => {
     if (!packet) return;
     if (buildingRef.current) return; // prevent duplicate concurrent PDF jobs
     buildingRef.current = true;
@@ -1038,43 +1060,96 @@ const dataUrlToBytes = (dataUrl: string): Uint8Array => {
       const poNum = extractPoNumber(packet.invoice?.poNumber || packet.estimate?.poNumber);
       const filename = scope === "invoice" ? `Inv_${invSeq}.pdf` : `Inv_${invSeq}_PO_${poNum}.pdf`;
 
-      // Always trigger direct download attached to DOM for 100% browser compatibility (Chrome, Safari, Firefox, Edge)
+      // Pure direct DOM-triggered download via a.download with rel="noopener". Strictly NO window.open.
       const a = document.createElement("a");
       a.style.display = "none";
       a.href = url;
       a.download = filename;
+      a.rel = "noopener";
       document.body.appendChild(a);
       a.click();
       window.setTimeout(() => {
         if (a.parentNode) a.parentNode.removeChild(a);
-      }, 5000);
+      }, 3000);
 
-      if (action === "print") {
-        // Attempt to open the PDF in a new tab for native printing, without failing or blocking
-        try {
-          const opened = window.open(url, "_blank");
-          if (opened) {
-            setGenerationNotice("PDF opened in new tab and downloaded for printing.");
-          } else {
-            setGenerationNotice("PDF downloaded. Open the file to print.");
-          }
-        } catch {
-          setGenerationNotice("PDF downloaded. Open the file to print.");
-        }
-      } else {
-        setGenerationNotice("PDF downloaded successfully.");
-      }
-
+      setGenerationNotice(`Downloaded ${filename} successfully.`);
       window.setTimeout(() => {
         URL.revokeObjectURL(url);
-      }, 120000);
+      }, 60000);
     } catch (err: any) {
-      console.error("[packet-pdf] Error:", err);
+      console.error("[packet-pdf] Download error:", err);
       setGenerationError(err?.message || "PDF generation failed. Please try again.");
     } finally {
       setBuilding(false);
       buildingRef.current = false;
     }
+  };
+
+  const handlePrintPacket = async (scope: "all" | "invoice" = "all", force = false) => {
+    if (!packet) return;
+    if (buildingRef.current) return; // prevent duplicate concurrent PDF jobs
+    buildingRef.current = true;
+    setGenerationError(null);
+    setGenerationNotice(null);
+
+    if (scope === "all" && !force) {
+      const gaps = computeMissing();
+      if (gaps.length) {
+        setMissingDocs(gaps);
+        buildingRef.current = false;
+        return;
+      } else {
+        setMissingDocs(null);
+      }
+    }
+
+    setBuilding(true);
+    try {
+      const blob = await buildInvoicePacketPdf(scope);
+      const url = URL.createObjectURL(blob);
+      const invSeq = extractInvoiceSequence(packet.invoice?.invoiceNumber);
+      const poNum = extractPoNumber(packet.invoice?.poNumber || packet.estimate?.poNumber);
+      const filename = scope === "invoice" ? `Inv_${invSeq}.pdf` : `Inv_${invSeq}_PO_${poNum}.pdf`;
+      const title = scope === "invoice" ? `Tax Invoice (${filename})` : `Invoice Packet (${filename})`;
+
+      // Open in-app PDF Viewer & Print Modal displaying compiled PDF. Strictly NO window.open.
+      setViewerModal({
+        url,
+        blob,
+        filename,
+        title,
+        scope,
+      });
+      setGenerationNotice(`Compiled ${filename}. Use the viewer controls to print or download.`);
+    } catch (err: any) {
+      console.error("[packet-pdf] Print generation error:", err);
+      setGenerationError(err?.message || "PDF generation failed. Please try again.");
+    } finally {
+      setBuilding(false);
+      buildingRef.current = false;
+    }
+  };
+
+  const handleCloseViewerModal = () => {
+    if (viewerModal?.url) {
+      const urlToRevoke = viewerModal.url;
+      window.setTimeout(() => URL.revokeObjectURL(urlToRevoke), 1000);
+    }
+    setViewerModal(null);
+  };
+
+  const handleTriggerViewerPrint = () => {
+    try {
+      const frame = document.getElementById("packet-preview-embed-frame") as HTMLIFrameElement;
+      if (frame?.contentWindow) {
+        frame.contentWindow.focus();
+        frame.contentWindow.print();
+        return;
+      }
+    } catch (e) {
+      console.warn("Direct iframe print blocked:", e);
+    }
+    window.print();
   };
 
   const included = pages.filter(p => p.included);
@@ -1168,7 +1243,7 @@ const dataUrlToBytes = (dataUrl: string): Uint8Array => {
                   <span className="font-bold text-xs text-slate-700">Tax Invoice</span>
                   <div className="flex gap-1.5">
                     <button
-                      onClick={() => runPacketAction("print", false, "invoice")}
+                      onClick={() => handlePrintPacket("invoice", false)}
                       disabled={building}
                       className="flex items-center gap-1 px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 disabled:opacity-60 text-white text-xs font-semibold"
                       title="Print Tax Invoice (A4 Portrait)"
@@ -1176,7 +1251,7 @@ const dataUrlToBytes = (dataUrl: string): Uint8Array => {
                       <Printer className="w-3 h-3" /> Print
                     </button>
                     <button
-                      onClick={() => runPacketAction("download", false, "invoice")}
+                      onClick={() => handleDownloadPdf("invoice", false)}
                       disabled={building}
                       className="flex items-center gap-1 px-2 py-1 rounded bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-xs font-semibold"
                       title="Download Tax Invoice PDF"
@@ -1189,7 +1264,7 @@ const dataUrlToBytes = (dataUrl: string): Uint8Array => {
                   <span className="font-bold text-xs text-slate-700">Packet ({included.length})</span>
                   <div className="flex gap-1.5">
                     <button
-                      onClick={() => runPacketAction("print", true, "all")}
+                      onClick={() => handlePrintPacket("all", true)}
                       disabled={building || included.length === 0}
                       className="flex items-center gap-1 px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 disabled:opacity-60 text-white text-xs font-semibold"
                       title="Print Invoice Packet (all pages)"
@@ -1197,7 +1272,7 @@ const dataUrlToBytes = (dataUrl: string): Uint8Array => {
                       <Printer className="w-3 h-3" /> Print Packet
                     </button>
                     <button
-                      onClick={() => runPacketAction("download", true, "all")}
+                      onClick={() => handleDownloadPdf("all", true)}
                       disabled={building || included.length === 0}
                       className="flex items-center gap-1 px-2.5 py-1 rounded bg-orange-600 hover:bg-orange-700 disabled:opacity-60 text-white text-xs font-semibold"
                       title="Generate a single client-ready PDF in submission order"
@@ -1262,7 +1337,7 @@ const dataUrlToBytes = (dataUrl: string): Uint8Array => {
                   </div>
                   <div className="flex items-center gap-2">
                     <button
-                      onClick={() => runPacketAction("download", true, "all")}
+                      onClick={() => handleDownloadPdf("all", true)}
                       disabled={building}
                       className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded transition"
                     >
@@ -1385,8 +1460,8 @@ const dataUrlToBytes = (dataUrl: string): Uint8Array => {
                         ))}
                       </ul>
                       <div className="mt-3 flex flex-wrap gap-2">
-                        <button onClick={() => runPacketAction("print", true, "all")} className="px-3 py-2 rounded-md bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold flex items-center gap-1.5"><Printer className="w-3.5 h-3.5" /> Print Anyway</button>
-                        <button onClick={() => runPacketAction("download", true, "all")} className="px-3 py-2 rounded-md bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold flex items-center gap-1.5"><FileDown className="w-3.5 h-3.5" /> Generate Anyway</button>
+                        <button onClick={() => handlePrintPacket("all", true)} className="px-3 py-2 rounded-md bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold flex items-center gap-1.5"><Printer className="w-3.5 h-3.5" /> Print Anyway</button>
+                        <button onClick={() => handleDownloadPdf("all", true)} className="px-3 py-2 rounded-md bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold flex items-center gap-1.5"><FileDown className="w-3.5 h-3.5" /> Generate Anyway</button>
                         <button onClick={() => window.location.href = packet.estimate?.id ? `/operations?estimateId=${packet.estimate.id}#documents` : "/operations#documents"} className="px-3 py-2 rounded-md border border-amber-300 bg-white text-amber-900 text-xs font-semibold">Go Upload Documents</button>
                       </div>
                     </div>
@@ -1488,7 +1563,7 @@ const dataUrlToBytes = (dataUrl: string): Uint8Array => {
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
-                    onClick={() => runPacketAction("print", true, "all")}
+                    onClick={() => handlePrintPacket("all", true)}
                     disabled={building}
                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-orange-600 hover:bg-orange-700 disabled:opacity-60 text-white text-xs font-bold shadow-sm transition"
                   >
@@ -1505,14 +1580,14 @@ const dataUrlToBytes = (dataUrl: string): Uint8Array => {
                     {p.kind === "invoice" && (
                       <div className="flex items-center gap-1.5">
                         <button
-                          onClick={() => runPacketAction("print", false, "invoice")}
+                          onClick={() => handlePrintPacket("invoice", false)}
                           disabled={building}
                           className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold flex items-center gap-1"
                         >
                           <Printer className="w-3 h-3" /> Print Invoice
                         </button>
                         <button
-                          onClick={() => runPacketAction("download", false, "invoice")}
+                          onClick={() => handleDownloadPdf("invoice", false)}
                           disabled={building}
                           className="px-2 py-1 rounded bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold flex items-center gap-1"
                         >
@@ -1542,6 +1617,105 @@ const dataUrlToBytes = (dataUrl: string): Uint8Array => {
           )}
         </div>
       </div>
+
+      {viewerModal && (
+        <div
+          className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4 print:hidden"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) handleCloseViewerModal();
+          }}
+        >
+          <div className="bg-white rounded-2xl shadow-2xl flex flex-col w-full max-w-5xl h-[92vh] border border-slate-200 overflow-hidden animate-in fade-in duration-150">
+            {/* Header Toolbar */}
+            <div className="px-5 py-3 border-b border-slate-200 bg-slate-50 flex items-center justify-between gap-3 shrink-0">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="p-1.5 rounded-lg bg-orange-100 text-orange-700 shrink-0">
+                  <FileText className="w-5 h-5" />
+                </div>
+                <div className="min-w-0">
+                  <h2 className="text-sm font-bold text-slate-800 truncate">{viewerModal.title}</h2>
+                  <span className="text-[11px] font-mono text-slate-500 truncate block">{viewerModal.filename}</span>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={handleTriggerViewerPrint}
+                  className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold shadow-sm transition"
+                  title="Print document (browser print dialog)"
+                >
+                  <Printer className="w-3.5 h-3.5" />
+                  <span>Print</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const a = document.createElement("a");
+                    a.style.display = "none";
+                    a.href = viewerModal.url;
+                    a.download = viewerModal.filename;
+                    a.rel = "noopener";
+                    document.body.appendChild(a);
+                    a.click();
+                    window.setTimeout(() => {
+                      if (a.parentNode) a.parentNode.removeChild(a);
+                    }, 2000);
+                  }}
+                  className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-orange-600 hover:bg-orange-700 text-white text-xs font-bold shadow-sm transition"
+                  title="Download PDF"
+                >
+                  <FileDown className="w-3.5 h-3.5" />
+                  <span>Download PDF</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCloseViewerModal}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition ml-1"
+                  title="Close preview (Esc)"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Embedded PDF Viewer */}
+            <div className="flex-1 w-full bg-slate-100 relative overflow-hidden flex flex-col">
+              <object
+                data={viewerModal.url}
+                type="application/pdf"
+                className="w-full flex-1 border-0"
+              >
+                <iframe
+                  id="packet-preview-embed-frame"
+                  src={viewerModal.url}
+                  title={viewerModal.title}
+                  className="w-full h-full border-0"
+                />
+                <div className="p-8 text-center text-slate-600 text-sm">
+                  <p className="mb-2">Preview is not directly supported in this browser frame.</p>
+                  <button
+                    onClick={() => {
+                      const a = document.createElement("a");
+                      a.href = viewerModal.url;
+                      a.download = viewerModal.filename;
+                      a.rel = "noopener";
+                      document.body.appendChild(a);
+                      a.click();
+                      window.setTimeout(() => {
+                        if (a.parentNode) a.parentNode.removeChild(a);
+                      }, 2000);
+                    }}
+                    className="text-orange-600 font-bold underline"
+                  >
+                    Click to download {viewerModal.filename}
+                  </button>
+                </div>
+              </object>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

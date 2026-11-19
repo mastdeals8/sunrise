@@ -265,7 +265,15 @@ export const BulkInvoicePdfRunner: React.FC<BulkInvoicePdfRunnerProps> = ({
                 iframe.contentWindow?.focus();
                 iframe.contentWindow?.print();
               } catch (e) {
-                window.open(blobUrl, "_blank");
+                // Instead of window.open which fails with a blank tab in Safari, trigger direct download
+                const a = document.createElement("a");
+                a.style.display = "none";
+                a.href = blobUrl;
+                a.download = `Invoices_Combined_${Date.now()}.pdf`;
+                a.rel = "noopener";
+                document.body.appendChild(a);
+                a.click();
+                setTimeout(() => { if (a.parentNode) a.parentNode.removeChild(a); }, 2000);
               }
             }, 300);
           };

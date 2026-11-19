@@ -545,7 +545,7 @@ const AppContent: React.FC = () => {
   const sections = SECTIONS.filter((s) => !s.roles || s.roles.includes(role) || role === "admin");
 
   return (
-    <div className="app-shell flex h-screen w-screen bg-slate-50 text-slate-800 overflow-hidden font-sans">
+    <div className="app-shell flex h-screen w-screen bg-slate-50 text-slate-800 overflow-hidden print:overflow-visible print:h-auto print:w-auto font-sans">
       {/* Mobile Top Bar */}
       <div className="app-mobile-topbar lg:hidden flex justify-between items-center bg-white border-b border-slate-100 px-4 py-3 fixed top-0 w-full z-40">
         <img src="/brand/logo.png" alt="Sunrise Media" className="h-7 w-auto" />
@@ -633,8 +633,8 @@ const AppContent: React.FC = () => {
       </aside>
 
       {/* Main */}
-      <main className="app-main flex-1 flex flex-col min-w-0 overflow-hidden lg:pt-0 pt-12 relative bg-slate-50">
-        <div className="app-main-scroll flex-1 overflow-y-auto p-4 lg:p-6">
+      <main className="app-main flex-1 flex flex-col min-w-0 overflow-hidden print:overflow-visible print:h-auto lg:pt-0 pt-12 relative bg-slate-50">
+        <div className="app-main-scroll flex-1 overflow-y-auto print:overflow-visible print:h-auto p-4 lg:p-6 print:p-0">
           <Switch>
             <Route path="/" component={Dashboard} />
             <Route path="/staff" component={StaffPage} />
