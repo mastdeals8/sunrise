@@ -1,9 +1,10 @@
 import React, { useMemo, useState } from "react";
 import { Pager, usePagedList } from "@/components/Pager";
 import { Link } from "wouter";
-import { FileText, Plus, Eye, X, Search, Pencil, Trash2, Ban, Printer, Receipt, Download, CheckSquare, FileCode2, Loader2, AlertCircle, CheckCircle2 } from "lucide-react";
+import { FileText, Plus, Eye, X, Search, Pencil, Trash2, Ban, Printer, Receipt, Download, CheckSquare, FileCode2, Loader2, AlertCircle, CheckCircle2, Package } from "lucide-react";
 import type { Client, DeliveryChallan, Estimate } from "../types";
 import BulkInvoicePdfRunner from "./BulkInvoicePdfRunner";
+import BulkInvoicePacketRunner from "./BulkInvoicePacketRunner";
 import { fetchTallySettings, buildTallyBatchXml, downloadTallyXml, checkInvoiceTallyEligibility } from "@/lib/tally";
 import { fetchCompany } from "@/lib/api";
 import { supabase, isBoltMode } from "@/lib/supabase";
@@ -112,6 +113,7 @@ const InvoiceLedgerPanel: React.FC<InvoiceLedgerPanelProps> = ({
   // Bulk Invoice selection & PDF Export state
   const [selectedInvoiceIds, setSelectedInvoiceIds] = useState<Set<number>>(new Set());
   const [bulkInvoicePdfMode, setBulkInvoicePdfMode] = useState<"preview" | "zip" | "combined" | null>(null);
+  const [bulkPacketOpen, setBulkPacketOpen] = useState(false);
   const headerCheckboxRef = React.useRef<HTMLInputElement>(null);
 
   // Tally XML export state
@@ -480,6 +482,15 @@ const InvoiceLedgerPanel: React.FC<InvoiceLedgerPanelProps> = ({
                 </button>
                 <button
                   type="button"
+                  onClick={() => setBulkPacketOpen(true)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-lg shadow-xs transition cursor-pointer"
+                  title="Export complete invoice packets (tax invoice, PO, estimate, WCCs, photos, transport) for selected invoices packaged into a ZIP download"
+                >
+                  <Package className="w-3.5 h-3.5" />
+                  Download Invoice Packets
+                </button>
+                <button
+                  type="button"
                   onClick={() => setBulkInvoicePdfMode("zip")}
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 font-semibold rounded-lg shadow-xs transition cursor-pointer"
                   title="Export separate PDF per invoice packaged into a ZIP download"
@@ -645,6 +656,19 @@ const InvoiceLedgerPanel: React.FC<InvoiceLedgerPanelProps> = ({
           <BulkInvoicePdfRunner
             mode={bulkInvoicePdfMode}
             onClose={() => setBulkInvoicePdfMode(null)}
+            selectedInvoices={selectedInvoicesInOrder}
+            estimates={estimates}
+            stores={stores}
+            clients={clients}
+            products={products}
+            sellerProfile={sellerProfile}
+            token={token}
+            showSuccess={showSuccess}
+          />
+
+          <BulkInvoicePacketRunner
+            isOpen={bulkPacketOpen}
+            onClose={() => setBulkPacketOpen(false)}
             selectedInvoices={selectedInvoicesInOrder}
             estimates={estimates}
             stores={stores}

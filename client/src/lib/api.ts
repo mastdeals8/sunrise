@@ -4137,3 +4137,52 @@ export async function fetchProductCostingSummary(token: string | null) {
     totalPurchasedQty: 100,
   }));
 }
+
+export async function fetchInvoicePacketRequirements(token: string | null, companyId?: number) {
+  const compId = companyId || getActiveCompanyId();
+  if (!isBoltMode) {
+    const res = await apiFetch(`/api/operations/invoice-packet-requirements?companyId=${compId}`, token);
+    return res.ok ? res.json() : [];
+  }
+  return sbSelect("invoice_packet_requirements", (q) =>
+    q.select("*").eq("company_id", compId)
+  );
+}
+
+export async function saveInvoicePacketRequirements(token: string | null, payload: any) {
+  const compId = payload.companyId || getActiveCompanyId();
+  const safePayload = { ...payload, companyId: compId };
+  if (!isBoltMode) {
+    const res = await apiFetch("/api/operations/invoice-packet-requirements", token, {
+      method: "POST",
+      body: JSON.stringify(safePayload),
+    });
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      throw new Error(j.message || "Failed to save invoice packet requirements");
+    }
+    return res.json();
+  }
+  // Bolt mode direct upsert
+  const { data, error } = await supabase
+    .from("invoice_packet_requirements")
+    .upsert({
+      company_id: compId,
+      brand_id: payload.brandId || null,
+      client_id: payload.clientId || null,
+      tax_invoice: payload.taxInvoice !== false,
+      estimate: payload.estimate !== false,
+      purchase_order: payload.purchaseOrder !== false,
+      installation_photos: payload.installationPhotos !== false,
+      generated_wcc: Boolean(payload.generatedWcc),
+      signed_wcc: payload.signedWcc !== false,
+      transport_receipt: payload.transportReceipt !== false,
+      other_docs: Boolean(payload.otherDocs),
+      updated_at: new Date().toISOString(),
+    })
+    .select();
+  if (error) {
+    throw error;
+  }
+  return data?.[0] ? toCamel(data[0]) : null;
+}

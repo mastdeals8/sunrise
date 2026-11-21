@@ -2,7 +2,7 @@ import { createServer, type Server } from "http";
 import express, { type Express, Request, Response, NextFunction } from "express";
 import { storage, sanitizeUser } from "./storage";
 import { hashPassword, comparePassword, generateToken, authenticateToken, authenticateBrowserRequest, requireRole, setSessionCookie, clearSessionCookie, AuthRequest } from "./auth";
-import { insertUserSchema, insertAttendanceSchema, insertTaskSchema, insertPettyCashExpenseSchema, insertInvoiceSchema, insertPaymentSchema, insertChartOfAccountSchema, insertClientSchema, insertClientBillingProfileSchema, insertBrandSchema, insertStoreSchema, insertProductSchema, insertEstimateSchema, insertEstimateItemSchema, insertStaffAdvanceSchema, insertPayrollSchema, insertDeliveryChallanSchema, clients, brands, stores, products, invoices, payments, botSettings, botUploadInbox, webhookLogs, customerRateCards, customerRateItems, estimates, estimateItems, estimateRevisions, deliveryChallans, executionDocuments, executionStores, fieldAccessLinks, staffAdvances, attendance, projectStoreStatus, users, telegramDeliveries, companyUsers, materialCodes, masterProjects, projectEstimates, pettyCashExpenses } from "../shared/schema";
+import { insertUserSchema, insertAttendanceSchema, insertTaskSchema, insertPettyCashExpenseSchema, insertInvoiceSchema, insertPaymentSchema, insertChartOfAccountSchema, insertClientSchema, insertClientBillingProfileSchema, insertBrandSchema, insertStoreSchema, insertProductSchema, insertEstimateSchema, insertEstimateItemSchema, insertStaffAdvanceSchema, insertPayrollSchema, insertDeliveryChallanSchema, insertInvoicePacketRequirementsSchema, clients, brands, stores, products, invoices, payments, botSettings, botUploadInbox, webhookLogs, customerRateCards, customerRateItems, estimates, estimateItems, estimateRevisions, deliveryChallans, executionDocuments, executionStores, fieldAccessLinks, staffAdvances, attendance, projectStoreStatus, users, telegramDeliveries, companyUsers, materialCodes, masterProjects, projectEstimates, pettyCashExpenses, invoicePacketRequirements } from "../shared/schema";
 import { db, pool } from "./db";
 import { inArray, eq, sql, and, ne, or, isNotNull } from "drizzle-orm";
 import { z } from "zod";
@@ -49,6 +49,7 @@ import { isServiceEstimateItem, resolveServiceProduct, serviceProductLabel } fro
 import { computeStoreBreakdown } from "../shared/storeBreakdown";
 import { estimateItemsToInvoiceLines } from "../shared/invoiceConversion";
 import { evaluateInvoiceReadiness } from "../shared/invoiceReadiness";
+import { resolveInvoicePacketRequirements } from "../shared/packetRequirements";
 import { getEstimateScopedStores } from "../shared/storeScoping";
 import { whatsappEvolution, normalizeWhatsAppNumber } from "./services/whatsappEvolution";
 import { installerService } from "./services/installerService";
@@ -4668,7 +4669,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const photoDocs = (await db.select().from(executionDocuments).where(eq(executionDocuments.estimateId, estimateId)))
         .filter((d: any) => d.status !== "deleted" && !d.deletedAt);
 
-      const readiness = evaluateInvoiceReadiness(estimate, scopedStores, challans, photoDocs);
+      const allReqs = await db.select().from(invoicePacketRequirements).where(eq(invoicePacketRequirements.companyId, estimate.companyId || 1));
+      const allBrandsList = await db.select().from(brands).where(eq(brands.companyId, estimate.companyId || 1));
+      const { requirements } = resolveInvoicePacketRequirements(allReqs, {
+        companyId: estimate.companyId || 1,
+        brandId: estimate.brandId,
+        clientId: estimate.clientId,
+        allBrands: allBrandsList,
+      });
+
+      const readiness = evaluateInvoiceReadiness(estimate, scopedStores, challans, photoDocs, requirements);
 
       if (readiness.isInvoiceReady && estimate.status !== "invoice_ready") {
         await db.update(estimates).set({ status: "invoice_ready" }).where(eq(estimates.id, estimateId));
@@ -4705,6 +4715,66 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await syncEstimateInvoiceReadiness(estimateId);
       const [est] = await db.select().from(estimates).where(eq(estimates.id, estimateId)).limit(1);
       res.json({ success: true, estimate: est });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // Invoice Packet Requirements routes
+  app.get("/api/operations/invoice-packet-requirements", authenticateToken, async (req: AuthRequest, res: Response) => {
+    try {
+      const companyId = req.companyId || (req.query.companyId ? Number(req.query.companyId) : 1);
+      const rows = await db.select().from(invoicePacketRequirements).where(eq(invoicePacketRequirements.companyId, companyId));
+      res.json(rows);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.post("/api/operations/invoice-packet-requirements", authenticateToken, requireRole(["admin", "manager", "accounts"]), async (req: AuthRequest, res: Response) => {
+    try {
+      const companyId = req.companyId || Number(req.body.companyId) || 1;
+      const brandId = req.body.brandId ? Number(req.body.brandId) : null;
+      const clientId = req.body.clientId ? Number(req.body.clientId) : null;
+
+      const payload = {
+        companyId,
+        brandId,
+        clientId,
+        taxInvoice: req.body.taxInvoice !== false,
+        estimate: req.body.estimate !== false,
+        purchaseOrder: req.body.purchaseOrder !== false,
+        installationPhotos: req.body.installationPhotos !== false,
+        generatedWcc: Boolean(req.body.generatedWcc),
+        signedWcc: req.body.signedWcc !== false,
+        transportReceipt: req.body.transportReceipt !== false,
+        otherDocs: Boolean(req.body.otherDocs),
+        updatedAt: new Date(),
+      };
+
+      const existing = await db.select().from(invoicePacketRequirements).where(
+        and(
+          eq(invoicePacketRequirements.companyId, companyId),
+          brandId ? eq(invoicePacketRequirements.brandId, brandId) : isNull(invoicePacketRequirements.brandId),
+          clientId ? eq(invoicePacketRequirements.clientId, clientId) : isNull(invoicePacketRequirements.clientId)
+        )
+      ).limit(1);
+
+      let saved: any;
+      if (existing[0]) {
+        const [updated] = await db.update(invoicePacketRequirements).set(payload).where(eq(invoicePacketRequirements.id, existing[0].id)).returning();
+        saved = updated;
+      } else {
+        const [created] = await db.insert(invoicePacketRequirements).values(payload).returning();
+        saved = created;
+      }
+
+      // Re-sync active estimates
+      syncAllEstimatesInvoiceReadiness().catch((err) => {
+        console.error("[invoice-packet-requirements] Readiness resync failed:", err);
+      });
+
+      res.json(saved);
     } catch (err: any) {
       res.status(500).json({ message: err.message });
     }

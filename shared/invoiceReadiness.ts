@@ -12,6 +12,17 @@
  */
 
 import { ScopedStore, getEstimateScopedStores } from "./storeScoping";
+import type { InvoicePacketRequirements } from "./packetRequirements";
+import {
+  DEFAULT_INVOICE_PACKET_REQUIREMENTS,
+  resolveInvoicePacketRequirements,
+} from "./packetRequirements";
+
+export type { InvoicePacketRequirements };
+export {
+  DEFAULT_INVOICE_PACKET_REQUIREMENTS,
+  resolveInvoicePacketRequirements,
+};
 
 export interface StoreRequirementStatus {
   storeId: number | null;
@@ -145,9 +156,12 @@ export function evaluateInvoiceReadiness(
   estimate: any,
   scopedStores: ScopedStore[] = [],
   challans: any[] = [],
-  photoDocs: any[] = []
+  photoDocs: any[] = [],
+  requirements?: InvoicePacketRequirements
 ): InvoiceReadinessResult {
-  const hasPo = estimateHasPo(estimate);
+  const reqs = requirements || DEFAULT_INVOICE_PACKET_REQUIREMENTS;
+  const requiresPo = reqs.purchaseOrder !== false;
+  const hasPo = requiresPo ? estimateHasPo(estimate) : true;
   if (!estimate) {
     return {
       hasPo: false,
@@ -179,6 +193,9 @@ export function evaluateInvoiceReadiness(
   const activeSignedWccs = (photoDocs || []).filter(isSignedWccDoc);
   const totalStoresCount = effectiveStores.length;
 
+  const photoRequired = reqs.installationPhotos !== false;
+  const wccRequired = reqs.signedWcc !== false || reqs.generatedWcc !== false;
+
   const evaluatedStores: StoreRequirementStatus[] = effectiveStores.map((store) => {
     const matchingChallans = activeChallans.filter((c) =>
       matchChallanToStore(c, store, totalStoresCount)
@@ -192,10 +209,20 @@ export function evaluateInvoiceReadiness(
     );
 
     const hasPhoto = matchingPhotos.length > 0;
-    const hasWcc = matchingChallans.length > 0 || matchingSignedWccs.length > 0;
+    const hasGeneratedWcc = matchingChallans.length > 0;
+    const hasSignedWcc = matchingSignedWccs.length > 0;
+    const hasWcc = (reqs.generatedWcc ? hasGeneratedWcc : false) ||
+                   (reqs.signedWcc ? (hasSignedWcc || hasGeneratedWcc) : false) ||
+                   (!reqs.signedWcc && !reqs.generatedWcc ? true : (hasGeneratedWcc || hasSignedWcc));
+
+    const photoSatisfied = !photoRequired || hasPhoto;
+    const wccSatisfied = !wccRequired || hasWcc;
+
     const missing: ("Installation Photo" | "WCC Generated")[] = [];
-    if (!hasPhoto) missing.push("Installation Photo");
-    if (!hasWcc) missing.push("WCC Generated");
+    if (photoRequired && !hasPhoto) missing.push("Installation Photo");
+    if (wccRequired && !hasWcc) missing.push("WCC Generated");
+
+    const isComplete = photoSatisfied && wccSatisfied;
 
     return {
       storeId: store.storeId,
@@ -205,7 +232,7 @@ export function evaluateInvoiceReadiness(
       photoCount: matchingPhotos.length,
       hasWcc,
       wccCount: matchingChallans.length,
-      isComplete: hasPhoto && hasWcc,
+      isComplete,
       missing,
     };
   });
@@ -247,9 +274,12 @@ export function evaluateInvoiceReadiness(
  */
 export function evaluateInvoiceReadinessFromStoreRows(
   estimate: any,
-  storeRows: any[] = []
+  storeRows: any[] = [],
+  requirements?: InvoicePacketRequirements
 ): InvoiceReadinessResult {
-  const hasPo = estimateHasPo(estimate);
+  const reqs = requirements || DEFAULT_INVOICE_PACKET_REQUIREMENTS;
+  const requiresPo = reqs.purchaseOrder !== false;
+  const hasPo = requiresPo ? estimateHasPo(estimate) : true;
   if (!estimate) {
     return {
       hasPo: false,
@@ -263,23 +293,45 @@ export function evaluateInvoiceReadinessFromStoreRows(
     };
   }
 
+  const photoRequired = reqs.installationPhotos !== false;
+  const wccRequired = reqs.signedWcc !== false || reqs.generatedWcc !== false;
+
   const evaluatedStores: StoreRequirementStatus[] = (storeRows || []).map((row) => {
-    const photoCount = Number(row.stats?.photoCount ?? (Array.isArray(row.photoDocuments) ? row.photoDocuments.filter(isInstallationPhotoDoc).length : 0));
+    const photoCount = Number(
+      row.stats?.photoCount ??
+      (Array.isArray(row.photoDocuments) ? row.photoDocuments.filter(isInstallationPhotoDoc).length : (row.photoCount ?? 0))
+    );
     const wccCount = Number(
-      (row.stats?.wccCount ?? 0) + (row.stats?.dcCount ?? 0) ||
-      (Array.isArray(row.wccRecords) ? row.wccRecords.filter(isActiveWccChallan).length : 0) +
-      (Array.isArray(row.dcRecords) ? row.dcRecords.filter(isActiveWccChallan).length : 0)
+      (row.stats?.wccCount != null || row.stats?.dcCount != null)
+        ? (row.stats?.wccCount ?? 0) + (row.stats?.dcCount ?? 0)
+        : (Array.isArray(row.wccRecords) || Array.isArray(row.dcRecords))
+          ? (Array.isArray(row.wccRecords) ? row.wccRecords.filter(isActiveWccChallan).length : 0) +
+            (Array.isArray(row.dcRecords) ? row.dcRecords.filter(isActiveWccChallan).length : 0)
+          : (row.wccCount ?? row.dcCount ?? 0)
     );
     const signedWccCount = Number(
-      (row.stats?.signedWccCount ?? 0) + (row.stats?.signedDcCount ?? 0) ||
-      (Array.isArray(row.signedWccDocuments) ? row.signedWccDocuments.filter(isSignedWccDoc).length : 0)
+      (row.stats?.signedWccCount != null || row.stats?.signedDcCount != null)
+        ? (row.stats?.signedWccCount ?? 0) + (row.stats?.signedDcCount ?? 0)
+        : (Array.isArray(row.signedWccDocuments))
+          ? row.signedWccDocuments.filter(isSignedWccDoc).length
+          : (row.signedWccCount ?? row.signedDcCount ?? 0)
     );
 
     const hasPhoto = photoCount > 0;
-    const hasWcc = wccCount > 0 || signedWccCount > 0;
+    const hasGeneratedWcc = wccCount > 0;
+    const hasSignedWcc = signedWccCount > 0;
+    const hasWcc = (reqs.generatedWcc ? hasGeneratedWcc : false) ||
+                   (reqs.signedWcc ? (hasSignedWcc || hasGeneratedWcc) : false) ||
+                   (!reqs.signedWcc && !reqs.generatedWcc ? true : (hasGeneratedWcc || hasSignedWcc));
+
+    const photoSatisfied = !photoRequired || hasPhoto;
+    const wccSatisfied = !wccRequired || hasWcc;
+
     const missing: ("Installation Photo" | "WCC Generated")[] = [];
-    if (!hasPhoto) missing.push("Installation Photo");
-    if (!hasWcc) missing.push("WCC Generated");
+    if (photoRequired && !hasPhoto) missing.push("Installation Photo");
+    if (wccRequired && !hasWcc) missing.push("WCC Generated");
+
+    const isComplete = photoSatisfied && wccSatisfied;
 
     return {
       storeId: row.storeId != null ? Number(row.storeId) : null,
@@ -289,7 +341,7 @@ export function evaluateInvoiceReadinessFromStoreRows(
       photoCount,
       hasWcc,
       wccCount,
-      isComplete: hasPhoto && hasWcc,
+      isComplete: photoSatisfied && wccSatisfied,
       missing,
     };
   });

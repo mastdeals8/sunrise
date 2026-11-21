@@ -112,6 +112,27 @@ export const ensureIndexes = async (db: { execute: (q: any) => Promise<any> }) =
     sql`CREATE INDEX IF NOT EXISTS idx_telegram_deliveries_estimate_id ON telegram_deliveries(estimate_id)`,
     sql`CREATE INDEX IF NOT EXISTS idx_telegram_deliveries_field_link_id ON telegram_deliveries(field_link_id)`,
     sql`CREATE INDEX IF NOT EXISTS idx_telegram_deliveries_status ON telegram_deliveries(status)`,
+    // Invoice Packet Requirements
+    sql`CREATE TABLE IF NOT EXISTS invoice_packet_requirements (
+      id SERIAL PRIMARY KEY,
+      company_id INTEGER NOT NULL DEFAULT 1 REFERENCES companies(id) ON DELETE CASCADE,
+      brand_id INTEGER REFERENCES brands(id) ON DELETE CASCADE,
+      client_id INTEGER REFERENCES clients(id) ON DELETE CASCADE,
+      tax_invoice BOOLEAN NOT NULL DEFAULT true,
+      estimate BOOLEAN NOT NULL DEFAULT true,
+      purchase_order BOOLEAN NOT NULL DEFAULT true,
+      installation_photos BOOLEAN NOT NULL DEFAULT true,
+      generated_wcc BOOLEAN NOT NULL DEFAULT false,
+      signed_wcc BOOLEAN NOT NULL DEFAULT true,
+      transport_receipt BOOLEAN NOT NULL DEFAULT true,
+      other_docs BOOLEAN NOT NULL DEFAULT false,
+      created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW(),
+      updated_at TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW()
+    )`,
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_uniq_ipr_brand_client ON invoice_packet_requirements (company_id, brand_id, client_id) WHERE brand_id IS NOT NULL AND client_id IS NOT NULL`,
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_uniq_ipr_brand_only ON invoice_packet_requirements (company_id, brand_id) WHERE brand_id IS NOT NULL AND client_id IS NULL`,
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_uniq_ipr_client_only ON invoice_packet_requirements (company_id, client_id) WHERE brand_id IS NULL AND client_id IS NOT NULL`,
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_uniq_ipr_company_default ON invoice_packet_requirements (company_id) WHERE brand_id IS NULL AND client_id IS NULL`,
   ];
   await Promise.all(
     statements.map((stmt) =>

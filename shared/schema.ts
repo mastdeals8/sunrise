@@ -381,6 +381,26 @@ export const brands = pgTable("brands", {
 });
 
 // ==========================================
+// 11b. Brand/Client Invoice Packet Requirements
+// ==========================================
+export const invoicePacketRequirements = pgTable("invoice_packet_requirements", {
+  id: serial("id").primaryKey(),
+  companyId: integer("company_id").notNull().default(1),
+  brandId: integer("brand_id").references(() => brands.id, { onDelete: 'cascade' }),
+  clientId: integer("client_id").references(() => clients.id, { onDelete: 'cascade' }),
+  taxInvoice: boolean("tax_invoice").notNull().default(true),
+  estimate: boolean("estimate").notNull().default(true),
+  purchaseOrder: boolean("purchase_order").notNull().default(true),
+  installationPhotos: boolean("installation_photos").notNull().default(true),
+  generatedWcc: boolean("generated_wcc").notNull().default(false),
+  signedWcc: boolean("signed_wcc").notNull().default(true),
+  transportReceipt: boolean("transport_receipt").notNull().default(true),
+  otherDocs: boolean("other_docs").notNull().default(false),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// ==========================================
 // 12. Stores/Sites (Sunrise Custom)
 // ==========================================
 export const stores = pgTable("stores", {
@@ -873,6 +893,7 @@ export const insertPaymentSchema = createInsertSchema(payments).omit({ id: true,
 export const insertClientSchema = createInsertSchema(clients).omit({ id: true, createdAt: true });
 export const insertClientBillingProfileSchema = createInsertSchema(clientBillingProfiles).omit({ id: true, createdAt: true });
 export const insertBrandSchema = createInsertSchema(brands).omit({ id: true, createdAt: true });
+export const insertInvoicePacketRequirementsSchema = createInsertSchema(invoicePacketRequirements).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertStoreSchema = createInsertSchema(stores).omit({ id: true, createdAt: true });
 export const insertProductSchema = createInsertSchema(products).omit({ id: true, createdAt: true });
 // ─── Phase 3: Audit Logs ─────────────────────────────────────────────────────
@@ -1164,3 +1185,5 @@ export type ProjectCostAllocation = typeof projectCostAllocations.$inferSelect;
 export type InsertProjectCostAllocation = z.infer<typeof insertProjectCostAllocationSchema>;
 export type ContractorWorkOrder = typeof contractorWorkOrders.$inferSelect;
 export type InsertContractorWorkOrder = z.infer<typeof insertContractorWorkOrderSchema>;
+export type InvoicePacketRequirementsRow = typeof invoicePacketRequirements.$inferSelect;
+export type InsertInvoicePacketRequirements = z.infer<typeof insertInvoicePacketRequirementsSchema>;

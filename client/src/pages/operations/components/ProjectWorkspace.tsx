@@ -1,6 +1,6 @@
 import React from "react";
 import { isBoltMode, supabase } from "../../../lib/supabase";
-import { fetchEstimateItems, fetchDeliveryChallansForEstimate, fetchExecutionStores, fetchExecutionDocuments, fetchInvoiceForEstimate, uploadToStorage, registerExecutionDocument, deleteExecutionDocument, updateExecutionDocumentMetadata, openExecutionDocument, isActiveDeliveryChallan, isWccDeliveryChallan, getActiveCompanyId, updateEstimate } from "../../../lib/api";
+import { fetchEstimateItems, fetchDeliveryChallansForEstimate, fetchExecutionStores, fetchExecutionDocuments, fetchInvoiceForEstimate, uploadToStorage, registerExecutionDocument, deleteExecutionDocument, updateExecutionDocumentMetadata, openExecutionDocument, isActiveDeliveryChallan, isWccDeliveryChallan, getActiveCompanyId, updateEstimate, fetchInvoicePacketRequirements } from "../../../lib/api";
 import { ArrowLeft, Camera, CircleCheck as CheckCircle, CircleCheck as CheckCircle2, ChevronRight, Clock, Download, ExternalLink, Eye, File, FileCheck2, FilePlus, FileText, FileUp, Image as ImageIcon, IndianRupee, MapPin, Package, Paperclip, Printer, RefreshCw, Trash2, TrendingUp, Truck, Upload, X, CircleAlert as AlertCircle, Activity as ActivityIcon, Zap } from "lucide-react";
 import { StatusBadge } from "@/components/ui-kit";
 import type { Client, Brand, Store, Estimate, DeliveryChallan, Product } from "../types";
@@ -9,7 +9,7 @@ import { isAblblFormat } from "../../../../../shared/textFormat";
 import { getEstimateScopedStores } from "@shared/storeScoping";
 import { evaluateTransportCompliance, isVerifiedTransportInvoice, type StoreTransportRequirement } from "../../../../../shared/transportCompliance";
 import { orderedStoreKeysFromGrouping } from "../utils/estimateOrdering";
-import { evaluateInvoiceReadinessFromStoreRows, type InvoiceReadinessResult } from "@shared/invoiceReadiness";
+import { evaluateInvoiceReadinessFromStoreRows, type InvoiceReadinessResult, type InvoicePacketRequirements, DEFAULT_INVOICE_PACKET_REQUIREMENTS, resolveInvoicePacketRequirements } from "@shared/invoiceReadiness";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -420,24 +420,37 @@ const isImg = (doc: ExecDoc) =>
   Boolean((doc.mimeType && doc.mimeType.startsWith("image/")) ||
     /\.(png|jpe?g|gif|webp)$/i.test(doc.originalFileName || doc.filePath));
 
-const isStoreBillingReady = (row: ExecStoreRow) => {
+const isStoreBillingReady = (row: ExecStoreRow, reqs?: InvoicePacketRequirements) => {
+  const r = reqs || DEFAULT_INVOICE_PACKET_REQUIREMENTS;
+  const photoRequired = r.installationPhotos !== false;
+  const wccRequired = r.signedWcc !== false || r.generatedWcc !== false;
   const hasPhotos = row.stats.photoCount > 0;
-  const hasWcc = (row.stats.wccCount + (row.stats.dcCount || 0)) > 0 || (row.stats.signedWccCount + (row.stats.signedDcCount || 0)) > 0;
-  return (hasPhotos && hasWcc) || row.billingReady;
+  const hasWcc = (r.generatedWcc ? ((row.stats.wccCount + (row.stats.dcCount || 0)) > 0) : false) ||
+                 (r.signedWcc ? ((row.stats.wccCount + (row.stats.dcCount || 0)) > 0 || (row.stats.signedWccCount + (row.stats.signedDcCount || 0)) > 0) : false) ||
+                 (!r.signedWcc && !r.generatedWcc ? true : ((row.stats.wccCount + (row.stats.dcCount || 0)) > 0 || (row.stats.signedWccCount + (row.stats.signedDcCount || 0)) > 0));
+  const photoSatisfied = !photoRequired || hasPhotos;
+  const wccSatisfied = !wccRequired || hasWcc;
+  return (photoSatisfied && wccSatisfied) || row.billingReady;
 };
 
-const statusBillingLabel = (row: ExecStoreRow) => {
+const statusBillingLabel = (row: ExecStoreRow, reqs?: InvoicePacketRequirements) => {
+  const r = reqs || DEFAULT_INVOICE_PACKET_REQUIREMENTS;
+  const photoRequired = r.installationPhotos !== false;
+  const wccRequired = r.signedWcc !== false || r.generatedWcc !== false;
   const hasPhotos = row.stats.photoCount > 0;
-  const hasWcc = (row.stats.wccCount + (row.stats.dcCount || 0)) > 0 || (row.stats.signedWccCount + (row.stats.signedDcCount || 0)) > 0;
+  const hasWcc = (r.generatedWcc ? ((row.stats.wccCount + (row.stats.dcCount || 0)) > 0) : false) ||
+                 (r.signedWcc ? ((row.stats.wccCount + (row.stats.dcCount || 0)) > 0 || (row.stats.signedWccCount + (row.stats.signedDcCount || 0)) > 0) : false) ||
+                 (!r.signedWcc && !r.generatedWcc ? true : ((row.stats.wccCount + (row.stats.dcCount || 0)) > 0 || (row.stats.signedWccCount + (row.stats.signedDcCount || 0)) > 0));
   const hasSignedWcc = (row.stats.signedWccCount + (row.stats.signedDcCount || 0)) > 0;
-  const isStoreReady = hasPhotos && hasWcc;
-  // A single, data-derived progression. Existing completed rows remain
-  // completed; every other stage is derived from its canonical record.
+  const photoSatisfied = !photoRequired || hasPhotos;
+  const wccSatisfied = !wccRequired || hasWcc;
+  const isStoreReady = photoSatisfied && wccSatisfied;
+
   if (row.status === "completed") return { label: "Completed", cls: "bg-slate-100 text-slate-700 border-slate-200" };
   if (isStoreReady || row.billingReady) return { label: "Store Ready ✓", cls: "bg-emerald-50 text-emerald-700 border-emerald-200" };
-  if (hasSignedWcc) return { label: "Signed WCC Uploaded (Missing Photo)", cls: "bg-blue-50 text-blue-700 border-blue-200" };
-  if (hasWcc) return { label: "WCC Generated (Missing Photo)", cls: "bg-amber-50 text-amber-700 border-amber-200" };
-  if (hasPhotos) return { label: "Photos Uploaded (Missing WCC)", cls: "bg-amber-50 text-amber-700 border-amber-200" };
+  if (hasSignedWcc && photoRequired && !hasPhotos) return { label: "Signed WCC Uploaded (Missing Photo)", cls: "bg-blue-50 text-blue-700 border-blue-200" };
+  if (hasWcc && photoRequired && !hasPhotos) return { label: "WCC Generated (Missing Photo)", cls: "bg-amber-50 text-amber-700 border-amber-200" };
+  if (hasPhotos && wccRequired && !hasWcc) return { label: "Photos Uploaded (Missing WCC)", cls: "bg-amber-50 text-amber-700 border-amber-200" };
   return { label: "Pending (No Photos/WCC)", cls: "bg-slate-50 text-slate-500 border-slate-200" };
 };
 
@@ -867,10 +880,11 @@ const OverviewTab: React.FC<{
   clients: Client[];
   brands: Brand[];
   invoiceReadiness?: InvoiceReadinessResult | null;
+  packetRequirements?: InvoicePacketRequirements;
   onGoToTab: (t: ProjectTab) => void;
   onPoUpload: (est: Estimate) => void;
   onOpenInvoice: () => void;
-}> = ({ data, clients, brands, invoiceReadiness, onGoToTab, onPoUpload, onOpenInvoice }) => {
+}> = ({ data, clients, brands, invoiceReadiness, packetRequirements, onGoToTab, onPoUpload, onOpenInvoice }) => {
   const { estimate, stores, invoices } = data;
   const client = clients.find(c => c.id === estimate.clientId);
   const brand = brands.find(b => b.id === estimate.brandId);
@@ -878,7 +892,7 @@ const OverviewTab: React.FC<{
 
   const total = stores.length;
   const completed = stores.filter(s => (s.stats.signedWccCount + s.stats.signedDcCount) > 0).length;
-  const billing = stores.filter(isStoreBillingReady).length;
+  const billing = stores.filter(s => isStoreBillingReady(s, packetRequirements)).length;
   const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
 
   return (
@@ -1405,19 +1419,20 @@ const ExecutionTab: React.FC<{
   data: ProjectData;
   estimate: Estimate;
   token: string | null;
+  packetRequirements?: InvoicePacketRequirements;
   onOpenWcc: (dc: DeliveryChallan, msg?: string) => void;
   onPreviewWcc: (dc: DeliveryChallan) => void;
   onGenerateWcc: (storeCode: string, storeId?: number | null) => void;
   onPrintWcc?: (dc: DeliveryChallan) => void;
   onRefresh: () => void;
-}> = ({ data, estimate, token, onOpenWcc, onPreviewWcc, onGenerateWcc, onPrintWcc, onRefresh }) => {
+}> = ({ data, estimate, token, packetRequirements, onOpenWcc, onPreviewWcc, onGenerateWcc, onPrintWcc, onRefresh }) => {
   const [selectedStore, setSelectedStore] = React.useState<ExecStoreRow | null>(null);
   const stores = data.stores;
 
   const totalPhotos = stores.reduce((s, r) => s + r.stats.photoCount, 0);
   const totalWcc = stores.reduce((s, r) => s + r.stats.wccCount, 0);
   const totalSigned = stores.reduce((s, r) => s + r.stats.signedWccCount + r.stats.signedDcCount, 0);
-  const totalBilling = stores.filter(isStoreBillingReady).length;
+  const totalBilling = stores.filter(s => isStoreBillingReady(s, packetRequirements)).length;
 
   return (
     <div className="space-y-4">
@@ -1459,7 +1474,7 @@ const ExecutionTab: React.FC<{
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {stores.map(row => {
-                  const bs = statusBillingLabel(row);
+                  const bs = statusBillingLabel(row, packetRequirements);
                   const hasPhotos = row.stats.photoCount > 0;
                   const hasWcc = (row.stats.wccCount + row.stats.dcCount) > 0;
                   const hasSigned = (row.stats.signedWccCount + row.stats.signedDcCount) > 0;
@@ -2523,10 +2538,33 @@ const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({
     onRefresh();
   };
 
+  const [packetRequirements, setPacketRequirements] = React.useState<InvoicePacketRequirements>({
+    ...DEFAULT_INVOICE_PACKET_REQUIREMENTS,
+  });
+
+  React.useEffect(() => {
+    if (!estimate) return;
+    const compId = estimate.companyId || 1;
+    fetchInvoicePacketRequirements(token, compId)
+      .then((allReqs) => {
+        const targetBrandId = estimate.brandId;
+        const targetBrand = (brands || []).find((b: any) => Number(b.id) === Number(targetBrandId));
+        const resolved = resolveInvoicePacketRequirements(allReqs, {
+          companyId: compId,
+          brandId: targetBrandId,
+          clientId: estimate.clientId,
+          parentBrandName: targetBrand?.parentBrand,
+          allBrands: brands,
+        });
+        setPacketRequirements(resolved.requirements);
+      })
+      .catch((err) => console.warn("Failed to load packet requirements in ProjectWorkspace:", err));
+  }, [estimate?.id, estimate?.brandId, estimate?.clientId, token, brands]);
+
   const invoiceReadiness = React.useMemo(() => {
     if (!estimate || !data?.stores) return null;
-    return evaluateInvoiceReadinessFromStoreRows(estimate, data.stores);
-  }, [estimate, data?.stores]);
+    return evaluateInvoiceReadinessFromStoreRows(estimate, data.stores, packetRequirements);
+  }, [estimate, data?.stores, packetRequirements]);
 
   // Automatically sync estimate workflow status between PO RECEIVED and INVOICE READY
   React.useEffect(() => {
@@ -2674,6 +2712,7 @@ const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({
               clients={clients}
               brands={brands}
               invoiceReadiness={invoiceReadiness}
+              packetRequirements={packetRequirements}
               onGoToTab={setActiveTab}
               onPoUpload={onPoUpload}
               onOpenInvoice={() => onOpenInvoice({ estimateId: estimate.id, invoiceId: data.invoices[0]?.id || null })}
@@ -2704,6 +2743,7 @@ const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({
               data={data}
               estimate={estimate}
               token={token}
+              packetRequirements={packetRequirements}
               onOpenWcc={onOpenWcc}
               onPreviewWcc={onPreviewWcc}
               onGenerateWcc={onGenerateWcc}

@@ -10,9 +10,15 @@ import InvoiceDocument from "../components/InvoiceDocument";
 import InvoiceSummaryDocument, { copyInvoiceSummaryToClipboard } from "../components/InvoiceSummaryDocument";
 import type { Client, Product, Store } from "./operations/types";
 import { isBoltMode } from "../lib/supabase";
-import { fetchInvoices, fetchCompanySettings, fetchEstimateById, fetchEstimateItems, fetchDeliveryChallansForEstimate, fetchPaymentsForInvoice, fetchClients, fetchStores, fetchProducts, fetchExecutionDocuments, fetchExecutionStores, getExecutionDocumentSignedUrl, fetchInvoiceById, registerExecutionDocument, uploadToStorage, updateExecutionDocumentMetadata } from "../lib/api";
+import { fetchInvoices, fetchCompanySettings, fetchEstimateById, fetchEstimateItems, fetchDeliveryChallansForEstimate, fetchPaymentsForInvoice, fetchClients, fetchStores, fetchProducts, fetchExecutionDocuments, fetchExecutionStores, getExecutionDocumentSignedUrl, fetchInvoiceById, registerExecutionDocument, uploadToStorage, updateExecutionDocumentMetadata, fetchInvoicePacketRequirements, fetchBrands } from "../lib/api";
 import { evaluateTransportCompliance, isVerifiedTransportInvoice, type TransportComplianceSummary } from "../../../shared/transportCompliance";
 import type { ScopedStore } from "@shared/storeScoping";
+import {
+  InvoicePacketRequirements,
+  DEFAULT_INVOICE_PACKET_REQUIREMENTS,
+  resolveInvoicePacketRequirements,
+  RequirementSource,
+} from "../../../shared/packetRequirements";
 
 interface Invoice {
   id: number;
@@ -213,6 +219,11 @@ const InvoicePacketPage: React.FC = () => {
       return "normal";
     }
   });
+
+  const [packetRequirements, setPacketRequirements] = useState<InvoicePacketRequirements>({
+    ...DEFAULT_INVOICE_PACKET_REQUIREMENTS,
+  });
+  const [reqSource, setReqSource] = useState<RequirementSource>("default");
 
   const applyPacketPrintStyles = (scalePct: number, mode: "normal" | "compact") => {
     const scaleRatio = scalePct / 100;
@@ -426,6 +437,23 @@ const InvoicePacketPage: React.FC = () => {
             data.client || data.invoice
           );
           setTransportCompliance(comp);
+
+          // Load and resolve Brand-wise invoice packet requirements
+          const [allReqs, allBrandsList] = await Promise.all([
+            fetchInvoicePacketRequirements(token, invCompanyId).catch(() => []),
+            fetchBrands(token).catch(() => []),
+          ]);
+          const targetBrandId = data.estimate?.brandId || (activeScopedStores[0]?.storeId ? (data.stores || []).find((s: any) => s.id === activeScopedStores[0].storeId)?.brandId : null);
+          const targetBrand = (allBrandsList || []).find((b: any) => Number(b.id) === Number(targetBrandId));
+          const resolvedReqs = resolveInvoicePacketRequirements(allReqs, {
+            companyId: invCompanyId,
+            brandId: targetBrandId,
+            clientId: data.invoice?.clientId || data.estimate?.clientId,
+            parentBrandName: targetBrand?.parentBrand,
+            allBrands: allBrandsList,
+          });
+          setPacketRequirements(resolvedReqs.requirements);
+          setReqSource(resolvedReqs.source);
           const isStoreScoped = isStoreWiseInvoice(data.invoice);
           const scopedStoreCodes = new Set(activeScopedStores.map(s => s.storeCode.toLowerCase()).filter(Boolean));
           const scopedStoreIds = new Set(activeScopedStores.map(s => s.storeId).filter((id): id is number => id != null));
@@ -594,9 +622,9 @@ const InvoicePacketPage: React.FC = () => {
   const computeMissing = (): { store: string; missing: string[] }[] => {
     const gaps: { store: string; missing: string[] }[] = [];
     const coreMissing: string[] = [];
-    if (!packet?.invoice) coreMissing.push("Invoice");
-    if (!pages.some(p => p.kind === "po" && p.filePath)) coreMissing.push("Purchase Order");
-    if (!pages.some(p => p.kind === "estimate")) coreMissing.push("Estimate");
+    if (packetRequirements.taxInvoice && !packet?.invoice) coreMissing.push("Invoice");
+    if (packetRequirements.purchaseOrder && !pages.some(p => p.kind === "po" && p.filePath)) coreMissing.push("Purchase Order");
+    if (packetRequirements.estimate && !pages.some(p => p.kind === "estimate")) coreMissing.push("Estimate");
     if (coreMissing.length) gaps.push({ store: "Project-level", missing: coreMissing });
 
     if (!packet?.estimate) return gaps;
@@ -620,33 +648,46 @@ const InvoicePacketPage: React.FC = () => {
       const storeLabel = store.storeName || (sc ? `Store ${sc}` : "Store");
       const storeMissing: string[] = [];
 
-      const hasWcc = pages.some(p =>
+      const hasSignedWcc = pages.some(p =>
         p.kind === "wcc" &&
         p.filePath &&
         (scLower ? String(p.storeCode || "").trim().toLowerCase() === scLower : true)
       );
-      if (!hasWcc) storeMissing.push("Signed WCC");
+      const hasGeneratedWcc = (packet.challans || []).some((dc: any) =>
+        isWccDeliveryChallan(dc) &&
+        (scLower ? String(dc.storeCode || "").trim().toLowerCase() === scLower : true)
+      );
+
+      if (packetRequirements.signedWcc && !hasSignedWcc) storeMissing.push("Signed WCC");
+      if (packetRequirements.generatedWcc && !hasGeneratedWcc) storeMissing.push("Generated WCC");
 
       const hasPhoto = pages.some(p =>
         p.kind === "photo" &&
         p.filePath &&
         (scLower ? String(p.storeCode || "").trim().toLowerCase() === scLower : true)
       );
-      if (!hasPhoto) storeMissing.push("Installation Photos");
+      if (packetRequirements.installationPhotos && !hasPhoto) storeMissing.push("Installation Photos");
 
       // Check transport receipt for this store if outstation transport is required
-      const transReq = transportCompliance?.requirements?.find(r => {
-        if (r.storeCode && scLower && r.storeCode.toLowerCase() === scLower) return true;
-        if (r.storeId && store.storeId && r.storeId === store.storeId) return true;
-        return false;
-      });
-      if (transReq && transReq.transportMode === "outstation" && transReq.status === "Pending") {
-        const transDetails = [
-          transReq.origin && transReq.destination ? `${transReq.origin} → ${transReq.destination}` : transReq.destination ? `Destination: ${transReq.destination}` : null,
-          transReq.distanceKm ? `${transReq.distanceKm} KM` : null,
-          transReq.transportAmount ? `₹${transReq.transportAmount.toLocaleString("en-IN")}` : null,
-        ].filter(Boolean).join(" · ");
-        storeMissing.push(`Transport Receipt not attached${transDetails ? ` (${transDetails})` : ""}`);
+      if (packetRequirements.transportReceipt) {
+        const transReq = transportCompliance?.requirements?.find(r => {
+          if (r.storeCode && scLower && r.storeCode.toLowerCase() === scLower) return true;
+          if (r.storeId && store.storeId && r.storeId === store.storeId) return true;
+          return false;
+        });
+        if (transReq && transReq.transportMode === "outstation" && transReq.status === "Pending") {
+          const transDetails = [
+            transReq.origin && transReq.destination ? `${transReq.origin} → ${transReq.destination}` : transReq.destination ? `Destination: ${transReq.destination}` : null,
+            transReq.distanceKm ? `${transReq.distanceKm} KM` : null,
+            transReq.transportAmount ? `₹${transReq.transportAmount.toLocaleString("en-IN")}` : null,
+          ].filter(Boolean).join(" · ");
+          storeMissing.push(`Transport Receipt not attached${transDetails ? ` (${transDetails})` : ""}`);
+        }
+      }
+
+      if (packetRequirements.otherDocs) {
+        const hasOther = pages.some(p => (p.kind === "project" || p.kind === "store-file") && p.filePath);
+        if (!hasOther) storeMissing.push("Other Documents");
       }
 
       if (storeMissing.length) {
@@ -1422,6 +1463,36 @@ const dataUrlToBytes = (dataUrl: string): Uint8Array => {
                   </div>
                 </div>
               )}
+              {/* Brand-Wise Invoice Packet Requirements Banner */}
+              <div className="glass-panel p-3 border border-slate-200 bg-white rounded-xl print:hidden flex flex-wrap items-center justify-between gap-3 text-xs">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-bold text-slate-700">Packet Requirements:</span>
+                  <span className={`px-2 py-0.5 rounded text-[11px] font-bold ${
+                    reqSource === "client_brand_override" ? "bg-blue-100 text-blue-700 border border-blue-200"
+                    : reqSource === "brand" ? "bg-emerald-100 text-emerald-700 border border-emerald-200"
+                    : reqSource === "parent_brand" ? "bg-amber-100 text-amber-700 border border-amber-200"
+                    : "bg-slate-100 text-slate-600 border border-slate-200"
+                  }`}>
+                    {reqSource === "client_brand_override" ? "Client-Specific Override"
+                     : reqSource === "brand" ? "Custom Brand Configuration"
+                     : reqSource === "parent_brand" ? "Inherited from Parent Brand"
+                     : "System Defaults"}
+                  </span>
+                  <span className="text-slate-500 text-[11px]">
+                    ({Object.values(packetRequirements).filter(Boolean).length} compulsory documents: {[
+                      packetRequirements.taxInvoice ? "Invoice" : null,
+                      packetRequirements.estimate ? "Estimate" : null,
+                      packetRequirements.purchaseOrder ? "PO" : null,
+                      packetRequirements.installationPhotos ? "Photos" : null,
+                      packetRequirements.signedWcc ? "Signed WCC" : null,
+                      packetRequirements.generatedWcc ? "Generated WCC" : null,
+                      packetRequirements.transportReceipt ? "Transport" : null,
+                      packetRequirements.otherDocs ? "Other" : null,
+                    ].filter(Boolean).join(", ")})
+                  </span>
+                </div>
+              </div>
+
               {missingDocs && missingDocs.length > 0 && (
                 <div className="glass-panel p-5 border border-amber-200 bg-amber-50 rounded-xl print:hidden">
                   <div className="flex items-start gap-2">
