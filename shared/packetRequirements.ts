@@ -14,8 +14,8 @@ export const DEFAULT_INVOICE_PACKET_REQUIREMENTS: InvoicePacketRequirements = {
   estimate: true,
   purchaseOrder: true,
   installationPhotos: true,
-  generatedWcc: false,
-  signedWcc: true,
+  generatedWcc: true,
+  signedWcc: false,
   transportReceipt: true,
   otherDocs: false,
 };
@@ -41,10 +41,10 @@ export function normalizeRequirements(row?: any): InvoicePacketRequirements {
     estimate: row.estimate ?? true,
     purchaseOrder: row.purchaseOrder ?? row.purchase_order ?? true,
     installationPhotos: row.installationPhotos ?? row.installation_photos ?? true,
-    generatedWcc: row.generatedWcc ?? row.generated_wcc ?? false,
-    signedWcc: row.signedWcc ?? row.signed_wcc ?? true,
-    transportReceipt: row.transportReceipt ?? row.transport_receipt ?? true,
-    otherDocs: row.otherDocs ?? row.other_docs ?? false,
+    generatedWcc: Boolean(row.generatedWcc ?? row.generated_wcc ?? DEFAULT_INVOICE_PACKET_REQUIREMENTS.generatedWcc),
+    signedWcc: Boolean(row.signedWcc ?? row.signed_wcc ?? DEFAULT_INVOICE_PACKET_REQUIREMENTS.signedWcc),
+    transportReceipt: Boolean(row.transportReceipt ?? row.transport_receipt ?? false),
+    otherDocs: Boolean(row.otherDocs ?? row.other_docs ?? false),
   };
 }
 

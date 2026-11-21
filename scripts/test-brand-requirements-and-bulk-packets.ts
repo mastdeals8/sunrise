@@ -62,13 +62,13 @@ async function runTests() {
     fallback.requirements.taxInvoice === true &&
     fallback.requirements.purchaseOrder === true &&
     fallback.requirements.installationPhotos === true &&
-    fallback.requirements.signedWcc === true,
-    "System default should require tax invoice, PO, photos, and signed WCC"
+    fallback.requirements.generatedWcc === true,
+    "System default should require tax invoice, PO, photos, and generated WCC"
   );
   assert(
-    fallback.requirements.generatedWcc === false &&
+    fallback.requirements.signedWcc === false &&
     fallback.requirements.otherDocs === false,
-    "System default generated WCC and otherDocs should be false by default"
+    "System default signed WCC and otherDocs should be false by default"
   );
 
   // ---------------------------------------------------------------------------

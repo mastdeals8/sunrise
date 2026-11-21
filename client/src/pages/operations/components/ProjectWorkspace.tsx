@@ -423,35 +423,71 @@ const isImg = (doc: ExecDoc) =>
 const isStoreBillingReady = (row: ExecStoreRow, reqs?: InvoicePacketRequirements) => {
   const r = reqs || DEFAULT_INVOICE_PACKET_REQUIREMENTS;
   const photoRequired = r.installationPhotos !== false;
-  const wccRequired = r.signedWcc !== false || r.generatedWcc !== false;
+  const requireGenWcc = Boolean(r.generatedWcc);
+  const requireSignedWcc = Boolean(r.signedWcc);
+
   const hasPhotos = row.stats.photoCount > 0;
-  const hasWcc = (r.generatedWcc ? ((row.stats.wccCount + (row.stats.dcCount || 0)) > 0) : false) ||
-                 (r.signedWcc ? ((row.stats.wccCount + (row.stats.dcCount || 0)) > 0 || (row.stats.signedWccCount + (row.stats.signedDcCount || 0)) > 0) : false) ||
-                 (!r.signedWcc && !r.generatedWcc ? true : ((row.stats.wccCount + (row.stats.dcCount || 0)) > 0 || (row.stats.signedWccCount + (row.stats.signedDcCount || 0)) > 0));
+  const hasGenWcc = (row.stats.wccCount + (row.stats.dcCount || 0)) > 0;
+  const hasSignedWcc = (row.stats.signedWccCount + (row.stats.signedDcCount || 0)) > 0;
+
   const photoSatisfied = !photoRequired || hasPhotos;
-  const wccSatisfied = !wccRequired || hasWcc;
-  return (photoSatisfied && wccSatisfied) || row.billingReady;
+
+  let genWccSatisfied = true;
+  let signedWccSatisfied = true;
+
+  if (requireGenWcc && !requireSignedWcc) {
+    genWccSatisfied = hasGenWcc || hasSignedWcc;
+    signedWccSatisfied = true;
+  } else if (requireSignedWcc && !requireGenWcc) {
+    genWccSatisfied = true;
+    signedWccSatisfied = hasSignedWcc;
+  } else if (requireGenWcc && requireSignedWcc) {
+    genWccSatisfied = hasGenWcc || hasSignedWcc;
+    signedWccSatisfied = hasSignedWcc;
+  }
+
+  return (photoSatisfied && genWccSatisfied && signedWccSatisfied) || row.billingReady;
 };
 
 const statusBillingLabel = (row: ExecStoreRow, reqs?: InvoicePacketRequirements) => {
   const r = reqs || DEFAULT_INVOICE_PACKET_REQUIREMENTS;
   const photoRequired = r.installationPhotos !== false;
-  const wccRequired = r.signedWcc !== false || r.generatedWcc !== false;
+  const requireGenWcc = Boolean(r.generatedWcc);
+  const requireSignedWcc = Boolean(r.signedWcc);
+
   const hasPhotos = row.stats.photoCount > 0;
-  const hasWcc = (r.generatedWcc ? ((row.stats.wccCount + (row.stats.dcCount || 0)) > 0) : false) ||
-                 (r.signedWcc ? ((row.stats.wccCount + (row.stats.dcCount || 0)) > 0 || (row.stats.signedWccCount + (row.stats.signedDcCount || 0)) > 0) : false) ||
-                 (!r.signedWcc && !r.generatedWcc ? true : ((row.stats.wccCount + (row.stats.dcCount || 0)) > 0 || (row.stats.signedWccCount + (row.stats.signedDcCount || 0)) > 0));
+  const hasGenWcc = (row.stats.wccCount + (row.stats.dcCount || 0)) > 0;
   const hasSignedWcc = (row.stats.signedWccCount + (row.stats.signedDcCount || 0)) > 0;
+
   const photoSatisfied = !photoRequired || hasPhotos;
-  const wccSatisfied = !wccRequired || hasWcc;
-  const isStoreReady = photoSatisfied && wccSatisfied;
+
+  let genWccSatisfied = true;
+  let signedWccSatisfied = true;
+
+  if (requireGenWcc && !requireSignedWcc) {
+    genWccSatisfied = hasGenWcc || hasSignedWcc;
+    signedWccSatisfied = true;
+  } else if (requireSignedWcc && !requireGenWcc) {
+    genWccSatisfied = true;
+    signedWccSatisfied = hasSignedWcc;
+  } else if (requireGenWcc && requireSignedWcc) {
+    genWccSatisfied = hasGenWcc || hasSignedWcc;
+    signedWccSatisfied = hasSignedWcc;
+  }
+
+  const isStoreReady = photoSatisfied && genWccSatisfied && signedWccSatisfied;
 
   if (row.status === "completed") return { label: "Completed", cls: "bg-slate-100 text-slate-700 border-slate-200" };
   if (isStoreReady || row.billingReady) return { label: "Store Ready ✓", cls: "bg-emerald-50 text-emerald-700 border-emerald-200" };
+  if (requireSignedWcc && !hasSignedWcc && hasGenWcc && (!photoRequired || hasPhotos)) {
+    return { label: "WCC Generated (Missing Signed Copy)", cls: "bg-amber-50 text-amber-700 border-amber-200" };
+  }
   if (hasSignedWcc && photoRequired && !hasPhotos) return { label: "Signed WCC Uploaded (Missing Photo)", cls: "bg-blue-50 text-blue-700 border-blue-200" };
-  if (hasWcc && photoRequired && !hasPhotos) return { label: "WCC Generated (Missing Photo)", cls: "bg-amber-50 text-amber-700 border-amber-200" };
-  if (hasPhotos && wccRequired && !hasWcc) return { label: "Photos Uploaded (Missing WCC)", cls: "bg-amber-50 text-amber-700 border-amber-200" };
-  return { label: "Pending (No Photos/WCC)", cls: "bg-slate-50 text-slate-500 border-slate-200" };
+  if (hasGenWcc && photoRequired && !hasPhotos) return { label: "WCC Generated (Missing Photo)", cls: "bg-amber-50 text-amber-700 border-amber-200" };
+  if (hasPhotos && (requireGenWcc || requireSignedWcc) && (!genWccSatisfied || !signedWccSatisfied)) {
+    return { label: `Photos Uploaded (Missing ${requireSignedWcc && !signedWccSatisfied ? "Signed WCC" : "WCC"})`, cls: "bg-amber-50 text-amber-700 border-amber-200" };
+  }
+  return { label: "Pending (Missing Documents)", cls: "bg-slate-50 text-slate-500 border-slate-200" };
 };
 
 const actionLabel = (entry: AuditEntry) => {

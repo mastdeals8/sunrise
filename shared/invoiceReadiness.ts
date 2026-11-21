@@ -32,8 +32,10 @@ export interface StoreRequirementStatus {
   photoCount: number;
   hasWcc: boolean;
   wccCount: number;
+  hasSignedWcc?: boolean;
+  signedWccCount?: number;
   isComplete: boolean;
-  missing: ("Installation Photo" | "WCC Generated")[];
+  missing: ("Installation Photo" | "WCC Generated" | "Signed WCC")[];
 }
 
 export interface InvoiceReadinessResult {
@@ -211,18 +213,39 @@ export function evaluateInvoiceReadiness(
     const hasPhoto = matchingPhotos.length > 0;
     const hasGeneratedWcc = matchingChallans.length > 0;
     const hasSignedWcc = matchingSignedWccs.length > 0;
-    const hasWcc = (reqs.generatedWcc ? hasGeneratedWcc : false) ||
-                   (reqs.signedWcc ? (hasSignedWcc || hasGeneratedWcc) : false) ||
-                   (!reqs.signedWcc && !reqs.generatedWcc ? true : (hasGeneratedWcc || hasSignedWcc));
 
     const photoSatisfied = !photoRequired || hasPhoto;
-    const wccSatisfied = !wccRequired || hasWcc;
 
-    const missing: ("Installation Photo" | "WCC Generated")[] = [];
+    const requireGenWcc = Boolean(reqs.generatedWcc);
+    const requireSignedWcc = Boolean(reqs.signedWcc);
+
+    let genWccSatisfied = true;
+    let signedWccSatisfied = true;
+
+    if (requireGenWcc && !requireSignedWcc) {
+      // Only Generated WCC is selected: do not require Signed WCC.
+      genWccSatisfied = hasGeneratedWcc || hasSignedWcc;
+      signedWccSatisfied = true;
+    } else if (requireSignedWcc && !requireGenWcc) {
+      // Only Signed WCC is selected: enforce the signed-copy requirement.
+      genWccSatisfied = true;
+      signedWccSatisfied = hasSignedWcc;
+    } else if (requireGenWcc && requireSignedWcc) {
+      // Both are selected: both must be present.
+      genWccSatisfied = hasGeneratedWcc || hasSignedWcc;
+      signedWccSatisfied = hasSignedWcc;
+    } else {
+      // Neither is selected.
+      genWccSatisfied = true;
+      signedWccSatisfied = true;
+    }
+
+    const missing: ("Installation Photo" | "WCC Generated" | "Signed WCC")[] = [];
     if (photoRequired && !hasPhoto) missing.push("Installation Photo");
-    if (wccRequired && !hasWcc) missing.push("WCC Generated");
+    if (requireGenWcc && !genWccSatisfied) missing.push("WCC Generated");
+    if (requireSignedWcc && !signedWccSatisfied) missing.push("Signed WCC");
 
-    const isComplete = photoSatisfied && wccSatisfied;
+    const isComplete = photoSatisfied && genWccSatisfied && signedWccSatisfied;
 
     return {
       storeId: store.storeId,
@@ -230,8 +253,10 @@ export function evaluateInvoiceReadiness(
       storeName: store.storeName || (store.storeCode ? `Store ${store.storeCode}` : "Store"),
       hasPhoto,
       photoCount: matchingPhotos.length,
-      hasWcc,
+      hasWcc: genWccSatisfied && signedWccSatisfied,
       wccCount: matchingChallans.length,
+      hasSignedWcc,
+      signedWccCount: matchingSignedWccs.length,
       isComplete,
       missing,
     };
@@ -320,18 +345,39 @@ export function evaluateInvoiceReadinessFromStoreRows(
     const hasPhoto = photoCount > 0;
     const hasGeneratedWcc = wccCount > 0;
     const hasSignedWcc = signedWccCount > 0;
-    const hasWcc = (reqs.generatedWcc ? hasGeneratedWcc : false) ||
-                   (reqs.signedWcc ? (hasSignedWcc || hasGeneratedWcc) : false) ||
-                   (!reqs.signedWcc && !reqs.generatedWcc ? true : (hasGeneratedWcc || hasSignedWcc));
 
     const photoSatisfied = !photoRequired || hasPhoto;
-    const wccSatisfied = !wccRequired || hasWcc;
 
-    const missing: ("Installation Photo" | "WCC Generated")[] = [];
+    const requireGenWcc = Boolean(reqs.generatedWcc);
+    const requireSignedWcc = Boolean(reqs.signedWcc);
+
+    let genWccSatisfied = true;
+    let signedWccSatisfied = true;
+
+    if (requireGenWcc && !requireSignedWcc) {
+      // Only Generated WCC is selected: do not require Signed WCC.
+      genWccSatisfied = hasGeneratedWcc || hasSignedWcc;
+      signedWccSatisfied = true;
+    } else if (requireSignedWcc && !requireGenWcc) {
+      // Only Signed WCC is selected: enforce the signed-copy requirement.
+      genWccSatisfied = true;
+      signedWccSatisfied = hasSignedWcc;
+    } else if (requireGenWcc && requireSignedWcc) {
+      // Both are selected: both must be present.
+      genWccSatisfied = hasGeneratedWcc || hasSignedWcc;
+      signedWccSatisfied = hasSignedWcc;
+    } else {
+      // Neither is selected.
+      genWccSatisfied = true;
+      signedWccSatisfied = true;
+    }
+
+    const missing: ("Installation Photo" | "WCC Generated" | "Signed WCC")[] = [];
     if (photoRequired && !hasPhoto) missing.push("Installation Photo");
-    if (wccRequired && !hasWcc) missing.push("WCC Generated");
+    if (requireGenWcc && !genWccSatisfied) missing.push("WCC Generated");
+    if (requireSignedWcc && !signedWccSatisfied) missing.push("Signed WCC");
 
-    const isComplete = photoSatisfied && wccSatisfied;
+    const isComplete = photoSatisfied && genWccSatisfied && signedWccSatisfied;
 
     return {
       storeId: row.storeId != null ? Number(row.storeId) : null,
@@ -339,9 +385,11 @@ export function evaluateInvoiceReadinessFromStoreRows(
       storeName: String(row.storeName || (row.storeCode ? `Store ${row.storeCode}` : "Store")).trim(),
       hasPhoto,
       photoCount,
-      hasWcc,
+      hasWcc: genWccSatisfied && signedWccSatisfied,
       wccCount,
-      isComplete: photoSatisfied && wccSatisfied,
+      hasSignedWcc,
+      signedWccCount,
+      isComplete,
       missing,
     };
   });

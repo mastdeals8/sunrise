@@ -244,13 +244,14 @@ export async function renderInvoiceElementToPdf(
  * Packages a dictionary or array of filenames and Uint8Array bytes into a ZIP Blob.
  */
 export function packageInvoicesIntoZip(
-  files: Record<string, Uint8Array> | Array<{ filename: string; bytes: Uint8Array }>
+  files: Record<string, Uint8Array> | Array<{ filename: string; bytes?: Uint8Array; data?: Uint8Array }>
 ): Blob {
   const fileMap: Record<string, Uint8Array> = {};
   if (Array.isArray(files)) {
     for (const item of files) {
-      if (item && item.filename && item.bytes) {
-        fileMap[item.filename] = item.bytes;
+      const content = item?.bytes || (item as any)?.data;
+      if (item && item.filename && content) {
+        fileMap[item.filename] = content;
       }
     }
   } else if (files && typeof files === "object") {
