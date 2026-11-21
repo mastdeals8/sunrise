@@ -10,6 +10,8 @@ import {
   Package,
   ChevronRight,
   RotateCw,
+  Check,
+  AlertTriangle,
 } from "lucide-react";
 import InvoiceDocument from "../../../components/InvoiceDocument";
 import EstimateDocument from "../../../components/EstimateDocument";
@@ -62,6 +64,9 @@ function fitText(text: string, maxLen: number): string {
   if (!text) return "";
   return text.length > maxLen ? text.substring(0, maxLen - 1) + "…" : text;
 }
+
+const isTransportDoc = (type: string) =>
+  ["transport_receipt", "transport_invoice", "lr_copy", "courier_receipt"].includes(String(type || "").toLowerCase());
 
 async function compressImageForPdf(
   buf: Uint8Array,
@@ -118,6 +123,18 @@ async function compressImageForPdf(
   }
 }
 
+interface InvoiceValidationItem {
+  invoiceId: number;
+  invoiceNumber: string;
+  clientName: string;
+  brandName: string;
+  estimateNumber: string;
+  poNumber: string;
+  isReady: boolean;
+  missingRequired: string[];
+  availableSummary: string[];
+}
+
 export const BulkInvoicePacketRunner: React.FC<BulkInvoicePacketRunnerProps> = ({
   isOpen,
   onClose,
@@ -130,6 +147,8 @@ export const BulkInvoicePacketRunner: React.FC<BulkInvoicePacketRunnerProps> = (
   token,
   showSuccess,
 }) => {
+  const [isValidating, setIsValidating] = useState(false);
+  const [validationItems, setValidationItems] = useState<InvoiceValidationItem[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [statusText, setStatusText] = useState("");
@@ -148,6 +167,166 @@ export const BulkInvoicePacketRunner: React.FC<BulkInvoicePacketRunnerProps> = (
   const cancelledRef = useRef(false);
   const hostRef = useRef<HTMLDivElement>(null);
 
+  // Validate all selected invoices against requirements upon opening
+  useEffect(() => {
+    if (!isOpen || selectedInvoices.length === 0) {
+      setValidationItems([]);
+      return;
+    }
+
+    let isMounted = true;
+    setIsValidating(true);
+
+    const runPreValidation = async () => {
+      try {
+        const activeCompId = getActiveCompanyId();
+        const [allReqs, allBrands] = await Promise.all([
+          fetchInvoicePacketRequirements(token || null, activeCompId).catch(() => []),
+          fetchBrands(token || null).catch(() => []),
+        ]);
+
+        const items: InvoiceValidationItem[] = [];
+
+        for (const rawInv of selectedInvoices) {
+          const estId = rawInv.estimateId || null;
+          let est = estId ? estimates.find((e: any) => e.id === estId) : null;
+          if (!est && estId) {
+            est = await fetchEstimateById(token || null, estId).catch(() => null);
+          }
+
+          let estItems: any[] = [];
+          if (estId) {
+            estItems = await fetchEstimateItems(token || null, estId).catch(() => []);
+          }
+
+          let challans: any[] = [];
+          if (estId) {
+            challans = (await fetchDeliveryChallansForEstimate(token || null, estId).catch(() => []))
+              .filter((c: any) => c.status !== "deleted" && !c.metadata?.deleted);
+          }
+
+          let execDocs: any[] = [];
+          if (estId) {
+            execDocs = (await fetchExecutionDocuments(token || null, estId).catch(() => []))
+              .filter((d: any) => d.status !== "deleted" && !d.deletedAt);
+          }
+
+          const client = clients.find((c: any) => c.id === (rawInv.clientId || est?.clientId));
+          const targetBrandId = est?.brandId || rawInv.brandId || null;
+          const targetBrand = (allBrands || []).find((b: any) => Number(b.id) === Number(targetBrandId));
+
+          const { requirements: reqs } = resolveInvoicePacketRequirements(allReqs, {
+            companyId: activeCompId,
+            brandId: targetBrandId,
+            clientId: rawInv.clientId || est?.clientId,
+            parentBrandName: targetBrand?.parentBrand,
+            allBrands,
+          });
+
+          const estScopedStores = getEstimateScopedStores(est, estItems, stores, challans);
+          const activeScopedStores = getInvoiceScopedStores(estScopedStores, rawInv, stores);
+
+          const missingReq: string[] = [];
+          const availSummary: string[] = [];
+
+          // 1. Tax Invoice
+          availSummary.push("Tax Invoice");
+
+          // 2. Purchase Order
+          const poDoc = execDocs.find((d: any) =>
+            ["po", "client_po"].includes(String(d.documentType || "").toLowerCase())
+          );
+          const hasPo = Boolean(est?.poFilePath || poDoc);
+          if (hasPo) {
+            availSummary.push(`PO (${rawInv.poNumber || est?.poNumber || "Attached"})`);
+          } else if (reqs.purchaseOrder) {
+            missingReq.push("Purchase Order (Required)");
+          }
+
+          // 3. Estimate
+          if (est) {
+            availSummary.push(`Estimate (${est.estimateNumber || "Attached"})`);
+          } else if (reqs.estimate) {
+            missingReq.push("Estimate Copy (Required)");
+          }
+
+          // 4. Scoped Stores evaluation
+          for (const s of activeScopedStores) {
+            const sc = s.storeCode.toLowerCase();
+            const storeLabel = s.storeName || (s.storeCode ? `Store ${s.storeCode}` : "Store");
+
+            // WCC
+            const storeChallans = challans.filter((c: any) => String(c.storeCode || "").toLowerCase() === sc);
+            const storeChallanIds = storeChallans.map((c: any) => Number(c.id));
+            const hasSignedWcc = execDocs.some((d: any) =>
+              isSignedWccDoc(d) &&
+              ((d.storeCode && d.storeCode.toLowerCase() === sc) || (d.deliveryChallanId && storeChallanIds.includes(Number(d.deliveryChallanId))))
+            );
+            const hasGenWcc = storeChallans.length > 0;
+
+            if (reqs.signedWcc && !hasSignedWcc) {
+              missingReq.push(`Signed WCC (${storeLabel})`);
+            } else if (reqs.generatedWcc && !hasGenWcc && !hasSignedWcc) {
+              missingReq.push(`WCC Generated (${storeLabel})`);
+            } else if (hasSignedWcc) {
+              availSummary.push(`Signed WCC (${s.storeCode})`);
+            } else if (hasGenWcc) {
+              availSummary.push(`WCC (${s.storeCode})`);
+            }
+
+            // Photos
+            const photos = execDocs.filter((d: any) =>
+              isInstallationPhotoDoc(d) &&
+              ((d.storeCode && d.storeCode.toLowerCase() === sc) || (d.deliveryChallanId && storeChallanIds.includes(Number(d.deliveryChallanId))))
+            );
+            if (photos.length > 0) {
+              availSummary.push(`${photos.length} Photo${photos.length > 1 ? "s" : ""} (${s.storeCode})`);
+            } else if (reqs.installationPhotos) {
+              missingReq.push(`Installation Photos (${storeLabel})`);
+            }
+
+            // Transport Receipts
+            const transportDocs = execDocs.filter((d: any) =>
+              isTransportDoc(d.documentType) &&
+              ((d.storeCode && d.storeCode.toLowerCase() === sc) || (d.deliveryChallanId && storeChallanIds.includes(Number(d.deliveryChallanId))) || (!d.storeCode && activeScopedStores.length === 1))
+            );
+            if (transportDocs.length > 0) {
+              availSummary.push(`Transport Receipt (${s.storeCode})`);
+            } else if (reqs.transportReceipt) {
+              missingReq.push(`Transport Receipt (${storeLabel})`);
+            }
+          }
+
+          items.push({
+            invoiceId: rawInv.id,
+            invoiceNumber: rawInv.invoiceNumber || `Invoice #${rawInv.id}`,
+            clientName: client?.name || rawInv.partyName || "Client",
+            brandName: targetBrand?.name || "—",
+            estimateNumber: est?.estimateNumber || "—",
+            poNumber: rawInv.poNumber || est?.poNumber || "—",
+            isReady: missingReq.length === 0,
+            missingRequired: missingReq,
+            availableSummary: availSummary,
+          });
+        }
+
+        if (isMounted) {
+          setValidationItems(items);
+        }
+      } catch (err) {
+        console.error("Bulk packet pre-validation error:", err);
+      } finally {
+        if (isMounted) setIsValidating(false);
+      }
+    };
+
+    runPreValidation();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [isOpen, selectedInvoices, estimates, stores, clients, token]);
+
   if (!isOpen) return null;
 
   const handleStartBulkExport = async () => {
@@ -164,7 +343,6 @@ export const BulkInvoicePacketRunner: React.FC<BulkInvoicePacketRunnerProps> = (
     const failedList: Array<{ invoice: any; error: string }> = [];
     const zipFiles: Record<string, Uint8Array> = {};
 
-    // Pre-load company requirements and brands list once
     const activeCompId = getActiveCompanyId();
     let allRequirements: any[] = [];
     let allBrandsList: any[] = [];
@@ -186,7 +364,6 @@ export const BulkInvoicePacketRunner: React.FC<BulkInvoicePacketRunnerProps> = (
       setStatusText(`Assembling packet ${i + 1} of ${total}: ${invoiceLabel}...`);
 
       try {
-        // 1. Fetch complete invoice details
         let inv = rawInv;
         if (!Array.isArray(inv.lineItems || inv.line_items) || (inv.lineItems || inv.line_items).length === 0) {
           const invRes = await fetchInvoiceById(token || null, rawInv.id).catch(() => null);
@@ -218,7 +395,7 @@ export const BulkInvoicePacketRunner: React.FC<BulkInvoicePacketRunnerProps> = (
 
         const client = clients.find((c: any) => c.id === (inv.clientId || est?.clientId)) || null;
 
-        // 2. Resolve requirements
+        // Resolve requirements
         const invCompId = inv.companyId || est?.companyId || activeCompId;
         const targetBrandId = est?.brandId || inv.brandId || null;
         const targetBrand = allBrandsList.find((b: any) => Number(b.id) === Number(targetBrandId));
@@ -230,7 +407,7 @@ export const BulkInvoicePacketRunner: React.FC<BulkInvoicePacketRunnerProps> = (
           allBrands: allBrandsList,
         });
 
-        // 3. Resolve scoped stores
+        // Resolve scoped stores
         const estScopedStores = getEstimateScopedStores(est, estItems, stores, challans);
         const activeScopedStores = getInvoiceScopedStores(estScopedStores, inv, stores);
         const scopedStoreCodes = new Set(activeScopedStores.map(s => s.storeCode.toLowerCase()).filter(Boolean));
@@ -243,7 +420,6 @@ export const BulkInvoicePacketRunner: React.FC<BulkInvoicePacketRunnerProps> = (
           if (dcSid && scopedStoreIds.has(dcSid)) return true;
           return activeScopedStores.length === 0;
         });
-        const scopedChallanIds = new Set(scopedChallans.map((c: any) => Number(c.id)));
 
         // Mount documents in offscreen host for HTML2Canvas capture
         setRenderData({
@@ -268,11 +444,14 @@ export const BulkInvoicePacketRunner: React.FC<BulkInvoicePacketRunnerProps> = (
         }
 
         // PO Document
-        const poStoragePath = est?.poFilePath || execDocs.find((d: any) => String(d.documentType || "").toLowerCase() === "po" || String(d.documentType || "").toLowerCase() === "client_po")?.filePath;
+        const poDoc = execDocs.find((d: any) =>
+          ["po", "client_po"].includes(String(d.documentType || "").toLowerCase())
+        );
+        const poStoragePath = est?.poFilePath || poDoc?.storagePath || poDoc?.filePath;
         if (poStoragePath) {
           try {
             const poUrl = isBoltMode && !poStoragePath.startsWith("http")
-              ? await getExecutionDocumentSignedUrl(token || null, poStoragePath, estId || 0)
+              ? await getExecutionDocumentSignedUrl(poStoragePath, false, estId || 0, true)
               : poStoragePath;
             if (poUrl) {
               const res = await fetch(poUrl);
@@ -289,9 +468,15 @@ export const BulkInvoicePacketRunner: React.FC<BulkInvoicePacketRunnerProps> = (
                   const img = isJpg ? await packetPdf.embedJpg(compBytes) : await packetPdf.embedPng(compBytes);
                   const p = packetPdf.addPage([A4_W, A4_H]);
                   const scale = Math.min((A4_W - MARGIN * 2) / img.width, (A4_H - MARGIN * 2) / img.height);
+                  p.drawText(fitText(`Purchase Order (${inv.poNumber || est?.poNumber || "PO"})`, 72), {
+                    x: MARGIN,
+                    y: A4_H - 50,
+                    size: 12,
+                    color: rgb(0.1, 0.15, 0.2),
+                  });
                   p.drawImage(img, {
                     x: (A4_W - img.width * scale) / 2,
-                    y: (A4_H - img.height * scale) / 2,
+                    y: (A4_H - 60 - img.height * scale) / 2,
                     width: img.width * scale,
                     height: img.height * scale,
                   });
@@ -327,14 +512,15 @@ export const BulkInvoicePacketRunner: React.FC<BulkInvoicePacketRunnerProps> = (
           // Embed signed WCC documents
           for (const doc of signedWccDocs) {
             try {
-              const docUrl = isBoltMode && !doc.filePath.startsWith("http")
-                ? await getExecutionDocumentSignedUrl(token || null, doc.filePath, estId || 0)
-                : doc.filePath;
+              const docPath = doc.storagePath || doc.filePath;
+              const docUrl = isBoltMode && !docPath.startsWith("http")
+                ? await getExecutionDocumentSignedUrl(docPath, false, estId || 0, false)
+                : docPath;
               if (docUrl) {
                 const res = await fetch(docUrl);
                 if (res.ok) {
                   const buf = new Uint8Array(await res.arrayBuffer());
-                  const isPdf = /\.pdf$/i.test(doc.filePath) || (res.headers.get("content-type") || "").includes("pdf");
+                  const isPdf = /\.pdf$/i.test(docPath) || (res.headers.get("content-type") || "").includes("pdf");
                   if (isPdf) {
                     const srcDoc = await PDFDocument.load(buf, { ignoreEncryption: true });
                     const copied = await packetPdf.copyPages(srcDoc, srcDoc.getPageIndices());
@@ -367,9 +553,10 @@ export const BulkInvoicePacketRunner: React.FC<BulkInvoicePacketRunnerProps> = (
 
           for (const photo of storePhotos) {
             try {
-              const photoUrl = isBoltMode && !photo.filePath.startsWith("http")
-                ? await getExecutionDocumentSignedUrl(token || null, photo.filePath, estId || 0)
-                : photo.filePath;
+              const photoPath = photo.storagePath || photo.filePath;
+              const photoUrl = isBoltMode && !photoPath.startsWith("http")
+                ? await getExecutionDocumentSignedUrl(photoPath, false, estId || 0, false)
+                : photoPath;
               if (photoUrl) {
                 const res = await fetch(photoUrl);
                 if (res.ok) {
@@ -414,21 +601,25 @@ export const BulkInvoicePacketRunner: React.FC<BulkInvoicePacketRunnerProps> = (
             }
           }
 
-          // 3. Transport Receipts
+          // 3. Transport Receipts (Store-scoped or general for single-store estimate)
           const storeTransportDocs = execDocs.filter((d: any) =>
-            String(d.documentType || "").toLowerCase() === "transport_receipt" &&
-            ((d.storeCode && d.storeCode.toLowerCase() === sc) || (d.deliveryChallanId && storeChallanIdList.includes(Number(d.deliveryChallanId))))
+            isTransportDoc(d.documentType) &&
+            ((d.storeCode && d.storeCode.toLowerCase() === sc) ||
+             (d.deliveryChallanId && storeChallanIdList.includes(Number(d.deliveryChallanId))) ||
+             (!d.storeCode && activeScopedStores.length === 1))
           );
+
           for (const doc of storeTransportDocs) {
             try {
-              const docUrl = isBoltMode && !doc.filePath.startsWith("http")
-                ? await getExecutionDocumentSignedUrl(token || null, doc.filePath, estId || 0)
-                : doc.filePath;
+              const docPath = doc.storagePath || doc.filePath;
+              const docUrl = isBoltMode && !docPath.startsWith("http")
+                ? await getExecutionDocumentSignedUrl(docPath, false, estId || 0, false)
+                : docPath;
               if (docUrl) {
                 const res = await fetch(docUrl);
                 if (res.ok) {
                   const buf = new Uint8Array(await res.arrayBuffer());
-                  const isPdf = /\.pdf$/i.test(doc.filePath) || (res.headers.get("content-type") || "").includes("pdf");
+                  const isPdf = /\.pdf$/i.test(docPath) || (res.headers.get("content-type") || "").includes("pdf");
                   if (isPdf) {
                     const srcDoc = await PDFDocument.load(buf, { ignoreEncryption: true });
                     const copied = await packetPdf.copyPages(srcDoc, srcDoc.getPageIndices());
@@ -438,7 +629,12 @@ export const BulkInvoicePacketRunner: React.FC<BulkInvoicePacketRunnerProps> = (
                     const img = isJpg ? await packetPdf.embedJpg(compBytes) : await packetPdf.embedPng(compBytes);
                     const p = packetPdf.addPage([A4_W, A4_H]);
                     const scale = Math.min((A4_W - MARGIN * 2) / img.width, (A4_H - MARGIN * 2) / img.height);
-                    p.drawText(fitText(`${storeLabel} — Transport Receipt / LR`, 72), { x: MARGIN, y: A4_H - 50, size: 12, color: rgb(0.1, 0.15, 0.2) });
+                    p.drawText(fitText(`${storeLabel} — Transport Receipt / LR`, 72), {
+                      x: MARGIN,
+                      y: A4_H - 50,
+                      size: 12,
+                      color: rgb(0.1, 0.15, 0.2),
+                    });
                     p.drawImage(img, {
                       x: (A4_W - img.width * scale) / 2,
                       y: (A4_H - 60 - img.height * scale) / 2,
@@ -535,9 +731,9 @@ export const BulkInvoicePacketRunner: React.FC<BulkInvoicePacketRunnerProps> = (
         )}
       </div>
 
-      <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-lg w-full overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+      <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-2xl w-full max-h-[90vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-150">
         {/* Header */}
-        <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50">
+        <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50 shrink-0">
           <div className="flex items-center gap-2.5">
             <div className="p-2 rounded-xl bg-orange-100 text-orange-700">
               <Package className="w-5 h-5" />
@@ -562,24 +758,98 @@ export const BulkInvoicePacketRunner: React.FC<BulkInvoicePacketRunnerProps> = (
         </div>
 
         {/* Content */}
-        <div className="p-5 space-y-4 text-xs">
+        <div className="p-5 space-y-4 text-xs overflow-y-auto flex-1">
           {!isProcessing && !isDone && (
             <div className="space-y-3">
-              <p className="text-slate-600 leading-relaxed">
-                This process will sequentially assemble a complete, independent packet PDF for each of the{" "}
-                <span className="font-bold text-slate-900">{selectedInvoices.length}</span> selected invoices (including Tax Invoice, PO, Estimate, store WCCs, installation photos, and transport receipts according to brand requirements).
-              </p>
-              <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 text-amber-800 text-[11px] space-y-1">
-                <p className="font-bold">Output Specification:</p>
-                <p>• Archive: <code className="font-mono bg-white/80 px-1 py-0.5 rounded">Sunrise_Invoice_Packets_{new Date().toISOString().slice(0, 10)}.zip</code></p>
-                <p>• Packet filenames: <code className="font-mono bg-white/80 px-1 py-0.5 rounded">Invoice_193_Packet.pdf</code></p>
-                <p>• Company-scoped documents and brand requirement compliance are strictly enforced.</p>
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-slate-800">Packet Pre-Export Validation by Invoice:</span>
+                {isValidating && (
+                  <span className="inline-flex items-center gap-1 text-[11px] text-slate-500">
+                    <Loader2 className="w-3 h-3 animate-spin text-orange-600" />
+                    Validating attachments...
+                  </span>
+                )}
+              </div>
+
+              {/* Validation Cards List */}
+              <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                {validationItems.map((item) => (
+                  <div
+                    key={item.invoiceId}
+                    className={`p-3 rounded-xl border transition ${
+                      item.isReady
+                        ? "bg-slate-50/70 border-slate-200"
+                        : "bg-amber-50/70 border-amber-200"
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-bold text-slate-900 text-xs">{item.invoiceNumber}</span>
+                          <span className="text-[10px] text-slate-500">({item.clientName})</span>
+                          {item.brandName !== "—" && (
+                            <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-slate-200/70 text-slate-700">
+                              {item.brandName}
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[11px] text-slate-600 mt-1 flex items-center gap-3 flex-wrap">
+                          <span>Est: <strong className="font-mono">{item.estimateNumber}</strong></span>
+                          <span>PO: <strong className="font-mono">{item.poNumber}</strong></span>
+                        </div>
+                      </div>
+
+                      <div className="shrink-0">
+                        {item.isReady ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
+                            <Check className="w-3 h-3" />
+                            Ready
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800">
+                            <AlertTriangle className="w-3 h-3 text-amber-600" />
+                            Missing Required
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Available attachments */}
+                    <div className="mt-2 pt-2 border-t border-slate-200/60 flex items-center gap-1.5 flex-wrap text-[10px] text-slate-600">
+                      <span className="font-semibold text-slate-400 uppercase text-[9px]">Included:</span>
+                      {item.availableSummary.map((av, idx) => (
+                        <span key={idx} className="px-1.5 py-0.5 bg-white border border-slate-200 rounded text-slate-700">
+                          {av}
+                        </span>
+                      ))}
+                    </div>
+
+                    {/* Missing required items */}
+                    {item.missingRequired.length > 0 && (
+                      <div className="mt-1.5 text-[10px] text-amber-800 flex items-center gap-1.5 flex-wrap">
+                        <span className="font-bold">Missing Required:</span>
+                        {item.missingRequired.map((m, idx) => (
+                          <span key={idx} className="px-1.5 py-0.5 bg-amber-100/80 border border-amber-300 rounded font-semibold text-amber-900">
+                            {m}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-slate-600 text-[11px] space-y-1">
+                <p className="font-bold text-slate-700">Export Specifications:</p>
+                <p>• Archive: <code className="font-mono bg-white px-1 py-0.5 rounded border border-slate-200">Sunrise_Invoice_Packets_{new Date().toISOString().slice(0, 10)}.zip</code></p>
+                <p>• Packet filenames: <code className="font-mono bg-white px-1 py-0.5 rounded border border-slate-200">Invoice_&lt;Number&gt;_Packet.pdf</code></p>
+                <p>• Invoices compile their own PO, Estimate, WCC, Photos, and Transport Receipts independently with zero cross-invoice mixing.</p>
               </div>
             </div>
           )}
 
           {isProcessing && (
-            <div className="space-y-3 py-2">
+            <div className="space-y-3 py-4">
               <div className="flex items-center justify-between text-xs font-semibold text-slate-700">
                 <span>{statusText}</span>
                 <span className="text-orange-600 font-mono">{pct}%</span>
@@ -604,7 +874,7 @@ export const BulkInvoicePacketRunner: React.FC<BulkInvoicePacketRunnerProps> = (
                   <div>
                     <p className="font-bold text-xs">Export Complete!</p>
                     <p className="text-[11px] text-emerald-700 mt-0.5">
-                      Successfully packaged <span className="font-bold">{successCount}</span> invoice packet{successCount > 1 ? "s" : ""} into ZIP. The download has started automatically.
+                      Successfully packaged <span className="font-bold">{successCount}</span> invoice packet{successCount > 1 ? "s" : ""} into ZIP archive. The download has started automatically.
                     </p>
                   </div>
                 </div>
@@ -640,7 +910,7 @@ export const BulkInvoicePacketRunner: React.FC<BulkInvoicePacketRunnerProps> = (
         </div>
 
         {/* Footer */}
-        <div className="px-5 py-3 border-t border-slate-100 flex items-center justify-end gap-2 bg-slate-50">
+        <div className="px-5 py-3 border-t border-slate-100 flex items-center justify-end gap-2 bg-slate-50 shrink-0">
           {!isProcessing && !isDone && (
             <>
               <button
@@ -653,7 +923,8 @@ export const BulkInvoicePacketRunner: React.FC<BulkInvoicePacketRunnerProps> = (
               <button
                 type="button"
                 onClick={handleStartBulkExport}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-orange-600 hover:bg-orange-500 text-white text-xs font-bold shadow-md transition"
+                disabled={isValidating || selectedInvoices.length === 0}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-orange-600 hover:bg-orange-500 text-white text-xs font-bold shadow-md transition disabled:opacity-50"
               >
                 <Download className="w-3.5 h-3.5" />
                 Start Export ({selectedInvoices.length})

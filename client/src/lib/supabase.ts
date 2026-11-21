@@ -1,10 +1,10 @@
 import { createClient } from "@supabase/supabase-js";
 
-// Vite always supplies import.meta.env in Bolt. Keep module-only regression
-// checks safe under Node as well, without changing the browser configuration.
+// Vite supplies import.meta.env in browser/Bolt; fall back to process.env in Node/test environments.
 const viteEnv = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env || {};
-const supabaseUrl = viteEnv.VITE_SUPABASE_URL;
-const supabaseAnonKey = viteEnv.VITE_SUPABASE_ANON_KEY;
+const nodeEnv = typeof process !== "undefined" && process.env ? process.env : {};
+const supabaseUrl = viteEnv.VITE_SUPABASE_URL || nodeEnv.VITE_SUPABASE_URL;
+const supabaseAnonKey = viteEnv.VITE_SUPABASE_ANON_KEY || nodeEnv.VITE_SUPABASE_ANON_KEY;
 
 if (viteEnv.VITE_BOLT_PREVIEW === "true") {
   console.log("[supabase] URL configured:", supabaseUrl ? "yes" : "no");

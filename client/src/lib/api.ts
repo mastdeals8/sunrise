@@ -3321,18 +3321,54 @@ async function storageObjectExists(key: string): Promise<boolean> {
 
 async function resolveExecutionDocumentKey(value: string, estimateId?: number, recoverHistoricalPo = false): Promise<string | null> {
   const storedKey = storageKeyFromValue(value);
-  if (storedKey && !storedKey.startsWith("uploads/") && await storageObjectExists(storedKey)) return storedKey;
+  if (storedKey && !storedKey.startsWith("uploads/")) {
+    if (await storageObjectExists(storedKey)) return storedKey;
+
+    // Check if the file exists in the folder under a matching core filename or timestamp variant
+    const slash = storedKey.lastIndexOf("/");
+    const folder = slash >= 0 ? storedKey.slice(0, slash) : "";
+    const fileName = slash >= 0 ? storedKey.slice(slash + 1) : storedKey;
+    if (folder) {
+      const { data: folderObjects } = await supabase.storage.from("execution-documents").list(folder, { limit: 100 });
+      if (folderObjects && folderObjects.length > 0) {
+        const coreName = fileName.replace(/^[0-9]+-/, "");
+        const matched = folderObjects.find(
+          (o) => o.name === fileName || o.name.endsWith(coreName) || (coreName.length > 8 && o.name.includes(coreName))
+        );
+        if (matched) {
+          const resolved = `${folder}/${matched.name}`;
+          if (estimateId) {
+            // Best-effort auto-repair of database record path
+            await supabase.from("execution_documents")
+              .update({ file_path: resolved })
+              .eq("estimate_id", estimateId)
+              .ilike("file_path", `%${coreName}%`)
+              .then(() => undefined);
+          }
+          return resolved;
+        }
+        if (folderObjects.length === 1 && !folderObjects[0].name.startsWith(".")) {
+          return `${folder}/${folderObjects[0].name}`;
+        }
+      }
+    }
+  }
 
   // Legacy Express paths (/uploads/file-...) were local disk paths, never
-  // Supabase keys. Recover only through an existing PO registry row owned by
-  // this estimate; do not guess filenames or sign a key that was not verified.
-  if (estimateId && recoverHistoricalPo) {
-    const { data: rows } = await supabase.from("execution_documents").select("file_path")
-      .eq("estimate_id", estimateId).eq("status", "active")
-      .in("document_type", ["po", "client_po"]).order("created_at", { ascending: false });
+  // Supabase keys. Recover through existing execution_documents rows owned by this estimate
+  if (estimateId) {
+    const docTypes = recoverHistoricalPo ? ["po", "client_po"] : undefined;
+    let query = supabase.from("execution_documents").select("file_path, document_type")
+      .eq("estimate_id", estimateId);
+    if (docTypes) {
+      query = query.in("document_type", docTypes);
+    }
+    const { data: rows } = await query.order("created_at", { ascending: false });
     for (const row of rows || []) {
       const candidate = storageKeyFromValue(String(row.file_path || ""));
-      if (candidate && !candidate.startsWith("uploads/") && await storageObjectExists(candidate)) return candidate;
+      if (candidate && !candidate.startsWith("uploads/") && candidate !== storedKey) {
+        if (await storageObjectExists(candidate)) return candidate;
+      }
     }
   }
   return null;
