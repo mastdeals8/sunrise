@@ -58,7 +58,7 @@ const ProjectTrackerPanel: React.FC<ProjectTrackerPanelProps> = ({
 }) => {
   // KPI summary — purely derived from the same data the table already uses.
   const kpiActive = estimates.filter(e => !["paid", "cancelled", "rejected"].includes(e.status)).length;
-  const kpiPoReceived = estimates.filter(e => e.status === "po_received" || !!e.poNumber).length;
+  const kpiPoReceived = estimates.filter(e => e.status === "po_received" || e.status === "invoice_ready" || !!e.poNumber).length;
   const kpiInvoiced = estimates.filter(e => invoices.some(i => i.estimateId === e.id)).length;
   const kpiOverdue = invoices.filter(i => i.status !== "paid" && i.dueDate && new Date(i.dueDate) < new Date()).length;
   const kpiValue = estimates.reduce((s, e) => s + (e.totalAmount || 0), 0);
@@ -110,8 +110,8 @@ const ProjectTrackerPanel: React.FC<ProjectTrackerPanelProps> = ({
 
             type PipelineStage = { key: string; label: string; done: boolean; warn?: boolean };
             const stages: PipelineStage[] = [
-              { key: "estimate", label: "Estimate Sent", done: ["sent","approved","awaiting_po","po_received"].includes(est.status) },
-              { key: "po", label: "PO Received", done: est.status === "po_received" || !!est.poNumber },
+              { key: "estimate", label: "Estimate Sent", done: ["sent","approved","awaiting_po","po_received","invoice_ready"].includes(est.status) },
+              { key: "po", label: "PO Received", done: est.status === "po_received" || est.status === "invoice_ready" || !!est.poNumber },
               { key: "delivery", label: "Delivered", done: estChallans.length > 0 },
               { key: "invoice", label: "Invoice Raised", done: !!estInvoice },
               { key: "payment", label: "Payment Collected", done: !!estInvoice && estInvoice.status === "paid",

@@ -1039,8 +1039,8 @@ Sunrise Media`;
                   </button>
                 )}
 
-                {/* PO Received -> Generate WCC / DC */}
-                {selectedEstimate.status === "po_received" && (
+                {/* PO Received / Invoice Ready -> Generate WCC / DC */}
+                {(selectedEstimate.status === "po_received" || selectedEstimate.status === "invoice_ready") && (
                   <button
                     onClick={handleOpenDcModal}
                     className="py-1 px-4 bg-gradient-to-r from-orange-600 to-amber-500 hover:from-orange-500 hover:to-amber-400 text-white text-xs font-black rounded-lg transition shadow-md flex items-center gap-1"
@@ -1076,6 +1076,7 @@ Sunrise Media`;
                   {selectedEstimate.status === "approved" && "Quote approved — click Set Awaiting PO once you're expecting the purchase order."}
                   {selectedEstimate.status === "awaiting_po" && "Waiting for PO — click Attach & Upload Client PO once you receive it."}
                   {selectedEstimate.status === "po_received" && "PO confirmed — generate the Delivery Challan or WCC document to proceed."}
+                  {selectedEstimate.status === "invoice_ready" && "Invoice Ready — all installation photos and WCCs complete. Ready to bill."}
                   {selectedEstimate.status === "rejected" && "This quote was rejected. Create a new estimate or edit details as needed."}
                 </p>
               </div>
@@ -2201,7 +2202,7 @@ Sunrise Media`;
                   <div>
                     <p className="font-bold text-slate-500">No Delivery Challan or WCC issued yet.</p>
                     <p className="text-slate-400 mt-0.5">
-                      {selectedEstimate.status === "po_received"
+                      {selectedEstimate.status === "po_received" || selectedEstimate.status === "invoice_ready"
                         ? `Use the "Generate ${isAblblFormat(selectedEstimate.clientFormat) ? "WCC Certificate" : "Delivery Challan"}" button above to create the document.`
                         : "A DC/WCC can be created once the estimate reaches PO Received status."}
                     </p>

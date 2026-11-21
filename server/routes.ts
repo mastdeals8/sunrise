@@ -48,6 +48,8 @@ import { formatProductDetails } from "../shared/productDetails";
 import { isServiceEstimateItem, resolveServiceProduct, serviceProductLabel } from "../shared/serviceProductDisplay";
 import { computeStoreBreakdown } from "../shared/storeBreakdown";
 import { estimateItemsToInvoiceLines } from "../shared/invoiceConversion";
+import { evaluateInvoiceReadiness } from "../shared/invoiceReadiness";
+import { getEstimateScopedStores } from "../shared/storeScoping";
 import { whatsappEvolution, normalizeWhatsAppNumber } from "./services/whatsappEvolution";
 import { installerService } from "./services/installerService";
 import { registerMasterProjectCostingRoutes, syncPettyCashExpenseAllocation, cancelInvoiceCostAllocations } from "./masterProjectCostingRoutes";
@@ -3608,6 +3610,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
             estimateId: id, oldValue: d.oldValue, newValue: d.newValue,
           });
         }
+        if (updates.poNumber !== undefined || updates.poFilePath !== undefined || updates.status === "po_received") {
+          await syncEstimateInvoiceReadiness(id);
+        }
         res.json(updated);
     } catch (err: any) {
       res.status(500).json({ message: err.message });
@@ -4634,6 +4639,49 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  async function syncEstimateInvoiceReadiness(estimateId: number): Promise<void> {
+    try {
+      if (!estimateId) return;
+      const [estimate] = await db.select().from(estimates).where(eq(estimates.id, estimateId)).limit(1);
+      if (!estimate) return;
+
+      const poNum = String(estimate.poNumber || "").trim();
+      const hasPo = (poNum !== "" && poNum !== "—" && poNum !== "-") ||
+                    Boolean(String(estimate.poFilePath || "").trim()) ||
+                    estimate.status === "po_received" ||
+                    estimate.status === "invoice_ready";
+
+      // If estimate does not have a PO, it cannot be invoice_ready
+      if (!hasPo) {
+        if (estimate.status === "invoice_ready") {
+          await db.update(estimates).set({ status: "draft" }).where(eq(estimates.id, estimateId));
+        }
+        return;
+      }
+
+      const items = await db.select().from(estimateItems).where(eq(estimateItems.estimateId, estimateId));
+      const allStores = await db.select().from(stores).where(eq(stores.companyId, estimate.companyId || 1));
+      const challans = (await db.select().from(deliveryChallans).where(eq(deliveryChallans.estimateId, estimateId)))
+        .filter((c: any) => c.status !== "deleted" && !c.metadata?.deleted);
+      const scopedStores = getEstimateScopedStores(estimate, items, allStores, challans);
+
+      const photoDocs = (await db.select().from(executionDocuments).where(eq(executionDocuments.estimateId, estimateId)))
+        .filter((d: any) => d.status !== "deleted" && !d.deletedAt);
+
+      const readiness = evaluateInvoiceReadiness(estimate, scopedStores, challans, photoDocs);
+
+      if (readiness.isInvoiceReady && estimate.status !== "invoice_ready") {
+        await db.update(estimates).set({ status: "invoice_ready" }).where(eq(estimates.id, estimateId));
+        console.log(`[invoice-readiness] Estimate ${estimate.estimateNumber} (ID: ${estimateId}) updated to INVOICE READY (${readiness.completedStores}/${readiness.totalStores} stores complete)`);
+      } else if (!readiness.isInvoiceReady && estimate.status === "invoice_ready") {
+        await db.update(estimates).set({ status: "po_received" }).where(eq(estimates.id, estimateId));
+        console.log(`[invoice-readiness] Estimate ${estimate.estimateNumber} (ID: ${estimateId}) reverted to PO RECEIVED (${readiness.completedStores}/${readiness.totalStores} stores complete)`);
+      }
+    } catch (err) {
+      console.error(`[invoice-readiness] Error syncing readiness for estimate ${estimateId}:`, err);
+    }
+  }
+
   app.get("/api/operations/execution-documents", authenticateToken, async (req: AuthRequest, res: Response) => {
     const _t0 = performance.now();
     try {
@@ -4703,6 +4751,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         estimateId: Number(estimateId),
         newValue: { documentType, filePath, storeCode },
       });
+      await syncEstimateInvoiceReadiness(Number(estimateId));
       res.status(201).json(doc[0]);
     } catch (err: any) {
       res.status(500).json({ message: err.message });
@@ -4988,6 +5037,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .set({ status: "replaced", replacedByDocumentId: nextDoc.id, updatedAt: new Date() })
         .where(eq(executionDocuments.id, doc.id));
       await syncLegacyDeliveryChallanFile(doc, filePath);
+      await syncEstimateInvoiceReadiness(doc.estimateId);
       res.status(201).json(nextDoc);
     } catch (err: any) {
       res.status(500).json({ message: err.message });
@@ -5016,6 +5066,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .returning();
       if (!updated[0]) return res.status(404).json({ message: "Document not found" });
       await syncLegacyDeliveryChallanFile(updated[0], null, updated[0].filePath);
+      await syncEstimateInvoiceReadiness(updated[0].estimateId);
       res.json({ success: true });
     } catch (err: any) {
       res.status(500).json({ message: err.message });
@@ -5053,6 +5104,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .set(updates)
         .where(eq(executionDocuments.id, id))
         .returning();
+
+      if (updated[0]) {
+        await syncEstimateInvoiceReadiness(updated[0].estimateId);
+      }
 
       res.json(updated[0]);
     } catch (err: any) {
@@ -5321,6 +5376,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       const created = await storage.createDeliveryChallan(parsed.data);
       await syncDeliveryChallanDocuments(created, req.user?.id || null);
+      if (created.estimateId) {
+        await syncEstimateInvoiceReadiness(created.estimateId);
+      }
       res.status(201).json(created);
     } catch (err: any) {
       res.status(500).json({ message: err.message });
@@ -5348,6 +5406,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const updated = await storage.updateDeliveryChallan(id, updates);
       if (!updated) return res.status(404).json({ message: "Delivery challan not found" });
       await syncDeliveryChallanDocuments(updated, req.user?.id || null);
+      if (updated.estimateId) {
+        await syncEstimateInvoiceReadiness(updated.estimateId);
+      }
       res.json(updated);
     } catch (err: any) {
       res.status(500).json({ message: err.message });
@@ -8673,6 +8734,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       const deleted = await db.delete(deliveryChallans).where(eq(deliveryChallans.id, id)).returning();
       if (!deleted[0]) return res.status(404).json({ message: "DC not found" });
+      if (deleted[0].estimateId) {
+        await syncEstimateInvoiceReadiness(deleted[0].estimateId);
+      }
       res.json({ success: true });
     } catch (err: any) {
       res.status(500).json({ message: err.message });

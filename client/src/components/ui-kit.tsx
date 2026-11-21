@@ -86,6 +86,7 @@ const STATUS_TONE: Record<string, keyof typeof TONES> = {
   // positive / done
   paid: "green", approved: "green", completed: "green", active: "green",
   present: "green", processed: "green", signed: "green", signed_wcc: "green",
+  invoice_ready: "green",
   // in-progress / informational
   in_progress: "blue", po_received: "blue", sent: "blue", partial: "amber",
   half_day: "amber", pending: "amber", unpaid: "amber", draft: "slate",

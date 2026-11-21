@@ -9,6 +9,7 @@ import { isAblblFormat } from "../../../../../shared/textFormat";
 import { getEstimateScopedStores } from "@shared/storeScoping";
 import { evaluateTransportCompliance, isVerifiedTransportInvoice, type StoreTransportRequirement } from "../../../../../shared/transportCompliance";
 import { orderedStoreKeysFromGrouping } from "../utils/estimateOrdering";
+import { evaluateInvoiceReadinessFromStoreRows, type InvoiceReadinessResult } from "@shared/invoiceReadiness";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -421,16 +422,17 @@ const isImg = (doc: ExecDoc) =>
 
 const statusBillingLabel = (row: ExecStoreRow) => {
   const hasPhotos = row.stats.photoCount > 0;
-  const hasWcc = row.stats.wccCount > 0;
-  const hasSignedWcc = row.stats.signedWccCount > 0;
+  const hasWcc = (row.stats.wccCount + (row.stats.dcCount || 0)) > 0;
+  const hasSignedWcc = (row.stats.signedWccCount + (row.stats.signedDcCount || 0)) > 0;
+  const isStoreReady = hasPhotos && hasWcc;
   // A single, data-derived progression. Existing completed rows remain
   // completed; every other stage is derived from its canonical record.
   if (row.status === "completed") return { label: "Completed", cls: "bg-slate-100 text-slate-700 border-slate-200" };
-  if (row.billingReady) return { label: "Invoice Ready", cls: "bg-emerald-50 text-emerald-700 border-emerald-200" };
+  if (isStoreReady || row.billingReady) return { label: "Store Ready ✓", cls: "bg-emerald-50 text-emerald-700 border-emerald-200" };
   if (hasSignedWcc) return { label: "Signed WCC Uploaded", cls: "bg-blue-50 text-blue-700 border-blue-200" };
-  if (hasWcc) return { label: "WCC Generated", cls: "bg-amber-50 text-amber-700 border-amber-200" };
-  if (hasPhotos) return { label: "Photos Uploaded", cls: "bg-amber-50 text-amber-700 border-amber-200" };
-  return { label: "No Photos", cls: "bg-slate-50 text-slate-500 border-slate-200" };
+  if (hasWcc) return { label: "WCC Generated (Missing Photo)", cls: "bg-amber-50 text-amber-700 border-amber-200" };
+  if (hasPhotos) return { label: "Photos Uploaded (Missing WCC)", cls: "bg-amber-50 text-amber-700 border-amber-200" };
+  return { label: "Pending (No Photos/WCC)", cls: "bg-slate-50 text-slate-500 border-slate-200" };
 };
 
 const actionLabel = (entry: AuditEntry) => {
@@ -858,10 +860,11 @@ const OverviewTab: React.FC<{
   data: ProjectData;
   clients: Client[];
   brands: Brand[];
+  invoiceReadiness?: InvoiceReadinessResult | null;
   onGoToTab: (t: ProjectTab) => void;
   onPoUpload: (est: Estimate) => void;
   onOpenInvoice: () => void;
-}> = ({ data, clients, brands, onGoToTab, onPoUpload, onOpenInvoice }) => {
+}> = ({ data, clients, brands, invoiceReadiness, onGoToTab, onPoUpload, onOpenInvoice }) => {
   const { estimate, stores, invoices } = data;
   const client = clients.find(c => c.id === estimate.clientId);
   const brand = brands.find(b => b.id === estimate.brandId);
@@ -903,6 +906,88 @@ const OverviewTab: React.FC<{
           </p>
         </div>
       </div>
+
+      {/* Invoice Readiness Card */}
+      {invoiceReadiness?.hasPo && (
+        invoiceReadiness.isInvoiceReady ? (
+          <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex items-start gap-3">
+              <div className="w-9 h-9 rounded-full bg-emerald-100 border border-emerald-200 flex items-center justify-center shrink-0 mt-0.5">
+                <CheckCircle className="w-5 h-5 text-emerald-600" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-mono font-black text-xs uppercase tracking-wider text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded border border-emerald-200">
+                    INVOICE READY
+                  </span>
+                  <span className="text-xs font-bold text-emerald-900">
+                    All {invoiceReadiness.totalStores} store{invoiceReadiness.totalStores === 1 ? "" : "s"} complete & ready for billing
+                  </span>
+                </div>
+                <p className="text-xs text-emerald-700 mt-1">
+                  Every linked store has verified installation photos uploaded and a generated WCC. The project is cleared for invoicing.
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={onOpenInvoice}
+              className="shrink-0 inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-sm transition"
+            >
+              <IndianRupee className="w-3.5 h-3.5" />
+              {inv ? "View Invoice" : "Create Invoice"}
+            </button>
+          </div>
+        ) : (
+          <div className="bg-amber-50/70 border border-amber-200 rounded-xl p-5 space-y-3">
+            <div className="flex items-start gap-3">
+              <div className="w-9 h-9 rounded-full bg-amber-100 border border-amber-200 flex items-center justify-center shrink-0 mt-0.5">
+                <Clock className="w-5 h-5 text-amber-600" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-mono font-black text-xs uppercase tracking-wider text-amber-800 bg-amber-100 px-2 py-0.5 rounded border border-amber-200">
+                    PO RECEIVED · PENDING COMPLETION
+                  </span>
+                  <span className="text-xs font-bold text-amber-900">
+                    {invoiceReadiness.completedStores} of {invoiceReadiness.totalStores} stores completed
+                  </span>
+                </div>
+                <p className="text-xs text-amber-700 mt-1">
+                  Every store requires at least one installation photo and a generated WCC before transitioning to Invoice Ready.
+                </p>
+              </div>
+            </div>
+
+            {/* Incomplete Stores Breakdown */}
+            {invoiceReadiness.incompleteStores.length > 0 && (
+              <div className="bg-white border border-amber-100 rounded-lg p-3 space-y-2">
+                <p className="text-[10px] uppercase font-black tracking-wider text-slate-400">
+                  Stores Requiring Completion ({invoiceReadiness.incompleteStores.length})
+                </p>
+                <div className="divide-y divide-slate-100">
+                  {invoiceReadiness.incompleteStores.map((st) => (
+                    <div key={st.storeCode || st.storeId || Math.random()} className="py-2 first:pt-0 last:pb-0 flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-xs">
+                      <div className="font-semibold text-slate-800 flex items-center gap-2">
+                        <span className="font-mono text-orange-700">{st.storeCode || "Store"}</span>
+                        <span>{st.storeName}</span>
+                      </div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {st.missing.map((req) => (
+                          <span key={req} className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200 flex items-center gap-1">
+                            <AlertCircle className="w-3 h-3 text-amber-600" />
+                            Missing {req}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )
+      )}
 
       {/* Progress */}
       <div className="bg-white border border-slate-200 rounded-xl p-5">
@@ -2223,11 +2308,12 @@ const ActivityTab: React.FC<{
 const QuickActionBar: React.FC<{
   estimate: Estimate;
   data: ProjectData | null;
+  invoiceReadiness?: InvoiceReadinessResult | null;
   onOpenUpload: (mode: UploadMode) => void;
   onGenerateWcc: (storeCode: string, storeId?: number | null) => void;
   onOpenWcc: (dc: DeliveryChallan, msg?: string) => void;
   onOpenInvoice: () => void;
-}> = ({ estimate, data, onOpenUpload, onGenerateWcc, onOpenWcc, onOpenInvoice }) => {
+}> = ({ estimate, data, invoiceReadiness, onOpenUpload, onGenerateWcc, onOpenWcc, onOpenInvoice }) => {
   const [wccPickerOpen, setWccPickerOpen] = React.useState(false);
   const stores = data?.stores ?? [];
 
@@ -2328,9 +2414,13 @@ const QuickActionBar: React.FC<{
       <button
         type="button"
         onClick={onOpenInvoice}
-        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-bold bg-white border-slate-200 text-slate-700 hover:bg-slate-50 transition"
+        className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-bold transition ${
+          invoiceReadiness?.isInvoiceReady
+            ? "bg-emerald-50 border-emerald-300 text-emerald-800 hover:bg-emerald-100 font-black shadow-xs"
+            : "bg-white border-slate-200 text-slate-700 hover:bg-slate-50"
+        }`}
       >
-        <IndianRupee className="w-3.5 h-3.5 text-slate-400" />
+        <IndianRupee className={`w-3.5 h-3.5 ${invoiceReadiness?.isInvoiceReady ? "text-emerald-600" : "text-slate-400"}`} />
         {data?.invoices[0] ? "View Invoice" : "Create Invoice"}
       </button>
     </div>
@@ -2427,6 +2517,54 @@ const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({
     onRefresh();
   };
 
+  const invoiceReadiness = React.useMemo(() => {
+    if (!estimate || !data?.stores) return null;
+    return evaluateInvoiceReadinessFromStoreRows(estimate, data.stores);
+  }, [estimate, data?.stores]);
+
+  // Automatically sync estimate workflow status between PO RECEIVED and INVOICE READY
+  React.useEffect(() => {
+    if (!invoiceReadiness || !invoiceReadiness.hasPo || !estimate?.id) return;
+    const currentStatus = estimate.status;
+    if (invoiceReadiness.isInvoiceReady && currentStatus !== "invoice_ready") {
+      (async () => {
+        try {
+          if (isBoltMode) {
+            await supabase.from("estimates").update({ status: "invoice_ready" }).eq("id", estimate.id);
+          } else {
+            await fetch(`/api/operations/estimates/${estimate.id}`, {
+              method: "PATCH",
+              headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+              body: JSON.stringify({ status: "invoice_ready" }),
+            });
+          }
+          estimate.status = "invoice_ready";
+          onRefresh();
+        } catch (err) {
+          console.error("Failed to auto-transition estimate to invoice_ready:", err);
+        }
+      })();
+    } else if (!invoiceReadiness.isInvoiceReady && currentStatus === "invoice_ready") {
+      (async () => {
+        try {
+          if (isBoltMode) {
+            await supabase.from("estimates").update({ status: "po_received" }).eq("id", estimate.id);
+          } else {
+            await fetch(`/api/operations/estimates/${estimate.id}`, {
+              method: "PATCH",
+              headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+              body: JSON.stringify({ status: "po_received" }),
+            });
+          }
+          estimate.status = "po_received";
+          onRefresh();
+        } catch (err) {
+          console.error("Failed to revert estimate from invoice_ready to po_received:", err);
+        }
+      })();
+    }
+  }, [invoiceReadiness, estimate, token, onRefresh]);
+
   const client = clients.find(c => c.id === estimate.clientId);
   const brand = brands.find(b => b.id === estimate.brandId);
 
@@ -2460,7 +2598,21 @@ const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({
           <div>
             <div className="flex items-center gap-2 flex-wrap">
               <span className="font-mono font-black text-orange-700 text-lg">{estimate.estimateNumber}</span>
-              <StatusBadge status={estimate.status} />
+              {invoiceReadiness?.isInvoiceReady ? (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-black bg-emerald-50 text-emerald-700 border border-emerald-300 ring-1 ring-emerald-600/20">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                  INVOICE READY
+                </span>
+              ) : invoiceReadiness?.hasPo ? (
+                <div className="inline-flex items-center gap-1.5 flex-wrap">
+                  <StatusBadge status="po_received" />
+                  <span className="text-xs font-semibold text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                    Pending Completion ({invoiceReadiness.completedStores}/{invoiceReadiness.totalStores} stores ready)
+                  </span>
+                </div>
+              ) : (
+                <StatusBadge status={estimate.status} />
+              )}
               {estimate.poNumber && (
                 <span className="font-mono text-[11px] px-2 py-0.5 rounded border bg-purple-50 border-purple-200 text-purple-700">
                   PO {estimate.poNumber}
@@ -2483,6 +2635,7 @@ const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({
       <QuickActionBar
         estimate={estimate}
         data={data}
+        invoiceReadiness={invoiceReadiness}
         onOpenUpload={mode => setUploadModal(mode)}
         onGenerateWcc={onGenerateWcc}
         onOpenWcc={onOpenWcc}
@@ -2530,6 +2683,7 @@ const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({
               data={data}
               clients={clients}
               brands={brands}
+              invoiceReadiness={invoiceReadiness}
               onGoToTab={setActiveTab}
               onPoUpload={onPoUpload}
               onOpenInvoice={() => onOpenInvoice({ estimateId: estimate.id, invoiceId: data.invoices[0]?.id || null })}

@@ -80,7 +80,7 @@ export interface Estimate {
   subtotal: number;
   taxAmount: number;
   totalAmount: number;
-  status: string; // draft, sent, approved, rejected, awaiting_po, po_received
+  status: string; // draft, sent, approved, rejected, awaiting_po, po_received, invoice_ready
   clientFormat: string; // normal, ABFRL
   formatProfileCode?: string | null;
   subject: string | null;

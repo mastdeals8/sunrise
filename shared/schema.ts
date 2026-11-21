@@ -449,7 +449,7 @@ export const estimates = pgTable("estimates", {
   subtotal: real("subtotal").notNull().default(0),
   taxAmount: real("tax_amount").notNull().default(0),
   totalAmount: real("total_amount").notNull().default(0),
-  status: text("status").notNull().default("draft"), // draft, sent, approved, rejected, awaiting_po, po_received
+  status: text("status").notNull().default("draft"), // draft, sent, approved, rejected, awaiting_po, po_received, invoice_ready
   clientFormat: text("client_format").notNull().default("normal"), // VALIDATION: Only "normal" or "ABLBL" allowed. Enforce in API layer.
   formatProfileCode: text("format_profile_code"), // e.g. "RETAIL_SINGLE_STORE", "ABLBL", "normal"
   subject: text("subject"),

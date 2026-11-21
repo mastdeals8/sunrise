@@ -1162,6 +1162,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
         (poNum !== "" && poNum !== "—" && poNum !== "-")
         || (e.poFilePath && e.poFilePath.trim())
         || e.status === "po_received"
+        || e.status === "invoice_ready"
       );
       const isPoExempt = Boolean(
         client && (client.name?.toLowerCase() === "cash" || client.clientType === "walk_in")
@@ -1169,6 +1170,8 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
 
       if (currentWorkflowFilter === "invoice_generated") {
         if (!hasInv) return false;
+      } else if (currentWorkflowFilter === "invoice_ready") {
+        if (e.status !== "invoice_ready" || hasInv) return false;
       } else if (currentWorkflowFilter === "po_received_inv_pending") {
         if (!hasPo || hasInv) return false;
       } else if (currentWorkflowFilter === "po_missing") {
@@ -1921,8 +1924,9 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                     className="px-2 py-1 border border-slate-200 rounded bg-white text-xs text-slate-700 outline-none cursor-pointer"
                   >
                     <option value="all">All estimates</option>
-                    <option value="po_missing">PO missing</option>
+                    <option value="invoice_ready">Invoice Ready</option>
                     <option value="po_received_inv_pending">PO received — invoice pending</option>
+                    <option value="po_missing">PO missing</option>
                     <option value="invoice_generated">Invoice generated</option>
                     <option value="po_not_required">PO not required (Cash / Walk-in)</option>
                   </select>
@@ -1936,6 +1940,7 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                     className="px-2 py-1 border border-slate-200 rounded bg-white text-xs text-slate-700 outline-none cursor-pointer"
                   >
                     <option value="all">Active Estimates (All)</option>
+                    <option value="invoice_ready">Invoice Ready</option>
                     <option value="draft">Draft</option>
                     <option value="sent">Sent</option>
                     <option value="approved">Approved</option>
@@ -2206,17 +2211,24 @@ const EstimateBuilder: React.FC<EstimateBuilderProps> = (props) => {
                               </div>
                             </td>
 	                            <td className="px-3 py-2">
-                              <span className={`px-1.5 py-0.5 rounded text-[9px] uppercase font-black tracking-wide border ${
-                                e.status === "approved" || e.status === "po_received"
-                                  ? "bg-green-50 text-green-700 border-green-100"
-                                  : e.status === "awaiting_po"
-                                    ? "bg-amber-50 text-amber-700 border-amber-100"
-                                    : e.status === "archived" || e.status === "submitted"
-                                      ? "bg-purple-50 text-purple-700 border-purple-100"
-                                      : "bg-slate-50 text-slate-600 border-slate-100"
-                              }`}>
-                                {e.status.replace("_", " ")}
-                              </span>
+                              {e.status === "invoice_ready" ? (
+                                <span className="px-1.5 py-0.5 rounded text-[9px] uppercase font-black tracking-wide border bg-emerald-50 text-emerald-700 border-emerald-200 inline-flex items-center gap-1">
+                                  <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" />
+                                  Invoice Ready
+                                </span>
+                              ) : (
+                                <span className={`px-1.5 py-0.5 rounded text-[9px] uppercase font-black tracking-wide border ${
+                                  e.status === "approved" || e.status === "po_received"
+                                    ? "bg-green-50 text-green-700 border-green-100"
+                                    : e.status === "awaiting_po"
+                                      ? "bg-amber-50 text-amber-700 border-amber-100"
+                                      : e.status === "archived" || e.status === "submitted"
+                                        ? "bg-purple-50 text-purple-700 border-purple-100"
+                                        : "bg-slate-50 text-slate-600 border-slate-100"
+                                }`}>
+                                  {e.status.replace(/_/g, " ")}
+                                </span>
+                              )}
                             </td>
 	                            <td className="px-3 py-2 text-right text-slate-900 font-bold font-mono">{formatCurrency(e.totalAmount)}</td>
 	                            <td className="px-3 py-2 text-center">
