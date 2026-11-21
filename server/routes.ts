@@ -4,7 +4,7 @@ import { storage, sanitizeUser } from "./storage";
 import { hashPassword, comparePassword, generateToken, authenticateToken, authenticateBrowserRequest, requireRole, setSessionCookie, clearSessionCookie, AuthRequest } from "./auth";
 import { insertUserSchema, insertAttendanceSchema, insertTaskSchema, insertPettyCashExpenseSchema, insertInvoiceSchema, insertPaymentSchema, insertChartOfAccountSchema, insertClientSchema, insertClientBillingProfileSchema, insertBrandSchema, insertStoreSchema, insertProductSchema, insertEstimateSchema, insertEstimateItemSchema, insertStaffAdvanceSchema, insertPayrollSchema, insertDeliveryChallanSchema, clients, brands, stores, products, invoices, payments, botSettings, botUploadInbox, webhookLogs, customerRateCards, customerRateItems, estimates, estimateItems, estimateRevisions, deliveryChallans, executionDocuments, executionStores, fieldAccessLinks, staffAdvances, attendance, projectStoreStatus, users, telegramDeliveries, companyUsers, materialCodes, masterProjects, projectEstimates, pettyCashExpenses } from "../shared/schema";
 import { db, pool } from "./db";
-import { inArray, eq, sql, and, ne } from "drizzle-orm";
+import { inArray, eq, sql, and, ne, or, isNotNull } from "drizzle-orm";
 import { z } from "zod";
 import multer from "multer";
 import rateLimit from "express-rate-limit";
@@ -4681,6 +4681,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.error(`[invoice-readiness] Error syncing readiness for estimate ${estimateId}:`, err);
     }
   }
+
+  async function syncAllEstimatesInvoiceReadiness(): Promise<void> {
+    try {
+      const candidates = await db.select({ id: estimates.id, status: estimates.status })
+        .from(estimates)
+        .where(or(
+          eq(estimates.status, "po_received"),
+          eq(estimates.status, "invoice_ready"),
+          isNotNull(estimates.poNumber)
+        ));
+      for (const est of candidates) {
+        await syncEstimateInvoiceReadiness(est.id);
+      }
+    } catch (err) {
+      console.error("[invoice-readiness] Error in syncAllEstimatesInvoiceReadiness:", err);
+    }
+  }
+
+  app.post("/api/operations/estimates/:id/sync-readiness", authenticateToken, async (req: AuthRequest, res: Response) => {
+    try {
+      const estimateId = Number(req.params.id);
+      await syncEstimateInvoiceReadiness(estimateId);
+      const [est] = await db.select().from(estimates).where(eq(estimates.id, estimateId)).limit(1);
+      res.json({ success: true, estimate: est });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
 
   app.get("/api/operations/execution-documents", authenticateToken, async (req: AuthRequest, res: Response) => {
     const _t0 = performance.now();
@@ -9360,6 +9388,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   registerMasterProjectCostingRoutes(app);
   registerProcurementRoutes(app);
+
+  // Background readiness sync on server startup for active PO / invoice ready estimates
+  syncAllEstimatesInvoiceReadiness().catch((err) => {
+    console.error("[invoice-readiness] Background startup sync failed:", err);
+  });
 
   const httpServer = createServer(app);
   return httpServer;

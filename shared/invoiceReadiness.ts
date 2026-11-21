@@ -68,6 +68,20 @@ export function isInstallationPhotoDoc(doc: any): boolean {
   return true;
 }
 
+/** Check if an execution document is a valid signed WCC/DC */
+export function isSignedWccDoc(doc: any): boolean {
+  if (!doc) return false;
+  const type = String(doc.documentType || doc.document_type || "").toLowerCase();
+  const isSigned = type === "signed_wcc" || type === "signed_dc";
+  if (!isSigned) return false;
+
+  const isDeleted =
+    doc.status === "deleted" ||
+    Boolean(doc.deletedAt || doc.deleted_at);
+  if (isDeleted) return false;
+  return true;
+}
+
 /** Check if a delivery challan / WCC is active (not deleted) */
 export function isActiveWccChallan(challan: any): boolean {
   if (!challan) return false;
@@ -162,6 +176,7 @@ export function evaluateInvoiceReadiness(
 
   const activeChallans = (challans || []).filter(isActiveWccChallan);
   const activePhotos = (photoDocs || []).filter(isInstallationPhotoDoc);
+  const activeSignedWccs = (photoDocs || []).filter(isSignedWccDoc);
   const totalStoresCount = effectiveStores.length;
 
   const evaluatedStores: StoreRequirementStatus[] = effectiveStores.map((store) => {
@@ -172,9 +187,12 @@ export function evaluateInvoiceReadiness(
     const matchingPhotos = activePhotos.filter((p) =>
       matchPhotoToStore(p, store, totalStoresCount, storeChallanIds)
     );
+    const matchingSignedWccs = activeSignedWccs.filter((s) =>
+      matchPhotoToStore(s, store, totalStoresCount, storeChallanIds)
+    );
 
     const hasPhoto = matchingPhotos.length > 0;
-    const hasWcc = matchingChallans.length > 0;
+    const hasWcc = matchingChallans.length > 0 || matchingSignedWccs.length > 0;
     const missing: ("Installation Photo" | "WCC Generated")[] = [];
     if (!hasPhoto) missing.push("Installation Photo");
     if (!hasWcc) missing.push("WCC Generated");
@@ -252,9 +270,13 @@ export function evaluateInvoiceReadinessFromStoreRows(
       (Array.isArray(row.wccRecords) ? row.wccRecords.filter(isActiveWccChallan).length : 0) +
       (Array.isArray(row.dcRecords) ? row.dcRecords.filter(isActiveWccChallan).length : 0)
     );
+    const signedWccCount = Number(
+      (row.stats?.signedWccCount ?? 0) + (row.stats?.signedDcCount ?? 0) ||
+      (Array.isArray(row.signedWccDocuments) ? row.signedWccDocuments.filter(isSignedWccDoc).length : 0)
+    );
 
     const hasPhoto = photoCount > 0;
-    const hasWcc = wccCount > 0;
+    const hasWcc = wccCount > 0 || signedWccCount > 0;
     const missing: ("Installation Photo" | "WCC Generated")[] = [];
     if (!hasPhoto) missing.push("Installation Photo");
     if (!hasWcc) missing.push("WCC Generated");
