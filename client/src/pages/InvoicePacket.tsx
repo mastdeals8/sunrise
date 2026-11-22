@@ -125,8 +125,10 @@ const isStoreScopeDoc = (doc: any) => Boolean(storeCodeFor(doc) || doc?.delivery
 async function signPacketDocument(doc: any, estimateId: number): Promise<PacketPage | null> {
   const storagePath = String(doc.storagePath || doc.filePath || "");
   if (!storagePath) return null;
+  const isPo = doc.kind === "po" || doc.documentType === "po" || doc.documentType === "client_po";
+  const docId = typeof doc.id === "number" ? doc.id : (typeof doc.id === "string" && !isNaN(Number(doc.id)) ? Number(doc.id) : undefined);
   try {
-    const filePath = await getExecutionDocumentSignedUrl(storagePath, false, estimateId, doc.kind === "po");
+    const filePath = await getExecutionDocumentSignedUrl(storagePath, false, estimateId, isPo, docId);
     return { ...doc, filePath, storagePath } as PacketPage;
   } catch (error) {
     console.warn("[invoice-packet] document unavailable", storagePath, error);

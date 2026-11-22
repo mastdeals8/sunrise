@@ -65,7 +65,7 @@ async function runTest() {
     const poPath = est?.poFilePath || poDoc?.filePath;
     if (poPath) {
       try {
-        const poUrl = await getExecutionDocumentSignedUrl(poPath, false, est.id, true);
+        const poUrl = await getExecutionDocumentSignedUrl(poPath, false, est.id, true, poDoc?.id);
         const res = await fetch(poUrl);
         if (res.ok) {
           const buf = new Uint8Array(await res.arrayBuffer());
@@ -105,7 +105,7 @@ async function runTest() {
       );
       for (const w of signedWccs) {
         try {
-          const wUrl = await getExecutionDocumentSignedUrl(w.filePath, false, est.id, false);
+          const wUrl = await getExecutionDocumentSignedUrl(w.filePath, false, est.id, false, w.id);
           const res = await fetch(wUrl);
           if (res.ok) {
             const buf = new Uint8Array(await res.arrayBuffer());
@@ -125,7 +125,7 @@ async function runTest() {
       );
       for (const photo of photos) {
         try {
-          const phUrl = await getExecutionDocumentSignedUrl(photo.filePath, false, est.id, false);
+          const phUrl = await getExecutionDocumentSignedUrl(photo.filePath, false, est.id, false, photo.id);
           const res = await fetch(phUrl);
           if (res.ok) {
             const buf = new Uint8Array(await res.arrayBuffer());
@@ -148,7 +148,7 @@ async function runTest() {
       );
       for (const tr of transportDocs) {
         try {
-          const trUrl = await getExecutionDocumentSignedUrl(tr.filePath, false, est.id, false);
+          const trUrl = await getExecutionDocumentSignedUrl(tr.filePath, false, est.id, false, tr.id);
           const res = await fetch(trUrl);
           if (res.ok) {
             const buf = new Uint8Array(await res.arrayBuffer());

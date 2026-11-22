@@ -451,7 +451,7 @@ export const BulkInvoicePacketRunner: React.FC<BulkInvoicePacketRunnerProps> = (
         if (poStoragePath) {
           try {
             const poUrl = isBoltMode && !poStoragePath.startsWith("http")
-              ? await getExecutionDocumentSignedUrl(poStoragePath, false, estId || 0, true)
+              ? await getExecutionDocumentSignedUrl(poStoragePath, false, estId || 0, true, poDoc?.id ? Number(poDoc.id) : undefined)
               : poStoragePath;
             if (poUrl) {
               const res = await fetch(poUrl);
@@ -514,7 +514,7 @@ export const BulkInvoicePacketRunner: React.FC<BulkInvoicePacketRunnerProps> = (
             try {
               const docPath = doc.storagePath || doc.filePath;
               const docUrl = isBoltMode && !docPath.startsWith("http")
-                ? await getExecutionDocumentSignedUrl(docPath, false, estId || 0, false)
+                ? await getExecutionDocumentSignedUrl(docPath, false, estId || 0, false, doc.id ? Number(doc.id) : undefined)
                 : docPath;
               if (docUrl) {
                 const res = await fetch(docUrl);
@@ -555,7 +555,7 @@ export const BulkInvoicePacketRunner: React.FC<BulkInvoicePacketRunnerProps> = (
             try {
               const photoPath = photo.storagePath || photo.filePath;
               const photoUrl = isBoltMode && !photoPath.startsWith("http")
-                ? await getExecutionDocumentSignedUrl(photoPath, false, estId || 0, false)
+                ? await getExecutionDocumentSignedUrl(photoPath, false, estId || 0, false, photo.id ? Number(photo.id) : undefined)
                 : photoPath;
               if (photoUrl) {
                 const res = await fetch(photoUrl);
@@ -613,7 +613,7 @@ export const BulkInvoicePacketRunner: React.FC<BulkInvoicePacketRunnerProps> = (
             try {
               const docPath = doc.storagePath || doc.filePath;
               const docUrl = isBoltMode && !docPath.startsWith("http")
-                ? await getExecutionDocumentSignedUrl(docPath, false, estId || 0, false)
+                ? await getExecutionDocumentSignedUrl(docPath, false, estId || 0, false, doc.id ? Number(doc.id) : undefined)
                 : docPath;
               if (docUrl) {
                 const res = await fetch(docUrl);

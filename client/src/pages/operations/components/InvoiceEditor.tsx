@@ -635,7 +635,7 @@ const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ open, invoiceId, estimate
                     <label key={doc.id} className="flex items-center gap-2 border border-slate-100 rounded p-2 text-xs">
                       <input type="checkbox" checked={selectedAttachments.includes(doc.id)} onChange={e => setSelectedAttachments(prev => e.target.checked ? (prev.includes(doc.id) ? prev : [...prev, doc.id]) : prev.filter(id => id !== doc.id))} />
                       <span className="flex-1"><b>{String(doc.documentType || "document").replace(/_/g, " ")}</b><br/><span className="text-slate-400">{doc.originalFileName || String(doc.storagePath || doc.filePath).split("/").pop()}</span></span>
-                      <button type="button" className="text-blue-600 font-bold" onClick={() => openExecutionDocument(doc.storagePath || doc.filePath).catch(err => alert(err.message))}>View</button>
+                      <button type="button" className="text-blue-600 font-bold" onClick={() => openExecutionDocument(doc.storagePath || doc.filePath, false, doc.estimateId, doc.documentType === "po" || doc.documentType === "client_po", doc.id ? Number(doc.id) : undefined).catch(err => alert(err.message))}>View</button>
                     </label>
                   ))}
                 </div>

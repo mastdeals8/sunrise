@@ -3565,7 +3565,13 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
     let displayUrl = doc?.filePath || "";
     if (doc?.filePath && !doc.filePath.startsWith("http://") && !doc.filePath.startsWith("https://") && !doc.filePath.startsWith("data:")) {
       try {
-        displayUrl = await getExecutionDocumentSignedUrl(doc.filePath, false, doc.estimateId, doc.documentType === "po" || doc.documentType === "client_po");
+        displayUrl = await getExecutionDocumentSignedUrl(
+          doc.filePath,
+          false,
+          doc.estimateId,
+          doc.documentType === "po" || doc.documentType === "client_po",
+          doc.id ? Number(doc.id) : undefined
+        );
       } catch (err) {
         console.warn("Could not sign execution document URL:", err);
       }

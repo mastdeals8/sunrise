@@ -3319,7 +3319,12 @@ async function storageObjectExists(key: string): Promise<boolean> {
   return Boolean(data?.some(object => object.name === fileName));
 }
 
-async function resolveExecutionDocumentKey(value: string, estimateId?: number, recoverHistoricalPo = false): Promise<string | null> {
+async function resolveExecutionDocumentKey(
+  value: string,
+  estimateId?: number,
+  recoverHistoricalPo = false,
+  documentId?: number
+): Promise<string | null> {
   const storedKey = storageKeyFromValue(value);
   if (storedKey && !storedKey.startsWith("uploads/")) {
     if (await storageObjectExists(storedKey)) return storedKey;
@@ -3335,63 +3340,107 @@ async function resolveExecutionDocumentKey(value: string, estimateId?: number, r
         const matched = folderObjects.find(
           (o) => o.name === fileName || o.name.endsWith(coreName) || (coreName.length > 8 && o.name.includes(coreName))
         );
-        if (matched) {
-          const resolved = `${folder}/${matched.name}`;
-          if (estimateId) {
-            // Best-effort auto-repair of database record path
+        const resolved = matched ? `${folder}/${matched.name}` : (folderObjects.length === 1 && !folderObjects[0].name.startsWith(".") ? `${folder}/${folderObjects[0].name}` : null);
+        if (resolved) {
+          // If we are recovering PO for an estimate, repair estimates.po_file_path ONLY
+          if (recoverHistoricalPo && estimateId) {
+            await supabase.from("estimates")
+              .update({ po_file_path: resolved })
+              .eq("id", estimateId)
+              .then(() => undefined);
+          }
+          // Only repair execution_documents if documentId and estimateId are explicitly provided
+          if (documentId && estimateId) {
             await supabase.from("execution_documents")
               .update({ file_path: resolved })
+              .eq("id", documentId)
               .eq("estimate_id", estimateId)
-              .ilike("file_path", `%${coreName}%`)
               .then(() => undefined);
           }
           return resolved;
         }
-        if (folderObjects.length === 1 && !folderObjects[0].name.startsWith(".")) {
-          return `${folder}/${folderObjects[0].name}`;
+      }
+    }
+  }
+
+  // Legacy Express paths (/uploads/file-...) or missing historical PO
+  // ONLY if recoverHistoricalPo is true and estimateId is provided do we search execution_documents for POs
+  if (recoverHistoricalPo && estimateId) {
+    const { data: rows } = await supabase.from("execution_documents")
+      .select("id, file_path, document_type")
+      .eq("estimate_id", estimateId)
+      .in("document_type", ["po", "client_po"])
+      .order("created_at", { ascending: false });
+
+    for (const row of rows || []) {
+      const candidate = storageKeyFromValue(String(row.file_path || ""));
+      if (candidate && !candidate.startsWith("uploads/") && candidate !== storedKey) {
+        if (await storageObjectExists(candidate)) {
+          // Repair estimates.po_file_path strictly in PO-specific recovery path
+          await supabase.from("estimates")
+            .update({ po_file_path: candidate })
+            .eq("id", estimateId)
+            .then(() => undefined);
+          if (row.id) {
+            await supabase.from("execution_documents")
+              .update({ file_path: candidate })
+              .eq("id", row.id)
+              .eq("estimate_id", estimateId)
+              .then(() => undefined);
+          }
+          return candidate;
+        }
+      }
+    }
+  } else if (documentId && estimateId) {
+    // Exact single document recovery if documentId is provided
+    const { data: row } = await supabase.from("execution_documents")
+      .select("id, file_path")
+      .eq("id", documentId)
+      .eq("estimate_id", estimateId)
+      .maybeSingle();
+
+    if (row?.file_path) {
+      const candidate = storageKeyFromValue(String(row.file_path));
+      if (candidate && !candidate.startsWith("uploads/") && candidate !== storedKey) {
+        if (await storageObjectExists(candidate)) {
+          return candidate;
         }
       }
     }
   }
 
-  // Legacy Express paths (/uploads/file-...) were local disk paths, never
-  // Supabase keys. Recover through existing execution_documents rows owned by this estimate
-  if (estimateId) {
-    const docTypes = recoverHistoricalPo ? ["po", "client_po"] : undefined;
-    let query = supabase.from("execution_documents").select("file_path, document_type")
-      .eq("estimate_id", estimateId);
-    if (docTypes) {
-      query = query.in("document_type", docTypes);
-    }
-    const { data: rows } = await query.order("created_at", { ascending: false });
-    for (const row of rows || []) {
-      const candidate = storageKeyFromValue(String(row.file_path || ""));
-      if (candidate && !candidate.startsWith("uploads/") && candidate !== storedKey) {
-        if (await storageObjectExists(candidate)) return candidate;
-      }
-    }
-  }
   return null;
 }
 
 /** Resolve and verify a storage object, then generate a new URL at access time. */
-export async function getExecutionDocumentSignedUrl(storageValue: string, download = false, estimateId?: number, recoverHistoricalPo = false): Promise<string> {
-  const storagePath = await resolveExecutionDocumentKey(storageValue, estimateId, recoverHistoricalPo);
+export async function getExecutionDocumentSignedUrl(
+  storageValue: string,
+  download = false,
+  estimateId?: number,
+  recoverHistoricalPo = false,
+  documentId?: number
+): Promise<string> {
+  const storagePath = await resolveExecutionDocumentKey(storageValue, estimateId, recoverHistoricalPo, documentId);
   if (!storagePath) throw new Error("Document not found. Please replace or re-upload this attachment.");
 
-  if (estimateId && storageValue.trim() !== storagePath) {
-    // Best-effort repair of historical signed/local paths. A failed RLS update
-    // must not prevent the verified document from opening.
-    await supabase.from("estimates").update({ po_file_path: storagePath }).eq("id", estimateId).then(() => undefined);
-  }
+  // CRITICAL: NEVER update estimates.po_file_path from the generic signed URL function.
+  // PO path repair is isolated strictly to recoverHistoricalPo inside resolveExecutionDocumentKey.
+
   const options = download ? { download: storagePath.split("/").pop() || true } : undefined;
   const { data, error } = await supabase.storage.from("execution-documents").createSignedUrl(storagePath, SIGNED_URL_TTL_S, options);
   if (error || !data?.signedUrl) throw new Error(error?.message || "Could not open document");
   return data.signedUrl;
 }
 
-export async function openExecutionDocument(storageValue: string, download = false, estimateId?: number, recoverHistoricalPo = false): Promise<void> {
-  const signedUrl = await getExecutionDocumentSignedUrl(storageValue, download, estimateId, recoverHistoricalPo);
+export async function openExecutionDocument(
+  storageValue: string,
+  download = false,
+  estimateId?: number,
+  recoverHistoricalPo = false,
+  documentId?: number
+): Promise<void> {
+  const signedUrl = await getExecutionDocumentSignedUrl(storageValue, download, estimateId, recoverHistoricalPo, documentId);
   window.open(signedUrl, "_blank", "noopener,noreferrer");
 }
 

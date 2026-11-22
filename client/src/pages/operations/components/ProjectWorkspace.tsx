@@ -2065,7 +2065,7 @@ const DocumentsTab: React.FC<{
                     {matchingSigned && (
                       <button
                         type="button"
-                        onClick={() => openExecutionDocument(matchingSigned.filePath, false, estimate.id).catch(() => alert("Signed document not found"))}
+                        onClick={() => openExecutionDocument(matchingSigned.filePath, false, estimate.id, false, matchingSigned.id ? Number(matchingSigned.id) : undefined).catch(() => alert("Signed document not found"))}
                         className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded border border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 font-bold text-xs"
                       >
                         <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Signed Copy
