@@ -884,9 +884,11 @@ Sunrise Media`;
             const dueDate = new Date(Date.now() + 30 * 86400000);
             const targetGstType = selectedEstimate.gstType || (selectedEstimate.stateCode && String(selectedEstimate.stateCode) !== "27" ? "IGST" : "CGST+SGST");
             const lines = estimateItemsToInvoiceLines(previewItems, targetGstType);
-            const amount = Number(selectedEstimate.subtotal || lines.reduce((sum, row) => sum + Number(row.amount || 0), 0));
-            const taxAmount = Number(selectedEstimate.taxAmount || lines.reduce((sum, row) => sum + Number(row.taxAmount || 0), 0));
-            const totalAmount = Number(selectedEstimate.totalAmount || amount + taxAmount);
+            const lineSum = lines.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+            const lineTax = lines.reduce((sum, row) => sum + Number(row.taxAmount || 0), 0);
+            const amount = lines.length > 0 ? +lineSum.toFixed(2) : Number(selectedEstimate.subtotal || 0);
+            const taxAmount = lines.length > 0 ? +lineTax.toFixed(2) : Number(selectedEstimate.taxAmount || 0);
+            const totalAmount = +(amount + taxAmount).toFixed(2);
             const primaryChallan = activeSelectedChallans[0] || null;
             const invoicePayload = {
               type: "sales",

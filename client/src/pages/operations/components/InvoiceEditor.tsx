@@ -278,9 +278,9 @@ const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ open, invoiceId, estimate
     })();
   }, [open, invoiceId, estimateId, deliveryChallanId, token]);
 
-  const subtotal = useMemo(() => items.reduce((s, it) => s + (Number(it.amount) || 0), 0), [items]);
-  const taxTotal = useMemo(() => items.reduce((s, it) => s + (Number(it.taxAmount) || 0), 0), [items]);
-  const grandTotal = subtotal + taxTotal;
+  const subtotal = useMemo(() => +(items.reduce((s, it) => s + (Number(it.amount) || 0), 0)).toFixed(2), [items]);
+  const taxTotal = useMemo(() => +(items.reduce((s, it) => s + (Number(it.taxAmount) || 0), 0)).toFixed(2), [items]);
+  const grandTotal = +(subtotal + taxTotal).toFixed(2);
 
   const updateRow = (idx: number, patch: Partial<InvoiceLineItem>) => {
     setItems(prev => prev.map((row, i) => {

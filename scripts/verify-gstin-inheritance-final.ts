@@ -117,8 +117,8 @@ async function verifyFinal() {
   };
 
   const lines = Array.isArray(inv184.lineItems) ? inv184.lineItems : [];
-  const subtotal = Number(inv184.subtotal || inv184.amount || 0);
-  const totalTax = Number(inv184.taxAmount || 0);
+  const lineSum = lines.reduce((sum: number, row: any) => sum + Number(row.amount ?? row.totalPrice ?? Number(row.quantity || 0) * Number(row.rate || 0)), 0);
+  const subtotal = lines.length > 0 ? +lineSum.toFixed(2) : Number(inv184.subtotal || inv184.amount || 0);
   const componentTax = lines.reduce(
     (acc: any, row: any) => ({
       cgst: acc.cgst + Number(row.cgstAmount ?? row.cgst_amount ?? 0),
@@ -127,6 +127,9 @@ async function verifyFinal() {
     }),
     { cgst: 0, sgst: 0, igst: 0 }
   );
+  const componentTotal = +(componentTax.cgst + componentTax.sgst + componentTax.igst).toFixed(2);
+  const hasComponentTax = componentTax.cgst !== 0 || componentTax.sgst !== 0 || componentTax.igst !== 0;
+  const totalTax = hasComponentTax ? componentTotal : Number(inv184.taxAmount || 0);
 
   const sellerGstin = sellerProfile.gstin;
   const sellerStateCode = sellerGstin.slice(0, 2);
@@ -141,15 +144,14 @@ async function verifyFinal() {
   const billingState = STATE_CODE_NAMES[billingStateCode] || est218.billingStateSnapshot || billingStateCode;
 
   const isInterstateSupply = Boolean(billingStateCode && billingStateCode !== sellerStateCode);
-  const hasComponentTax = componentTax.cgst !== 0 || componentTax.sgst !== 0 || componentTax.igst !== 0;
   const isIgst = hasComponentTax ? componentTax.igst > 0 : isInterstateSupply;
 
-  const componentTotal = componentTax.cgst + componentTax.sgst + componentTax.igst;
-  const useSavedComponents = hasComponentTax && Math.abs(componentTotal - totalTax) < 0.01;
-  const igst = useSavedComponents ? componentTax.igst : (isIgst ? totalTax : 0);
-  const cgst = useSavedComponents ? componentTax.cgst : (isIgst ? 0 : totalTax / 2);
-  const sgst = useSavedComponents ? componentTax.sgst : (isIgst ? 0 : totalTax - cgst);
-  const grandTotal = subtotal + cgst + sgst + igst;
+  const igst = isIgst ? (hasComponentTax ? +componentTax.igst.toFixed(2) : +totalTax.toFixed(2)) : 0;
+  const cgst = !isIgst ? (hasComponentTax ? +componentTax.cgst.toFixed(2) : +(totalTax / 2).toFixed(2)) : 0;
+  const sgst = !isIgst ? (hasComponentTax ? +componentTax.sgst.toFixed(2) : +(totalTax - cgst).toFixed(2)) : 0;
+  const grandTotal = lines.length > 0
+    ? +(subtotal + cgst + sgst + igst).toFixed(2)
+    : Number(inv184.totalAmount || subtotal + cgst + sgst + igst);
 
   console.log(`  Seller GSTIN:               ${sellerGstin} (State ${sellerStateCode} - Maharashtra)`);
   console.log(`  Rendered Bill-To GSTIN:     ${billingGstin}`);

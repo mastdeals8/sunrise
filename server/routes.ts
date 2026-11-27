@@ -2698,10 +2698,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const allPayments = await storage.getAllPayments({ type: "receipt", companyId: req.companyId });
 
       const summaryList = allClients.map(client => {
-        const clientInvoices = allInvoices.filter(i => i.clientId === client.id || i.partyName === client.name);
+        const clientInvoices = allInvoices.filter(i => (i.clientId === client.id || i.partyName === client.name) && !["draft", "cancelled"].includes(i.status));
         const clientPayments = allPayments.filter(p => p.clientId === client.id || p.partyName === client.name);
 
-        const totalBilled = clientInvoices.reduce((sum, i) => sum + Number(i.totalAmount), 0);
+        const totalBilled = clientInvoices.reduce((sum, i) => sum + Number(i.totalAmount || 0), 0);
         const totalPaid = clientInvoices.reduce((sum, i) => sum + Number(i.paidAmount || 0), 0);
         const totalOutstanding = Math.max(0, totalBilled - totalPaid);
 
@@ -2735,7 +2735,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Client not found" });
       }
 
-      const invoiceConds = [eq(invoices.clientId, cId)];
+      const invoiceConds = [
+        eq(invoices.clientId, cId),
+        ne(invoices.status, "cancelled"),
+        ne(invoices.status, "draft"),
+      ];
       if (req.companyId) {
         invoiceConds.push(eq(invoices.companyId, req.companyId));
       }
@@ -2840,16 +2844,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const allDcFiltered = _dcRaw.filter((dc: any)         => inRange(dc.createdAt || dc.deliveryDate));
 
       const totalRevenue = allInvoices
-        .filter(inv => inv.type === "sales")
-        .reduce((sum, inv) => sum + inv.totalAmount, 0);
+        .filter((inv: any) => inv.type === "sales" && !["draft", "cancelled"].includes(inv.status))
+        .reduce((sum: number, inv: any) => sum + Number(inv.totalAmount || 0), 0);
 
       const totalReceivables = allInvoices
-        .filter(inv => inv.type === "sales" && inv.status !== "paid")
-        .reduce((sum, inv) => sum + inv.totalAmount, 0);
+        .filter((inv: any) => inv.type === "sales" && !["draft", "cancelled", "paid"].includes(inv.status))
+        .reduce((sum: number, inv: any) => sum + Math.max(0, Number(inv.balanceAmount ?? (Number(inv.totalAmount || 0) - Number(inv.paidAmount || 0)))), 0);
 
       const totalPayables = allInvoices
-        .filter(inv => inv.type === "purchase" && inv.status !== "paid")
-        .reduce((sum, inv) => sum + inv.totalAmount, 0);
+        .filter((inv: any) => inv.type === "purchase" && !["draft", "cancelled", "paid"].includes(inv.status))
+        .reduce((sum: number, inv: any) => sum + Math.max(0, Number(inv.balanceAmount ?? (Number(inv.totalAmount || 0) - Number(inv.paidAmount || 0)))), 0);
 
       // Petty cash: count only what's actually spent (pending + approved).
       // Rejected entries should NOT inflate the total.
@@ -9287,13 +9291,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // ════════════════════ PHASE 3: FINANCE COMPLETION ════════════════════
   // AR Aging — 0-30 / 31-60 / 61-90 / 90+ buckets per client
-  app.get("/api/finance/aging", authenticateToken, requireRole(["admin", "manager", "accounts"]), async (_req: AuthRequest, res: Response) => {
+  app.get("/api/finance/aging", authenticateToken, requireRole(["admin", "manager", "accounts"]), async (req: AuthRequest, res: Response) => {
     try {
-      const rows = await db.select().from(invoices);
+      const companyId = req.companyId || 1;
+      const rows = await db.select().from(invoices).where(eq(invoices.companyId, companyId));
       const now = Date.now();
       const byClient = new Map<string, any>();
       for (const inv of rows as any[]) {
-        if (inv.type !== "sales" || inv.status === "cancelled" || inv.status === "paid") continue;
+        if (inv.type !== "sales" || ["draft", "cancelled", "paid"].includes(inv.status)) continue;
         const balance = Number(inv.balanceAmount ?? (Number(inv.totalAmount || 0) - Number(inv.paidAmount || 0)));
         if (balance <= 0) continue;
         const key = inv.clientId ? `c${inv.clientId}` : inv.partyName || "unknown";
@@ -9321,12 +9326,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Customer outstanding + collection working list (one endpoint powers both)
-  app.get("/api/finance/collections", authenticateToken, requireRole(["admin", "manager", "accounts"]), async (_req: AuthRequest, res: Response) => {
+  app.get("/api/finance/collections", authenticateToken, requireRole(["admin", "manager", "accounts"]), async (req: AuthRequest, res: Response) => {
     try {
-      const rows = await db.select().from(invoices);
+      const companyId = req.companyId || 1;
+      const rows = await db.select().from(invoices).where(eq(invoices.companyId, companyId));
       const now = Date.now();
       const open = (rows as any[])
-        .filter(inv => inv.type === "sales" && !["cancelled", "paid"].includes(inv.status))
+        .filter(inv => inv.type === "sales" && !["draft", "cancelled", "paid"].includes(inv.status))
         .map(inv => {
           const balance = Number(inv.balanceAmount ?? (Number(inv.totalAmount || 0) - Number(inv.paidAmount || 0)));
           const daysOverdue = inv.dueDate ? Math.floor((now - new Date(inv.dueDate).getTime()) / 86400000) : 0;

@@ -13,6 +13,47 @@ export interface TallySettings {
   voucherType: string;
 }
 
+export const STATE_CODE_NAMES: Record<string, string> = {
+  "01": "Jammu and Kashmir",
+  "02": "Himachal Pradesh",
+  "03": "Punjab",
+  "04": "Chandigarh",
+  "05": "Uttarakhand",
+  "06": "Haryana",
+  "07": "Delhi",
+  "08": "Rajasthan",
+  "09": "Uttar Pradesh",
+  "10": "Bihar",
+  "11": "Sikkim",
+  "12": "Arunachal Pradesh",
+  "13": "Nagaland",
+  "14": "Manipur",
+  "15": "Mizoram",
+  "16": "Tripura",
+  "17": "Meghalaya",
+  "18": "Assam",
+  "19": "West Bengal",
+  "20": "Jharkhand",
+  "21": "Odisha",
+  "22": "Chhattisgarh",
+  "23": "Madhya Pradesh",
+  "24": "Gujarat",
+  "25": "Daman and Diu",
+  "26": "Dadra and Nagar Haveli",
+  "27": "Maharashtra",
+  "28": "Andhra Pradesh (Old)",
+  "29": "Karnataka",
+  "30": "Goa",
+  "31": "Lakshadweep",
+  "32": "Kerala",
+  "33": "Tamil Nadu",
+  "34": "Pondicherry",
+  "35": "Andaman and Nicobar Islands",
+  "36": "Telangana",
+  "37": "Andhra Pradesh",
+  "38": "Ladakh",
+};
+
 export const DEFAULT_TALLY_SETTINGS: TallySettings = {
   enabled: false,
   mode: "xml",
@@ -231,9 +272,15 @@ export function buildTallyVoucherMessage(
   const invoiceDate = invoice.date
     ? new Date(invoice.date).toISOString().split("T")[0].replace(/-/g, "")
     : new Date().toISOString().split("T")[0].replace(/-/g, "");
-  const amount = Number(invoice.totalAmount || 0);
-  const taxable = Number(invoice.amount !== undefined ? invoice.amount : (amount - Number(invoice.taxAmount || 0)));
+  const lines = Array.isArray(invoice.lineItems || invoice.line_items) ? (invoice.lineItems || invoice.line_items) : [];
+  const lineSum = lines.reduce((sum: number, row: any) => sum + Number(row.amount ?? row.totalPrice ?? (Number(row.quantity || 0) * Number(row.rate || 0))), 0);
   const totalTax = Number(invoice.taxAmount || 0);
+  const amount = lines.length > 0
+    ? +(lineSum + totalTax).toFixed(2)
+    : Number(invoice.totalAmount || 0);
+  const taxable = lines.length > 0
+    ? +lineSum.toFixed(2)
+    : Number(invoice.amount !== undefined ? invoice.amount : (amount - totalTax));
 
   let cgst = 0;
   let sgst = 0;
@@ -259,6 +306,21 @@ export function buildTallyVoucherMessage(
   const expectedTotal = Number((taxable + (isInterstate ? igst : (cgst + sgst))).toFixed(2));
   const roundOff = Number((amount - expectedTotal).toFixed(2));
 
+  const partyGstin = String(
+    estimate.gstin ||
+    estimate.billingGstinSnapshot ||
+    client.gstNumber ||
+    client.gst_number ||
+    ""
+  ).trim();
+
+  const partyState = String(
+    STATE_CODE_NAMES[recipientStateCode] ||
+    estimate.billingStateSnapshot ||
+    client.state ||
+    ""
+  ).trim();
+
   const narration = `${invoice.invoiceNumber} — ${partyName}`;
 
   return `        <TALLYMESSAGE xmlns:UDF="TallyUDF">
@@ -268,6 +330,8 @@ export function buildTallyVoucherMessage(
             <VOUCHERTYPENAME>${escapeXml(voucherType)}</VOUCHERTYPENAME>
             <VOUCHERNUMBER>${escapeXml(invoice.invoiceNumber)}</VOUCHERNUMBER>
             <PARTYLEDGERNAME>${escapeXml(partyName)}</PARTYLEDGERNAME>
+            ${partyGstin ? `<PARTYGSTIN>${escapeXml(partyGstin)}</PARTYGSTIN>` : ""}
+            ${partyState ? `<STATENAME>${escapeXml(partyState)}</STATENAME>` : ""}
             <GUID>${escapeXml(invoice.invoiceNumber)}</GUID>
             <ALLLEDGERENTRIES.LIST>
               <LEDGERNAME>${escapeXml(partyName)}</LEDGERNAME>

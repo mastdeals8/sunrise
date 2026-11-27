@@ -155,8 +155,8 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({
   stores = [],
 }) => {
   const lines = Array.isArray(inv.lineItems || inv.line_items) ? (inv.lineItems || inv.line_items) : [];
-  const subtotal = Number(inv.amount ?? lines.reduce((sum: number, row: any) => sum + Number(row.amount ?? row.totalPrice ?? Number(row.quantity || 0) * Number(row.rate || 0)), 0));
-  const totalTax = Number(inv.taxAmount ?? Math.max(0, Number(inv.totalAmount || 0) - subtotal));
+  const lineSum = lines.reduce((sum: number, row: any) => sum + Number(row.amount ?? row.totalPrice ?? Number(row.quantity || 0) * Number(row.rate || 0)), 0);
+  const subtotal = lines.length > 0 ? +lineSum.toFixed(2) : Number(inv.amount ?? 0);
   const componentTax = lines.reduce((totals: { cgst: number; sgst: number; igst: number }, row: any) => ({
     cgst: totals.cgst + Number(row.cgstAmount ?? row.cgst_amount ?? 0),
     sgst: totals.sgst + Number(row.sgstAmount ?? row.sgst_amount ?? 0),
@@ -192,12 +192,14 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({
   const isIgst = hasComponentTax
     ? componentTax.igst > 0
     : (isInterstateSupply || est?.gstType === "IGST" || Boolean(est?.igstAmount && Number(est.igstAmount) > 0));
-  const componentTotal = componentTax.cgst + componentTax.sgst + componentTax.igst;
-  const useSavedComponents = hasComponentTax && Math.abs(componentTotal - totalTax) < 0.01;
-  const igst = useSavedComponents ? componentTax.igst : (isIgst ? totalTax : 0);
-  const cgst = useSavedComponents ? componentTax.cgst : (isIgst ? 0 : totalTax / 2);
-  const sgst = useSavedComponents ? componentTax.sgst : (isIgst ? 0 : totalTax - cgst);
-  const grandTotal = Number(inv.totalAmount || subtotal + cgst + sgst + igst);
+  const componentTotal = +(componentTax.cgst + componentTax.sgst + componentTax.igst).toFixed(2);
+  const totalTax = hasComponentTax ? componentTotal : Number(inv.taxAmount ?? Math.max(0, Number(inv.totalAmount || 0) - subtotal));
+  const igst = isIgst ? (hasComponentTax ? +componentTax.igst.toFixed(2) : +totalTax.toFixed(2)) : 0;
+  const cgst = !isIgst ? (hasComponentTax ? +componentTax.cgst.toFixed(2) : +(totalTax / 2).toFixed(2)) : 0;
+  const sgst = !isIgst ? (hasComponentTax ? +componentTax.sgst.toFixed(2) : +(totalTax - cgst).toFixed(2)) : 0;
+  const grandTotal = lines.length > 0
+    ? +(subtotal + cgst + sgst + igst).toFixed(2)
+    : Number(inv.totalAmount || subtotal + cgst + sgst + igst);
 
   const logoUrl = companyAssetUrl(sellerProfile?.logoPath || (isCompany1 ? "/brand/file-1780929283382-585314307.png" : ""), token);
   const { dataUrl: logoDataUrl, ready: logoReady } = useDataUrl(logoUrl);
