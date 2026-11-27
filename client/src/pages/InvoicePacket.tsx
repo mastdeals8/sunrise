@@ -10,7 +10,7 @@ import InvoiceDocument from "../components/InvoiceDocument";
 import InvoiceSummaryDocument, { copyInvoiceSummaryToClipboard } from "../components/InvoiceSummaryDocument";
 import type { Client, Product, Store } from "./operations/types";
 import { isBoltMode } from "../lib/supabase";
-import { fetchInvoices, fetchCompanySettings, fetchEstimateById, fetchEstimateItems, fetchDeliveryChallansForEstimate, fetchPaymentsForInvoice, fetchClients, fetchStores, fetchProducts, fetchExecutionDocuments, fetchExecutionStores, getExecutionDocumentSignedUrl, fetchInvoiceById, registerExecutionDocument, uploadToStorage, updateExecutionDocumentMetadata, fetchInvoicePacketRequirements, fetchBrands } from "../lib/api";
+import { fetchInvoices, fetchCompanySettings, fetchEstimateById, fetchEstimateItems, fetchDeliveryChallansForEstimate, fetchPaymentsForInvoice, fetchClients, fetchStores, fetchProducts, fetchExecutionDocuments, fetchExecutionStores, getExecutionDocumentSignedUrl, openExecutionDocument, fetchInvoiceById, registerExecutionDocument, uploadToStorage, updateExecutionDocumentMetadata, fetchInvoicePacketRequirements, fetchBrands } from "../lib/api";
 import { evaluateTransportCompliance, isVerifiedTransportInvoice, type TransportComplianceSummary } from "../../../shared/transportCompliance";
 import type { ScopedStore } from "@shared/storeScoping";
 import {
@@ -1447,14 +1447,24 @@ const dataUrlToBytes = (dataUrl: string): Uint8Array => {
                                     <Upload className="w-3 h-3" /> {uploadingTransportStoreCode === (req.storeCode || "project") ? "Uploading…" : "Upload Receipt"}
                                   </button>
                                 ) : (req.receiptDoc?.filePath || req.invoiceDoc?.filePath) ? (
-                                  <a
-                                    href={req.receiptDoc?.filePath || req.invoiceDoc?.filePath}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded font-semibold text-xs inline-flex items-center gap-1"
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const path = req.receiptDoc?.filePath || req.invoiceDoc?.filePath;
+                                      if (path) {
+                                        openExecutionDocument(
+                                          path,
+                                          false,
+                                          packet?.estimate?.id,
+                                          false,
+                                          req.receiptDoc?.id ? Number(req.receiptDoc.id) : undefined
+                                        ).catch(err => alert(err?.message || "Could not open transport receipt"));
+                                      }
+                                    }}
+                                    className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded font-semibold text-xs inline-flex items-center gap-1 cursor-pointer transition shadow-sm"
                                   >
                                     <FileText className="w-3 h-3" /> View Receipt
-                                  </a>
+                                  </button>
                                 ) : null}
                               </div>
                             </div>
@@ -1806,9 +1816,17 @@ const DocumentPreview: React.FC<{ label: string; filePath?: string | null; mimeT
           style={{ height: "80vh" }}
         />
       ) : (
-        <a href={filePath} target="_blank" rel="noreferrer" className="text-sm text-blue-600 underline">
+        <button
+          type="button"
+          onClick={() => {
+            if (filePath) {
+              openExecutionDocument(filePath).catch(err => alert(err?.message || "Could not open document"));
+            }
+          }}
+          className="text-sm text-blue-600 underline font-semibold hover:text-blue-800"
+        >
           Open {filePath.split("/").pop()}
-        </a>
+        </button>
       )}
     </div>
   );

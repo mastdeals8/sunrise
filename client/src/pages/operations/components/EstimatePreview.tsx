@@ -1937,9 +1937,25 @@ Sunrise Media`;
                     ) : row.challan ? (
                       <button type="button" title="View" onClick={() => openDcPreview && openDcPreview(row.challan)} className={iconButtonClass}><Eye className="w-3.5 h-3.5" /></button>
                     ) : row.filePath ? (
-                      <a href={row.filePath} target="_blank" rel="noreferrer" title="View" className={iconButtonClass}><Eye className="w-3.5 h-3.5" /></a>
+                      <button
+                        type="button"
+                        title="View"
+                        onClick={() => openExecutionDocument(row.filePath!, false, selectedEstimate?.id).catch(err => alert(err?.message || "Could not open document"))}
+                        className={iconButtonClass}
+                      >
+                        <Eye className="w-3.5 h-3.5" />
+                      </button>
                     ) : null}
-                    {row.filePath && <a href={row.filePath} download title="Download" className={iconButtonClass}><Download className="w-3.5 h-3.5" /></a>}
+                    {row.filePath && (
+                      <button
+                        type="button"
+                        title="Download"
+                        onClick={() => openExecutionDocument(row.filePath!, true, selectedEstimate?.id).catch(err => alert(err?.message || "Could not download document"))}
+                        className={iconButtonClass}
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                     {row.executionDoc ? (
                       <>
                         <button type="button" title="Replace" onClick={() => openExecutionDocumentViewer && openExecutionDocumentViewer(row.executionDoc)} className={iconButtonClass}><Upload className="w-3.5 h-3.5" /></button>

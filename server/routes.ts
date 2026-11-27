@@ -3750,6 +3750,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.get("/api/operations/estimates/export/pdf/:id", authenticateBrowserRequest, (req: AuthRequest, res: Response) => {
+    const scale = req.query.scale ? `scale=${req.query.scale}&` : "";
+    const density = req.query.density ? `density=${req.query.density}&` : "";
+    const layout = req.query.layout ? `layout=${req.query.layout}&` : "";
+    res.redirect(307, `/api/operations/estimates/${req.params.id}/pdf?${scale}${density}${layout}`);
+  });
+
   app.get("/api/operations/estimates/:id/pdf", authenticateBrowserRequest, async (req: AuthRequest, res: Response) => {
     try {
       const id = parseInt(req.params.id, 10);

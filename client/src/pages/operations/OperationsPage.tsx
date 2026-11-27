@@ -48,7 +48,7 @@ import WccDcEditor from "./components/WccDcEditor";
 import { MasterProjectsPanel } from "./components/MasterProjectsPanel";
 import { useOperationsData, type Invoice } from "./hooks/useOperationsData";
 import { isBoltMode, supabase } from "../../lib/supabase";
-import { createEstimate, updateEstimate, duplicateEstimate, createDeliveryChallan, updateDeliveryChallan, fetchEstimateItems, fetchDeliveryChallansForEstimate, fetchBillingProfiles as apiFetchBillingProfiles, fetchCompanySettings, createInvoice, createPayment, fetchClientLedger, masterDataSave, uploadToStorage, registerExecutionDocument, deleteExecutionDocument, deleteWccPhotoArtifacts, hydrateDeliveryChallanPhotos, normalizeWccPhotos, resolveCustomerRate, apiFetch, getExecutionDocumentSignedUrl, fetchExecutionDocumentVersions, replaceExecutionDocument } from "../../lib/api";
+import { createEstimate, updateEstimate, duplicateEstimate, createDeliveryChallan, updateDeliveryChallan, fetchEstimateItems, fetchDeliveryChallansForEstimate, fetchBillingProfiles as apiFetchBillingProfiles, fetchCompanySettings, createInvoice, createPayment, fetchClientLedger, masterDataSave, uploadToStorage, registerExecutionDocument, deleteExecutionDocument, deleteWccPhotoArtifacts, hydrateDeliveryChallanPhotos, normalizeWccPhotos, resolveCustomerRate, apiFetch, getExecutionDocumentSignedUrl, openExecutionDocument, fetchExecutionDocumentVersions, replaceExecutionDocument } from "../../lib/api";
 import { useEstimateBuilder } from "./hooks/useEstimateBuilder";
 import { useInvoiceWorkflow } from "./hooks/useInvoiceWorkflow";
 import { useWccDcEditor } from "./hooks/useWccDcEditor";
@@ -4658,12 +4658,20 @@ const OperationsPage: React.FC<OperationsPageProps> = ({ focusTab, focusTitle, f
                 <button type="button" onClick={() => deleteExecutionDocumentFromOwner(executionDocumentViewer)} className="inline-flex items-center gap-1 px-3 py-1.5 bg-red-50 border border-red-200 text-red-700 text-xs font-bold rounded hover:bg-red-100">
                   Delete
                 </button>
-                <a href={executionDocumentViewer.filePath} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 px-3 py-1.5 bg-slate-50 border border-slate-200 text-slate-700 text-xs font-bold rounded hover:bg-slate-100">
+                <button
+                  type="button"
+                  onClick={() => openExecutionDocument(executionDocumentViewer.storagePath || executionDocumentViewer.filePath, false, executionDocumentViewer.estimateId, executionDocumentViewer.documentType === "po" || executionDocumentViewer.documentType === "client_po", executionDocumentViewer.id ? Number(executionDocumentViewer.id) : undefined).catch(err => alert(err?.message || "Could not open document"))}
+                  className="inline-flex items-center gap-1 px-3 py-1.5 bg-slate-50 border border-slate-200 text-slate-700 text-xs font-bold rounded hover:bg-slate-100"
+                >
                   Open
-                </a>
-                <a href={executionDocumentViewer.filePath} download className="inline-flex items-center gap-1 px-3 py-1.5 bg-orange-50 border border-orange-200 text-orange-700 text-xs font-bold rounded hover:bg-orange-100">
+                </button>
+                <button
+                  type="button"
+                  onClick={() => openExecutionDocument(executionDocumentViewer.storagePath || executionDocumentViewer.filePath, true, executionDocumentViewer.estimateId, executionDocumentViewer.documentType === "po" || executionDocumentViewer.documentType === "client_po", executionDocumentViewer.id ? Number(executionDocumentViewer.id) : undefined).catch(err => alert(err?.message || "Could not download document"))}
+                  className="inline-flex items-center gap-1 px-3 py-1.5 bg-orange-50 border border-orange-200 text-orange-700 text-xs font-bold rounded hover:bg-orange-100"
+                >
                   Download
-                </a>
+                </button>
                 <button type="button" onClick={() => { setExecutionDocumentViewer(null); setExecutionDocumentVersions([]); setShowExecutionDocumentHistory(false); }} className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded">
                   <X className="w-5 h-5" />
                 </button>

@@ -3422,6 +3422,13 @@ export async function getExecutionDocumentSignedUrl(
   recoverHistoricalPo = false,
   documentId?: number
 ): Promise<string> {
+  const clean = (storageValue || "").trim();
+  if (!clean) throw new Error("No storage path provided.");
+  if (clean.startsWith("data:")) return clean;
+  if (/^https?:\/\//i.test(clean) && !clean.includes("/storage/v1/object/")) {
+    return clean;
+  }
+
   const storagePath = await resolveExecutionDocumentKey(storageValue, estimateId, recoverHistoricalPo, documentId);
   if (!storagePath) throw new Error("Document not found. Please replace or re-upload this attachment.");
 
@@ -3441,8 +3448,63 @@ export async function openExecutionDocument(
   recoverHistoricalPo = false,
   documentId?: number
 ): Promise<void> {
-  const signedUrl = await getExecutionDocumentSignedUrl(storageValue, download, estimateId, recoverHistoricalPo, documentId);
-  window.open(signedUrl, "_blank", "noopener,noreferrer");
+  // CRITICAL SAFARI & POPUP COMPATIBILITY:
+  // Browsers (especially Safari and modern Chromium) block window.open() if invoked
+  // asynchronously after an await. To prevent popup blocking while avoiding a blank
+  // orphaned window if resolution fails, open a reference window immediately synchronously,
+  // then navigate it to the signed URL or close it on error.
+  const targetWindow = !download ? window.open("about:blank", "_blank") : null;
+  if (targetWindow) {
+    try {
+      targetWindow.opener = null;
+      targetWindow.document.title = "Loading document…";
+      targetWindow.document.body.innerHTML = `
+        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; background: #f8fafc; color: #475569;">
+          <div style="width: 32px; height: 32px; border: 3px solid #cbd5e1; border-top-color: #f97316; border-radius: 50%; animation: spin 0.8s linear infinite;"></div>
+          <p style="margin-top: 16px; font-size: 14px; font-weight: 600;">Opening document…</p>
+          <style>@keyframes spin { to { transform: rotate(360deg); } }</style>
+        </div>
+      `;
+    } catch {
+      /* cross-origin guard */
+    }
+  }
+
+  try {
+    const signedUrl = await getExecutionDocumentSignedUrl(storageValue, download, estimateId, recoverHistoricalPo, documentId);
+    if (download) {
+      // Direct DOM-triggered download via anchor element
+      const a = document.createElement("a");
+      a.style.display = "none";
+      a.href = signedUrl;
+      const filename = storageValue.split("/").pop() || "download";
+      a.download = filename;
+      a.rel = "noopener,noreferrer";
+      document.body.appendChild(a);
+      a.click();
+      window.setTimeout(() => { if (a.parentNode) a.parentNode.removeChild(a); }, 2000);
+      return;
+    }
+
+    if (targetWindow && !targetWindow.closed) {
+      targetWindow.location.replace(signedUrl);
+    } else {
+      window.open(signedUrl, "_blank", "noopener,noreferrer");
+    }
+  } catch (err: any) {
+    if (targetWindow && !targetWindow.closed) {
+      targetWindow.document.title = "Document Unavailable";
+      targetWindow.document.body.innerHTML = `
+        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; background: #fff1f2; color: #9f1239; text-align: center; padding: 24px;">
+          <svg style="width: 48px; height: 48px; color: #e11d48; margin-bottom: 12px;" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+          <h2 style="margin: 0 0 8px 0; font-size: 18px; font-weight: 700;">Document Unavailable</h2>
+          <p style="margin: 0; font-size: 14px; max-width: 420px; color: #be123c;">${err?.message || "The requested attachment could not be located or verified on the storage server."}</p>
+          <button onclick="window.close()" style="margin-top: 20px; padding: 8px 16px; background: #e11d48; color: #fff; border: none; border-radius: 6px; font-weight: 600; font-size: 13px; cursor: pointer;">Close Window</button>
+        </div>
+      `;
+    }
+    throw err;
+  }
 }
 
 /**

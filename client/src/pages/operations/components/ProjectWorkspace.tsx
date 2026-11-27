@@ -547,14 +547,24 @@ const DocRow: React.FC<{
       {classificationAction}
       {doc.fileSize ? <span className="text-[10px] text-slate-400 shrink-0">{fmtBytes(doc.fileSize)}</span> : null}
       <div className="flex items-center gap-1 opacity-80 sm:opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-        {fileUrl && (
+        {doc.filePath && (
           <>
-            <a href={fileUrl} target="_blank" rel="noreferrer" className="p-1 text-slate-500 hover:text-slate-800" title="View">
+            <button
+              type="button"
+              onClick={() => openExecutionDocument(doc.filePath, false, doc.estimateId, doc.documentType === "po" || doc.documentType === "client_po", doc.id ? Number(doc.id) : undefined).catch(err => alert(err?.message || "Could not open document"))}
+              className="p-1 text-slate-500 hover:text-slate-800"
+              title="View"
+            >
               <Eye className="w-3.5 h-3.5" />
-            </a>
-            <a href={fileUrl} download className="p-1 text-slate-500 hover:text-slate-800" title="Download">
+            </button>
+            <button
+              type="button"
+              onClick={() => openExecutionDocument(doc.filePath, true, doc.estimateId, doc.documentType === "po" || doc.documentType === "client_po", doc.id ? Number(doc.id) : undefined).catch(err => alert(err?.message || "Could not download document"))}
+              className="p-1 text-slate-500 hover:text-slate-800"
+              title="Download"
+            >
               <Download className="w-3.5 h-3.5" />
-            </a>
+            </button>
           </>
         )}
         {onDelete && (
@@ -752,10 +762,15 @@ const StoreDrawer: React.FC<{
                         <div className="w-full h-full flex items-center justify-center"><File className="w-8 h-8 text-slate-300" /></div>
                       )}
                       <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1">
-                        {fileUrl && (
-                          <a href={fileUrl} target="_blank" rel="noreferrer" className="p-1 bg-white/90 rounded text-slate-700 hover:bg-white" title="View">
+                        {doc.filePath && (
+                          <button
+                            type="button"
+                            onClick={() => openExecutionDocument(doc.filePath, false, estimate?.id, false, doc.id ? Number(doc.id) : undefined).catch(err => alert(err?.message || "Could not open photo"))}
+                            className="p-1 bg-white/90 rounded text-slate-700 hover:bg-white"
+                            title="View"
+                          >
                             <Eye className="w-3.5 h-3.5" />
-                          </a>
+                          </button>
                         )}
                         <button type="button" onClick={() => deleteDoc(doc)} className="p-1 bg-white/90 rounded text-red-500 hover:bg-white" title="Delete">
                           <Trash2 className="w-3.5 h-3.5" />
@@ -810,21 +825,14 @@ const StoreDrawer: React.FC<{
                     <button type="button" onClick={() => onOpenWcc(dc)} className="p-1 text-slate-400 hover:text-slate-700" title="Edit">
                       <Upload className="w-3.5 h-3.5" />
                     </button>
-                    {isBoltMode ? (
-                      <button type="button" onClick={() => onPreviewWcc(dc)} className="p-1 text-slate-400 hover:text-slate-700" title="Print">
-                        <Printer className="w-3.5 h-3.5" />
-                      </button>
-                    ) : (
-                      <a
-                        href={`/api/operations/wcc-preview/${dc.id}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="p-1 text-slate-400 hover:text-slate-700"
-                        title="Print/Download"
-                      >
-                        <Printer className="w-3.5 h-3.5" />
-                      </a>
-                    )}
+                    <button
+                      type="button"
+                      onClick={() => (onPrintWcc ? onPrintWcc(dc) : onPreviewWcc(dc))}
+                      className="p-1 text-slate-400 hover:text-slate-700"
+                      title="Print"
+                    >
+                      <Printer className="w-3.5 h-3.5" />
+                    </button>
                   </div>
                 ))}
               </div>
@@ -1226,10 +1234,15 @@ const PhotosTab: React.FC<{
                                   </div>
                                 )}
                                 <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1.5">
-                                  {fileUrl && (
-                                    <a href={fileUrl} target="_blank" rel="noreferrer" className="p-1 bg-white/90 rounded text-slate-700 hover:bg-white" title="View">
+                                  {doc.filePath && (
+                                    <button
+                                      type="button"
+                                      onClick={() => openExecutionDocument(doc.filePath, false, estimate?.id, false, doc.id ? Number(doc.id) : undefined).catch(err => alert(err?.message || "Could not open photo"))}
+                                      className="p-1 bg-white/90 rounded text-slate-700 hover:bg-white"
+                                      title="View"
+                                    >
                                       <Eye className="w-3 h-3" />
-                                    </a>
+                                    </button>
                                   )}
                                   <button type="button" onClick={() => deleteDoc(doc)} className="p-1 bg-white/90 rounded text-red-500 hover:bg-white" title="Delete">
                                     <Trash2 className="w-3 h-3" />
@@ -1416,15 +1429,14 @@ const WccTab: React.FC<{
                               <button type="button" onClick={() => onOpenWcc(dc)} className="p-1 text-slate-400 hover:text-slate-700" title="Edit">
                                 <Upload className="w-3.5 h-3.5" />
                               </button>
-                              {isBoltMode ? (
-                                <button type="button" onClick={() => (onPrintWcc ? onPrintWcc(dc) : onPreviewWcc(dc))} className="p-1 text-slate-400 hover:text-slate-700" title="Print">
-                                  <Printer className="w-3.5 h-3.5" />
-                                </button>
-                              ) : (
-                                <a href={`/api/operations/wcc-preview/${dc.id}`} target="_blank" rel="noreferrer" className="p-1 text-slate-400 hover:text-slate-700" title="Print">
-                                  <Printer className="w-3.5 h-3.5" />
-                                </a>
-                              )}
+                              <button
+                                type="button"
+                                onClick={() => (onPrintWcc ? onPrintWcc(dc) : onPreviewWcc(dc))}
+                                className="p-1 text-slate-400 hover:text-slate-700"
+                                title="Print"
+                              >
+                                <Printer className="w-3.5 h-3.5" />
+                              </button>
                             </React.Fragment>
                           ))
                         ) : (
@@ -1810,7 +1822,7 @@ const DocumentsTab: React.FC<{
                 <Eye className="w-3.5 h-3.5" /> Print / PDF
               </button>
             ) : (
-              <a href={`/api/operations/estimates/export/pdf/${estimate.id}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded border text-xs font-bold bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100">
+              <a href={`/api/operations/estimates/${estimate.id}/pdf`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded border text-xs font-bold bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100">
                 <Eye className="w-3.5 h-3.5" /> View PDF
               </a>
             )}
@@ -2463,7 +2475,7 @@ const QuickActionBar: React.FC<{
           <FileText className="w-3.5 h-3.5 text-slate-400" /> Print / PDF
         </button>
       ) : (
-        <a href={`/api/operations/estimates/export/pdf/${estimate.id}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-bold bg-white border-slate-200 text-slate-700 hover:bg-slate-50 transition">
+        <a href={`/api/operations/estimates/${estimate.id}/pdf`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-bold bg-white border-slate-200 text-slate-700 hover:bg-slate-50 transition">
           <FileText className="w-3.5 h-3.5 text-slate-400" /> View Estimate
         </a>
       )}

@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useAuth } from "../contexts/AuthContext";
+import { openExecutionDocument } from "../lib/api";
 import {
   Briefcase, MapPin, CheckCircle, Clock, AlertTriangle, Camera, FileText,
   Search, ExternalLink, Printer, Copy, MessageCircle, Image as ImageIcon,
@@ -264,8 +265,8 @@ export default function JobsPage() {
                               <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase border ${STATUS_COLOR[s] || STATUS_COLOR.pending}`}>{s.replace(/_/g, " ")}</span>
                             </td>
                             <td className="px-2 py-1.5">{dc ? <span className="font-mono text-emerald-700 text-[10px]">{dc.dcNumber}</span> : <span className="text-slate-300">—</span>}</td>
-                            <td className="px-2 py-1.5">{dc?.photoPath ? <a href={`/${dc.photoPath}`} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline flex items-center gap-1"><Camera className="w-3 h-3" /> View</a> : <span className="text-slate-300 flex items-center gap-1"><Camera className="w-3 h-3" /> —</span>}</td>
-                            <td className="px-2 py-1.5">{dc?.signedChallanPath ? <a href={`/${dc.signedChallanPath}`} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">View</a> : <span className="text-slate-300">—</span>}</td>
+                            <td className="px-2 py-1.5">{dc?.photoPath ? <button type="button" onClick={() => openExecutionDocument(dc.photoPath!, false, est.id).catch(err => alert(err?.message || "Photo not found"))} className="text-blue-600 hover:underline flex items-center gap-1"><Camera className="w-3 h-3" /> View</button> : <span className="text-slate-300 flex items-center gap-1"><Camera className="w-3 h-3" /> —</span>}</td>
+                            <td className="px-2 py-1.5">{dc?.signedChallanPath ? <button type="button" onClick={() => openExecutionDocument(dc.signedChallanPath!, false, est.id).catch(err => alert(err?.message || "Signed copy not found"))} className="text-blue-600 hover:underline">View</button> : <span className="text-slate-300">—</span>}</td>
                             <td className="px-2 py-1.5 text-right">
                               <select
                                 value={statuses[est.id]?.find(x => x.storeCode === r.storeCode)?.status || ""}
@@ -422,7 +423,7 @@ const CompletionReport: React.FC<{
                     <div>
                       <p className="text-[10px] font-bold text-slate-500 uppercase">Signed challan</p>
                       {dc?.signedChallanPath
-                        ? <a href={`/${dc.signedChallanPath}`} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">View signed proof</a>
+                        ? <button type="button" onClick={() => openExecutionDocument(dc.signedChallanPath!, false, activeJob?.id).catch(err => alert(err?.message || "Signed proof not found"))} className="text-blue-600 hover:underline text-xs font-semibold">View signed proof</button>
                         : <p className="text-slate-300">Pending</p>}
                     </div>
                   </div>
