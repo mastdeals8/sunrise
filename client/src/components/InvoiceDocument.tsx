@@ -5,6 +5,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { companyAssetUrl } from "../utils/companyAssets";
 import { orderedStoreKeysFromGrouping } from "../pages/operations/utils/estimateOrdering";
+import { calculateFinancialTotals, roundTo } from "@shared/financialCalculations";
 
 export interface InvoiceDocumentProps {
   invoice: any;
@@ -154,20 +155,6 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({
   products = [],
   stores = [],
 }) => {
-  const lines = Array.isArray(inv.lineItems || inv.line_items) ? (inv.lineItems || inv.line_items) : [];
-  const lineSum = lines.reduce((sum: number, row: any) => sum + Number(row.amount ?? row.totalPrice ?? Number(row.quantity || 0) * Number(row.rate || 0)), 0);
-  const subtotal = lines.length > 0 ? +lineSum.toFixed(2) : Number(inv.amount ?? 0);
-  const componentTax = lines.reduce((totals: { cgst: number; sgst: number; igst: number }, row: any) => ({
-    cgst: totals.cgst + Number(row.cgstAmount ?? row.cgst_amount ?? 0),
-    sgst: totals.sgst + Number(row.sgstAmount ?? row.sgst_amount ?? 0),
-    igst: totals.igst + Number(row.igstAmount ?? row.igst_amount ?? 0),
-  }), { cgst: 0, sgst: 0, igst: 0 });
-  const hasComponentTax = componentTax.cgst !== 0 || componentTax.sgst !== 0 || componentTax.igst !== 0;
-  const isCompany1 = !sellerProfile?.companyId || Number(sellerProfile?.companyId) === 1;
-  const companyName = sellerProfile?.displayName || sellerProfile?.tradeName || sellerProfile?.name || sellerProfile?.companyName || "Sunrise Media";
-  const companyAddress = sellerProfile?.address || "";
-  const companyEmail = sellerProfile?.email || "";
-  const companyMobile = sellerProfile?.mobile || "";
   const sellerGstin = sellerProfile?.gstin || (isCompany1 ? "27ABZFS5736R1ZR" : "");
   const sellerStateCode = sellerGstin && /^\d{2}/.test(sellerGstin) ? sellerGstin.slice(0, 2) : "27";
 
@@ -188,17 +175,37 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({
 
   const billingState = STATE_CODE_NAMES[billingStateCode] || est?.billingStateSnapshot || (billingStateCode === "27" ? "Maharashtra" : billingStateCode);
 
+  // Calculate line totals and financials via canonical financial module
+  const financialTotals = useMemo(() => {
+    return calculateFinancialTotals(lines, {
+      sellerStateCode,
+      placeOfSupplyStateCode: billingStateCode,
+      applyRoundOff: false, // Invoices display unrounded/exact paise
+    });
+  }, [lines, sellerStateCode, billingStateCode]);
+
+  const subtotal = lines.length > 0 ? financialTotals.subtotal : Number(inv.amount ?? 0);
+  const componentTax = lines.reduce((totals: { cgst: number; sgst: number; igst: number }, row: any) => ({
+    cgst: totals.cgst + Number(row.cgstAmount ?? row.cgst_amount ?? 0),
+    sgst: totals.sgst + Number(row.sgstAmount ?? row.sgst_amount ?? 0),
+    igst: totals.igst + Number(row.igstAmount ?? row.igst_amount ?? 0),
+  }), { cgst: 0, sgst: 0, igst: 0 });
+  const hasComponentTax = componentTax.cgst !== 0 || componentTax.sgst !== 0 || componentTax.igst !== 0;
+
   const isInterstateSupply = Boolean(billingStateCode && billingStateCode !== sellerStateCode);
   const isIgst = hasComponentTax
     ? componentTax.igst > 0
     : (isInterstateSupply || est?.gstType === "IGST" || Boolean(est?.igstAmount && Number(est.igstAmount) > 0));
-  const componentTotal = +(componentTax.cgst + componentTax.sgst + componentTax.igst).toFixed(2);
-  const totalTax = hasComponentTax ? componentTotal : Number(inv.taxAmount ?? Math.max(0, Number(inv.totalAmount || 0) - subtotal));
-  const igst = isIgst ? (hasComponentTax ? +componentTax.igst.toFixed(2) : +totalTax.toFixed(2)) : 0;
-  const cgst = !isIgst ? (hasComponentTax ? +componentTax.cgst.toFixed(2) : +(totalTax / 2).toFixed(2)) : 0;
-  const sgst = !isIgst ? (hasComponentTax ? +componentTax.sgst.toFixed(2) : +(totalTax - cgst).toFixed(2)) : 0;
+
+  const totalTax = hasComponentTax 
+    ? roundTo(componentTax.cgst + componentTax.sgst + componentTax.igst) 
+    : (lines.length > 0 ? financialTotals.taxAmount : Number(inv.taxAmount ?? Math.max(0, Number(inv.totalAmount || 0) - subtotal)));
+
+  const igst = isIgst ? (hasComponentTax ? roundTo(componentTax.igst) : roundTo(totalTax)) : 0;
+  const cgst = !isIgst ? (hasComponentTax ? roundTo(componentTax.cgst) : roundTo(totalTax / 2)) : 0;
+  const sgst = !isIgst ? (hasComponentTax ? roundTo(componentTax.sgst) : roundTo(totalTax - cgst)) : 0;
   const grandTotal = lines.length > 0
-    ? +(subtotal + cgst + sgst + igst).toFixed(2)
+    ? roundTo(subtotal + cgst + sgst + igst)
     : Number(inv.totalAmount || subtotal + cgst + sgst + igst);
 
   const logoUrl = companyAssetUrl(sellerProfile?.logoPath || (isCompany1 ? "/brand/file-1780929283382-585314307.png" : ""), token);

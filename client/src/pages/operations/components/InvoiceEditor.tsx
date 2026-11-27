@@ -6,6 +6,7 @@ import { Link } from "wouter";
 import { X, Plus, Trash2, Save, Send, Printer, ChevronLeft, RefreshCw, MessageCircle } from "lucide-react";
 import { normalizeDisplayName } from "../../../../../shared/textFormat";
 import { estimateItemsToInvoiceLines, invoiceLineToEditorLine } from "../utils/invoiceConversion";
+import { calculateFinancialTotals, roundTo } from "@shared/financialCalculations";
 import { WhatsAppShareModal } from "../../../components/WhatsAppShareModal";
 
 export interface InvoiceLineItem {
@@ -278,9 +279,12 @@ const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ open, invoiceId, estimate
     })();
   }, [open, invoiceId, estimateId, deliveryChallanId, token]);
 
-  const subtotal = useMemo(() => +(items.reduce((s, it) => s + (Number(it.amount) || 0), 0)).toFixed(2), [items]);
-  const taxTotal = useMemo(() => +(items.reduce((s, it) => s + (Number(it.taxAmount) || 0), 0)).toFixed(2), [items]);
-  const grandTotal = +(subtotal + taxTotal).toFixed(2);
+  const totals = useMemo(() => {
+    return calculateFinancialTotals(items, { applyRoundOff: false });
+  }, [items]);
+  const subtotal = totals.subtotal;
+  const taxTotal = totals.taxAmount;
+  const grandTotal = totals.rawGrandTotal;
 
   const updateRow = (idx: number, patch: Partial<InvoiceLineItem>) => {
     setItems(prev => prev.map((row, i) => {

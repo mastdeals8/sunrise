@@ -9,6 +9,7 @@ import { orderedEstimateItems, orderedStoreKeysFromItems } from "../utils/estima
 import { exportEstimateToExcel } from "../utils/exportHelpers";
 import { reconcileEstimateSummary } from "../utils/estimateReconciliation";
 import { estimateItemsToInvoiceLines } from "../utils/invoiceConversion";
+import { calculateFinancialTotals, roundTo } from "@shared/financialCalculations";
 import type { Brand, Client, Estimate, EstimateItem, Product, Store } from "../types";
 import EstimateDocument from "../../../components/EstimateDocument";
 import { EstimateRevisionsModal } from "./EstimateRevisionsModal";
@@ -884,11 +885,13 @@ Sunrise Media`;
             const dueDate = new Date(Date.now() + 30 * 86400000);
             const targetGstType = selectedEstimate.gstType || (selectedEstimate.stateCode && String(selectedEstimate.stateCode) !== "27" ? "IGST" : "CGST+SGST");
             const lines = estimateItemsToInvoiceLines(previewItems, targetGstType);
-            const lineSum = lines.reduce((sum, row) => sum + Number(row.amount || 0), 0);
-            const lineTax = lines.reduce((sum, row) => sum + Number(row.taxAmount || 0), 0);
-            const amount = lines.length > 0 ? +lineSum.toFixed(2) : Number(selectedEstimate.subtotal || 0);
-            const taxAmount = lines.length > 0 ? +lineTax.toFixed(2) : Number(selectedEstimate.taxAmount || 0);
-            const totalAmount = +(amount + taxAmount).toFixed(2);
+            const financialTotals = calculateFinancialTotals(lines, {
+              targetGstType: targetGstType === "IGST" ? "interstate" : "intrastate",
+              applyRoundOff: false,
+            });
+            const amount = lines.length > 0 ? financialTotals.subtotal : Number(selectedEstimate.subtotal || 0);
+            const taxAmount = lines.length > 0 ? financialTotals.taxAmount : Number(selectedEstimate.taxAmount || 0);
+            const totalAmount = roundTo(amount + taxAmount);
             const primaryChallan = activeSelectedChallans[0] || null;
             const invoicePayload = {
               type: "sales",
