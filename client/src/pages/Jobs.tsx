@@ -423,7 +423,7 @@ const CompletionReport: React.FC<{
                     <div>
                       <p className="text-[10px] font-bold text-slate-500 uppercase">Signed challan</p>
                       {dc?.signedChallanPath
-                        ? <button type="button" onClick={() => openExecutionDocument(dc.signedChallanPath!, false, activeJob?.id).catch(err => alert(err?.message || "Signed proof not found"))} className="text-blue-600 hover:underline text-xs font-semibold">View signed proof</button>
+                        ? <button type="button" onClick={() => openExecutionDocument(dc.signedChallanPath!, false, estimate?.id).catch(err => alert(err?.message || "Signed proof not found"))} className="text-blue-600 hover:underline text-xs font-semibold">View signed proof</button>
                         : <p className="text-slate-300">Pending</p>}
                     </div>
                   </div>

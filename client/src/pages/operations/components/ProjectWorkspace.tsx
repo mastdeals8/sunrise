@@ -1237,7 +1237,7 @@ const PhotosTab: React.FC<{
                                   {doc.filePath && (
                                     <button
                                       type="button"
-                                      onClick={() => openExecutionDocument(doc.filePath, false, estimate?.id, false, doc.id ? Number(doc.id) : undefined).catch(err => alert(err?.message || "Could not open photo"))}
+                                      onClick={() => openExecutionDocument(doc.filePath, false, data.estimate?.id, false, doc.id ? Number(doc.id) : undefined).catch(err => alert(err?.message || "Could not open photo"))}
                                       className="p-1 bg-white/90 rounded text-slate-700 hover:bg-white"
                                       title="View"
                                     >

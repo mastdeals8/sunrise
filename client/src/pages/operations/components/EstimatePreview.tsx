@@ -883,7 +883,7 @@ Sunrise Media`;
           try {
             const invoiceDate = new Date();
             const dueDate = new Date(Date.now() + 30 * 86400000);
-            const targetGstType = selectedEstimate.gstType || (selectedEstimate.stateCode && String(selectedEstimate.stateCode) !== "27" ? "IGST" : "CGST+SGST");
+            const targetGstType: "CGST+SGST" | "IGST" = selectedEstimate.gstType === "IGST" || (selectedEstimate.stateCode && String(selectedEstimate.stateCode) !== "27") ? "IGST" : "CGST+SGST";
             const lines = estimateItemsToInvoiceLines(previewItems, targetGstType);
             const financialTotals = calculateFinancialTotals(lines, {
               targetGstType: targetGstType === "IGST" ? "interstate" : "intrastate",

@@ -8187,8 +8187,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const est = invoice.estimateId ? await storage.getEstimate(invoice.estimateId) : null;
     const companyStateCode = company?.stateCode ? String(company.stateCode).padStart(2, "0") : (company?.gstin ? company.gstin.slice(0, 2) : "27");
     const recipientStateCode = String(
+      (est as any)?.state_code ||
       est?.stateCode ||
-      est?.state_code ||
       (est?.gstin && /^\d{2}/.test(String(est.gstin)) ? String(est.gstin).slice(0, 2) : "") ||
       est?.billingStateCodeSnapshot ||
       (client as any)?.stateCode ||

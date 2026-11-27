@@ -244,9 +244,10 @@ const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ open, invoiceId, estimate
                 : Promise.resolve(null),
               fetchNextInvoiceNumber(token, date),
             ]);
+            let est: any = null;
             if (eRes.ok) {
               const list = await eRes.json();
-              const est = list.find((e: any) => e.id === estimateId);
+              est = list.find((e: any) => e.id === estimateId);
               setLinkedEstimate(est || null);
               if (est) {
                 setPartyName(est.billingLegalNameSnapshot || "");

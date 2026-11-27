@@ -10,7 +10,7 @@ import InvoiceDocument from "../components/InvoiceDocument";
 import InvoiceSummaryDocument, { copyInvoiceSummaryToClipboard } from "../components/InvoiceSummaryDocument";
 import type { Client, Product, Store } from "./operations/types";
 import { isBoltMode } from "../lib/supabase";
-import { fetchInvoices, fetchCompanySettings, fetchEstimateById, fetchEstimateItems, fetchDeliveryChallansForEstimate, fetchPaymentsForInvoice, fetchClients, fetchStores, fetchProducts, fetchExecutionDocuments, fetchExecutionStores, getExecutionDocumentSignedUrl, openExecutionDocument, fetchInvoiceById, registerExecutionDocument, uploadToStorage, updateExecutionDocumentMetadata, fetchInvoicePacketRequirements, fetchBrands } from "../lib/api";
+import { fetchInvoices, fetchCompanySettings, fetchEstimateById, fetchEstimateItems, fetchDeliveryChallansForEstimate, fetchPaymentsForInvoice, fetchClients, fetchStores, fetchProducts, fetchExecutionDocuments, fetchExecutionStores, getExecutionDocumentSignedUrl, openExecutionDocument, fetchInvoiceById, registerExecutionDocument, uploadToStorage, updateExecutionDocumentMetadata, fetchInvoicePacketRequirements, fetchBrands, isWccDeliveryChallan } from "../lib/api";
 import { evaluateTransportCompliance, isVerifiedTransportInvoice, type TransportComplianceSummary } from "../../../shared/transportCompliance";
 import type { ScopedStore } from "@shared/storeScoping";
 import {

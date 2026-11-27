@@ -155,6 +155,13 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({
   products = [],
   stores = [],
 }) => {
+  const lines = Array.isArray(inv?.lineItems || inv?.line_items) ? (inv.lineItems || inv.line_items) : [];
+  const isCompany1 = !sellerProfile?.companyId || Number(sellerProfile?.companyId) === 1;
+  const companyName = sellerProfile?.displayName || sellerProfile?.tradeName || sellerProfile?.name || sellerProfile?.companyName || "Sunrise Media";
+  const companyAddress = sellerProfile?.address || "";
+  const companyEmail = sellerProfile?.email || "";
+  const companyMobile = sellerProfile?.mobile || "";
+
   const sellerGstin = sellerProfile?.gstin || (isCompany1 ? "27ABZFS5736R1ZR" : "");
   const sellerStateCode = sellerGstin && /^\d{2}/.test(sellerGstin) ? sellerGstin.slice(0, 2) : "27";
 

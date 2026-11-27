@@ -162,13 +162,13 @@ const BrandsPanel: React.FC<BrandsPanelProps> = ({
     if (!brandName || !brandParent) return;
 
     try {
-      const created = await masterDataSave(token, "brands", "POST", null, {
+      const created = await masterDataSave(token || null, "brands", "POST", null, {
         name: normalizeDisplayName(brandName),
         parentClientId: Number(brandParent),
         isActive: true,
       });
       if (created?.id) {
-        await saveInvoicePacketRequirements(token, {
+        await saveInvoicePacketRequirements(token || null, {
           brandId: created.id,
           ...createRequirements,
         });
@@ -597,7 +597,7 @@ const BrandsPanel: React.FC<BrandsPanelProps> = ({
                       name: normalizeDisplayName(edit.name),
                       parentClientId: edit.parentClientId,
                     });
-                    await saveInvoicePacketRequirements(token, {
+                    await saveInvoicePacketRequirements(token || null, {
                       brandId: edit.id,
                       clientId: isClientOverride ? edit.parentClientId : null,
                       ...editRequirements,
