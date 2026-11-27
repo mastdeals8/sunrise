@@ -8173,10 +8173,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const client = allClients.find((c: any) => c.id === invoice.clientId);
     const partyName = (invoice as any).partyName || client?.name || "Unknown Party";
 
+    const est = invoice.estimateId ? await storage.getEstimate(invoice.estimateId) : null;
     const companyStateCode = company?.stateCode ? String(company.stateCode).padStart(2, "0") : (company?.gstin ? company.gstin.slice(0, 2) : "27");
-    const clientStateCode = (client as any)?.stateCode ? String((client as any).stateCode).padStart(2, "0") : (client?.gstNumber ? client.gstNumber.slice(0, 2) : companyStateCode);
+    const recipientStateCode = String(
+      est?.stateCode ||
+      est?.state_code ||
+      (est?.gstin && /^\d{2}/.test(String(est.gstin)) ? String(est.gstin).slice(0, 2) : "") ||
+      est?.billingStateCodeSnapshot ||
+      (client as any)?.stateCode ||
+      (client?.gstNumber ? client.gstNumber.slice(0, 2) : companyStateCode)
+    ).padStart(2, "0");
 
-    const isInterstate = Boolean(clientStateCode && clientStateCode !== companyStateCode);
+    const isInterstate = Boolean(recipientStateCode && recipientStateCode !== companyStateCode);
 
     const invoiceDate = invoice.date ? new Date(invoice.date as any).toISOString().split("T")[0].replace(/-/g, "") : "";
     const amount = Number(invoice.totalAmount || 0);

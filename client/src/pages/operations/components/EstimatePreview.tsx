@@ -882,7 +882,8 @@ Sunrise Media`;
           try {
             const invoiceDate = new Date();
             const dueDate = new Date(Date.now() + 30 * 86400000);
-            const lines = estimateItemsToInvoiceLines(previewItems);
+            const targetGstType = selectedEstimate.gstType || (selectedEstimate.stateCode && String(selectedEstimate.stateCode) !== "27" ? "IGST" : "CGST+SGST");
+            const lines = estimateItemsToInvoiceLines(previewItems, targetGstType);
             const amount = Number(selectedEstimate.subtotal || lines.reduce((sum, row) => sum + Number(row.amount || 0), 0));
             const taxAmount = Number(selectedEstimate.taxAmount || lines.reduce((sum, row) => sum + Number(row.taxAmount || 0), 0));
             const totalAmount = Number(selectedEstimate.totalAmount || amount + taxAmount);

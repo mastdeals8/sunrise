@@ -226,7 +226,8 @@ const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ open, invoiceId, estimate
               setPoNumber(est.poNumber || "");
             }
             const its_ = its as any[];
-            setItems(its_.length > 0 ? estimateItemsToInvoiceLines(its_) : [blankRow()]);
+            const targetGstType = est?.gstType || (est?.stateCode && String(est.stateCode) !== "27" ? "IGST" : undefined);
+            setItems(its_.length > 0 ? estimateItemsToInvoiceLines(its_, targetGstType) : [blankRow()]);
             if (deliveryChallanId) {
               const dc = (allDcs as any[]).find((d: any) => d.id === deliveryChallanId);
               if (dc) setLinkedDc(dc);
@@ -254,7 +255,8 @@ const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ open, invoiceId, estimate
             }
             if (iRes.ok) {
               const its = await iRes.json();
-              setItems(estimateItemsToInvoiceLines(its));
+              const targetGstType = est?.gstType || (est?.stateCode && String(est.stateCode) !== "27" ? "IGST" : undefined);
+              setItems(estimateItemsToInvoiceLines(its, targetGstType));
             } else {
               setItems([blankRow()]);
             }
@@ -447,7 +449,8 @@ const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ open, invoiceId, estimate
           setPoNumber(refreshedEst.poNumber || poNumber);
         }
         if (refreshedItems.length > 0) {
-          setItems(estimateItemsToInvoiceLines(refreshedItems));
+          const targetGstType = refreshedEst?.gstType || (refreshedEst?.stateCode && String(refreshedEst.stateCode) !== "27" ? "IGST" : undefined);
+          setItems(estimateItemsToInvoiceLines(refreshedItems, targetGstType));
         }
         alert("Invoice draft successfully updated from latest estimate.");
       }

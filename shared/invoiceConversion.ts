@@ -1,5 +1,5 @@
 /** Convert saved estimate rows without replacing area-based totalPrice with quantity × rate. */
-export function estimateItemsToInvoiceLines(items: any[]): any[] {
+export function estimateItemsToInvoiceLines(items: any[], targetGstType?: "CGST+SGST" | "IGST"): any[] {
   return (items || []).map((item: any) => {
     const quantity = Number(item.quantity ?? 0);
     const rate = Number(item.rate ?? 0);
@@ -10,13 +10,38 @@ export function estimateItemsToInvoiceLines(items: any[]): any[] {
     const explicitTax = Number(item.taxAmount ?? item.tax_amount);
     const taxAmount = taxParts.length ? +taxParts.reduce((sum, value) => sum + value, 0).toFixed(2)
       : (Number.isFinite(explicitTax) ? +explicitTax.toFixed(2) : 0);
-    const taxPercent = Number(item.cgstPercent ?? item.cgst_percent ?? 0)
+    const rawTaxPercent = Number(item.cgstPercent ?? item.cgst_percent ?? 0)
       + Number(item.sgstPercent ?? item.sgst_percent ?? 0)
       + Number(item.igstPercent ?? item.igst_percent ?? 0);
+    const taxPercent = rawTaxPercent || 18;
     const savedTotal = Number(item.totalAmount ?? item.total_amount);
     const resolvedTaxAmount = taxParts.length ? taxAmount
       : (Number.isFinite(explicitTax) ? taxAmount
-        : (Number.isFinite(savedTotal) ? +(savedTotal - amount).toFixed(2) : 0));
+        : (Number.isFinite(savedTotal) ? +(savedTotal - amount).toFixed(2) : +(amount * (taxPercent / 100)).toFixed(2)));
+
+    let cgstPercent: number | null = item.cgstPercent ?? item.cgst_percent ?? null;
+    let cgstAmount: number | null = item.cgstAmount ?? item.cgst_amount ?? null;
+    let sgstPercent: number | null = item.sgstPercent ?? item.sgst_percent ?? null;
+    let sgstAmount: number | null = item.sgstAmount ?? item.sgst_amount ?? null;
+    let igstPercent: number | null = item.igstPercent ?? item.igst_percent ?? null;
+    let igstAmount: number | null = item.igstAmount ?? item.igst_amount ?? null;
+
+    if (targetGstType === "IGST") {
+      igstPercent = taxPercent;
+      igstAmount = resolvedTaxAmount;
+      cgstPercent = 0;
+      cgstAmount = 0;
+      sgstPercent = 0;
+      sgstAmount = 0;
+    } else if (targetGstType === "CGST+SGST") {
+      cgstPercent = +(taxPercent / 2).toFixed(2);
+      cgstAmount = +(resolvedTaxAmount / 2).toFixed(2);
+      sgstPercent = +(taxPercent / 2).toFixed(2);
+      sgstAmount = +(resolvedTaxAmount - cgstAmount).toFixed(2);
+      igstPercent = 0;
+      igstAmount = 0;
+    }
+
     return {
       itemName: item.itemName ?? item.item_name ?? "",
       description: item.description ?? "",
@@ -25,7 +50,7 @@ export function estimateItemsToInvoiceLines(items: any[]): any[] {
       unit: item.unit ?? "nos",
       rate,
       amount: +amount.toFixed(2),
-      taxPercent: taxPercent || 18,
+      taxPercent,
       taxAmount: resolvedTaxAmount,
       totalAmount: Number.isFinite(savedTotal) ? +savedTotal.toFixed(2) : +(amount + resolvedTaxAmount).toFixed(2),
       totalPrice: Number.isFinite(savedAmount) ? savedAmount : amount,
@@ -36,12 +61,12 @@ export function estimateItemsToInvoiceLines(items: any[]): any[] {
       storeCode: item.storeCode ?? item.store_code ?? null,
       sl: item.sl ?? null,
       productId: item.productId ?? item.product_id ?? null,
-      cgstPercent: item.cgstPercent ?? item.cgst_percent ?? null,
-      cgstAmount: item.cgstAmount ?? item.cgst_amount ?? null,
-      sgstPercent: item.sgstPercent ?? item.sgst_percent ?? null,
-      sgstAmount: item.sgstAmount ?? item.sgst_amount ?? null,
-      igstPercent: item.igstPercent ?? item.igst_percent ?? null,
-      igstAmount: item.igstAmount ?? item.igst_amount ?? null,
+      cgstPercent,
+      cgstAmount,
+      sgstPercent,
+      sgstAmount,
+      igstPercent,
+      igstAmount,
     };
   });
 }

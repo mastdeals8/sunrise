@@ -960,7 +960,7 @@ const WccDcEditor: React.FC<WccDcEditorProps> = (props) => {
                       <p className="font-extrabold text-slate-800 text-[10px]">{est.billingLegalNameSnapshot || est.billingTo || targetClient?.name}</p>
                       <p className="text-slate-650 leading-relaxed whitespace-pre-wrap">{est.billingAddressSnapshot || est.billingTo || targetClient?.address || "N/A"}</p>
                       <div className="pt-1.5 border-t border-slate-200 mt-1.5 font-mono text-[8px] text-slate-500 space-y-0.5">
-                        <div><strong>GSTIN:</strong> {est.billingGstinSnapshot || est.gstin || targetClient?.gstNumber || "N/A"}</div>
+                        <div><strong>GSTIN:</strong> {est.gstin || est.billingGstinSnapshot || targetClient?.gstNumber || "N/A"}</div>
                         <div><strong>PAN:</strong> {est.pan || targetClient?.pan || "N/A"}</div>
                         <div><strong>State / Code:</strong> {est.billingStateSnapshot || "N/A"} ({est.billingStateCodeSnapshot || est.stateCode || "N/A"})</div>
                       </div>

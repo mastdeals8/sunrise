@@ -185,6 +185,7 @@ export function buildTallyVoucherMessage(
     settings?: Partial<TallySettings>;
     company?: any;
     client?: any;
+    estimate?: any;
   }
 ): string {
   const eligibility = checkInvoiceTallyEligibility(invoice);
@@ -209,18 +210,23 @@ export function buildTallyVoucherMessage(
     ? invoice.partyName
     : client.name || invoice.partyName || "Unknown Party";
 
+  const estimate = options.estimate || {};
   const companyStateCode = company.stateCode || company.state_code
     ? String(company.stateCode || company.state_code).padStart(2, "0")
     : company.gstin
     ? String(company.gstin).slice(0, 2)
     : "27";
-  const clientStateCode = client.stateCode || client.state_code
-    ? String(client.stateCode || client.state_code).padStart(2, "0")
-    : client.gstNumber || client.gst_number
-    ? String(client.gstNumber || client.gst_number).slice(0, 2)
-    : companyStateCode;
+  const recipientStateCode = String(
+    estimate.stateCode ||
+    estimate.state_code ||
+    (estimate.gstin && /^\d{2}/.test(String(estimate.gstin)) ? String(estimate.gstin).slice(0, 2) : "") ||
+    estimate.billingStateCodeSnapshot ||
+    client.stateCode ||
+    client.state_code ||
+    (client.gstNumber || client.gst_number ? String(client.gstNumber || client.gst_number).slice(0, 2) : companyStateCode)
+  ).padStart(2, "0");
 
-  const isInterstate = Boolean(clientStateCode && clientStateCode !== companyStateCode);
+  const isInterstate = Boolean(recipientStateCode && recipientStateCode !== companyStateCode);
 
   const invoiceDate = invoice.date
     ? new Date(invoice.date).toISOString().split("T")[0].replace(/-/g, "")

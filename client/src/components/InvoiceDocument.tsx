@@ -96,6 +96,47 @@ const resolveItemName = (row: any, products: any[]): string => {
   return saved || "Item";
 };
 
+const STATE_CODE_NAMES: Record<string, string> = {
+  "01": "Jammu and Kashmir",
+  "02": "Himachal Pradesh",
+  "03": "Punjab",
+  "04": "Chandigarh",
+  "05": "Uttarakhand",
+  "06": "Haryana",
+  "07": "Delhi",
+  "08": "Rajasthan",
+  "09": "Uttar Pradesh",
+  "10": "Bihar",
+  "11": "Sikkim",
+  "12": "Arunachal Pradesh",
+  "13": "Nagaland",
+  "14": "Manipur",
+  "15": "Mizoram",
+  "16": "Tripura",
+  "17": "Meghalaya",
+  "18": "Assam",
+  "19": "West Bengal",
+  "20": "Jharkhand",
+  "21": "Odisha",
+  "22": "Chhattisgarh",
+  "23": "Madhya Pradesh",
+  "24": "Gujarat",
+  "25": "Daman and Diu",
+  "26": "Dadra and Nagar Haveli",
+  "27": "Maharashtra",
+  "28": "Andhra Pradesh (Old)",
+  "29": "Karnataka",
+  "30": "Goa",
+  "31": "Lakshadweep",
+  "32": "Kerala",
+  "33": "Tamil Nadu",
+  "34": "Pondicherry",
+  "35": "Andaman and Nicobar Islands",
+  "36": "Telangana",
+  "37": "Andhra Pradesh",
+  "38": "Ladakh",
+};
+
 interface StoreGroup {
   storeCode: string;
   sapCode?: string;
@@ -122,20 +163,41 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({
     igst: totals.igst + Number(row.igstAmount ?? row.igst_amount ?? 0),
   }), { cgst: 0, sgst: 0, igst: 0 });
   const hasComponentTax = componentTax.cgst !== 0 || componentTax.sgst !== 0 || componentTax.igst !== 0;
-  const isIgst = hasComponentTax ? componentTax.igst > 0 : Boolean(est?.gstType === "IGST" || (est?.igstAmount && Number(est.igstAmount) > 0));
-  const componentTotal = componentTax.cgst + componentTax.sgst + componentTax.igst;
-  const useSavedComponents = hasComponentTax && Math.abs(componentTotal - totalTax) < 0.01;
-  const igst = useSavedComponents ? componentTax.igst : (isIgst ? totalTax : 0);
-  const cgst = useSavedComponents ? componentTax.cgst : (isIgst ? 0 : totalTax / 2);
-  const sgst = useSavedComponents ? componentTax.sgst : (isIgst ? 0 : totalTax - cgst);
-  const grandTotal = Number(inv.totalAmount || subtotal + cgst + sgst + igst);
-
   const isCompany1 = !sellerProfile?.companyId || Number(sellerProfile?.companyId) === 1;
   const companyName = sellerProfile?.displayName || sellerProfile?.tradeName || sellerProfile?.name || sellerProfile?.companyName || "Sunrise Media";
   const companyAddress = sellerProfile?.address || "";
   const companyEmail = sellerProfile?.email || "";
   const companyMobile = sellerProfile?.mobile || "";
   const sellerGstin = sellerProfile?.gstin || (isCompany1 ? "27ABZFS5736R1ZR" : "");
+  const sellerStateCode = sellerGstin && /^\d{2}/.test(sellerGstin) ? sellerGstin.slice(0, 2) : "27";
+
+  // Authoritative Bill To derivation:
+  // 1. GSTIN: Prioritize estimate's saved GSTIN (est.gstin).
+  //    Only fallback to billingGstinSnapshot, and lastly client.gstNumber / client.gstin.
+  const billingGstin = String(est?.gstin || est?.billingGstinSnapshot || client?.gstNumber || client?.gstin || "").trim();
+
+  // 2. State Code: First 2 digits of valid GSTIN, or est.stateCode, or est.billingStateCodeSnapshot
+  const billingStateCode = String(
+    (billingGstin && /^\d{2}/.test(billingGstin) ? billingGstin.slice(0, 2) : "") ||
+    est?.stateCode ||
+    est?.state_code ||
+    est?.billingStateCodeSnapshot ||
+    client?.stateCode ||
+    ""
+  ).trim();
+
+  const billingState = STATE_CODE_NAMES[billingStateCode] || est?.billingStateSnapshot || (billingStateCode === "27" ? "Maharashtra" : billingStateCode);
+
+  const isInterstateSupply = Boolean(billingStateCode && billingStateCode !== sellerStateCode);
+  const isIgst = hasComponentTax
+    ? componentTax.igst > 0
+    : (isInterstateSupply || est?.gstType === "IGST" || Boolean(est?.igstAmount && Number(est.igstAmount) > 0));
+  const componentTotal = componentTax.cgst + componentTax.sgst + componentTax.igst;
+  const useSavedComponents = hasComponentTax && Math.abs(componentTotal - totalTax) < 0.01;
+  const igst = useSavedComponents ? componentTax.igst : (isIgst ? totalTax : 0);
+  const cgst = useSavedComponents ? componentTax.cgst : (isIgst ? 0 : totalTax / 2);
+  const sgst = useSavedComponents ? componentTax.sgst : (isIgst ? 0 : totalTax - cgst);
+  const grandTotal = Number(inv.totalAmount || subtotal + cgst + sgst + igst);
 
   const logoUrl = companyAssetUrl(sellerProfile?.logoPath || (isCompany1 ? "/brand/file-1780929283382-585314307.png" : ""), token);
   const { dataUrl: logoDataUrl, ready: logoReady } = useDataUrl(logoUrl);
@@ -160,11 +222,23 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({
     }
   }, [logoReady, stampSignReady]);
 
-  const billingName = est?.billingLegalNameSnapshot || inv.partyName || client?.name || "";
-  const billingAddress = est?.billingAddressSnapshot || client?.address || "";
-  const billingGstin = est?.billingGstinSnapshot || est?.gstin || client?.gstin || client?.gstNumber || "";
-  const billingStateCode = est?.billingStateCodeSnapshot || "";
-  const billingPan = est?.pan || client?.pan || "";
+  const billingAddress = (() => {
+    const raw = String(est?.billingTo || est?.billing_to || "").trim();
+    if (raw) {
+      const lines = raw.split("\n").map(l => l.trim()).filter(Boolean);
+      if (lines.length > 1 && /^M\/S\s*:/i.test(lines[0])) {
+        return lines.slice(1).join("\n");
+      }
+      if (lines.length > 1 && !lines[0].toLowerCase().includes("road") && !lines[0].toLowerCase().includes("floor")) {
+        return lines.slice(1).join("\n");
+      }
+      return raw;
+    }
+    return est?.billingAddressSnapshot || client?.address || "";
+  })();
+
+  const billingName = est?.billingLegalNameSnapshot || (est?.billingTo ? String(est.billingTo).split("\n")[0].replace(/^M\/S\s*:\s*/i, "").trim() : "") || inv.partyName || client?.name || "";
+  const billingPan = est?.pan || (billingGstin.length >= 12 ? billingGstin.slice(2, 12) : "") || client?.pan || "";
   const poNumber = inv.poNumber || est?.poNumber || "";
   const poDateValue = inv.poDate || inv.po_date || est?.poDate || est?.po_date || "";
 
@@ -296,11 +370,27 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({
     ? targetStoreMasterAddress
     : (est?.shippingAddressSnapshot || billingAddress);
 
+  const shippingStateCode = String(
+    targetInvoiceStore?.stateCode ||
+    targetInvoiceStore?.state_code ||
+    (targetInvoiceStore?.state && Object.entries(STATE_CODE_NAMES).find(([_, name]) => name.toLowerCase() === String(targetInvoiceStore.state).trim().toLowerCase())?.[0]) ||
+    (!isMultiStoreInvoice && billingStateCode ? billingStateCode : "")
+  ).trim();
+
   const shippingState = targetInvoiceStore?.state
     ? targetInvoiceStore.state
-    : targetInvoiceStore?.stateCode
-    ? (targetInvoiceStore.stateCode === "27" ? "Maharashtra" : targetInvoiceStore.stateCode)
-    : (billingStateCode === "27" ? "Maharashtra" : billingStateCode);
+    : STATE_CODE_NAMES[shippingStateCode] || (shippingStateCode === "27" ? "Maharashtra" : shippingStateCode);
+
+  // Separate Ship To GSTIN:
+  // If explicitly provided for store/shipping, use it.
+  // If shipping state matches billing state, they share the entity's GSTIN in that state.
+  // If shipping is in a DIFFERENT state and no distinct shipping GSTIN is registered, do NOT copy bill-to GSTIN!
+  const shippingGstin = String(
+    est?.shippingGstin ||
+    est?.shippingGstinSnapshot ||
+    targetInvoiceStore?.gstin ||
+    (shippingStateCode && billingStateCode && shippingStateCode === billingStateCode ? billingGstin : "")
+  ).trim();
 
   const hasStoreHeadings = storeGroups.length > 1 || (storeGroups.length === 1 && storeGroups[0].storeCode !== "" && storeGroups[0].storeCode !== "default");
 
@@ -422,7 +512,7 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({
               <div style={{ fontWeight: 800, marginBottom: "2px" }}>Bill To,</div>
               <div style={{ fontWeight: 700 }}>{billingName}</div>
               {billingAddress && <div style={{ whiteSpace: "pre-wrap" }}>{billingAddress}</div>}
-              {billingStateCode && <div>State : {billingStateCode === "27" ? "Maharashtra" : billingStateCode}</div>}
+              {billingState && <div>State : {billingState}</div>}
               {billingGstin && <div style={{ fontWeight: 700 }}>GSTIN : {billingGstin}</div>}
               {billingPan && <div>PAN : {billingPan}</div>}
             </td>
@@ -432,7 +522,7 @@ const InvoiceDocument: React.FC<InvoiceDocumentProps> = ({
               {shippingStoreName && <div style={{ fontWeight: 700 }}>{shippingStoreName}</div>}
               {shippingAddress && <div style={{ whiteSpace: "pre-wrap" }}>{shippingAddress}</div>}
               {shippingState && <div>State : {shippingState}</div>}
-              {billingGstin && <div style={{ fontWeight: 700 }}>GSTIN : {billingGstin}</div>}
+              {shippingGstin && <div style={{ fontWeight: 700 }}>GSTIN : {shippingGstin}</div>}
             </td>
             <td style={{ border: "1px solid #000", padding: "6px 8px", width: "26%", fontSize: "9.5px", verticalAlign: "top" }}>
               <table style={{ borderCollapse: "collapse", width: "100%" }}>
